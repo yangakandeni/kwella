@@ -1,0 +1,1124 @@
+openapi: 3.0.3
+
+# =============================================================================
+# kwella Township Mobility Platform — Client Integration API Contract
+# =============================================================================
+# Document Version  : 1.0.0
+# Phase             : 8 — Client API OpenAPI & Service Contract Generation
+# Governance        : KWELLA_CODE_GOVERNANCE.md (§4 Security, §5 Workspace Hygiene)
+# System Context    : KWELLA_SYSTEM_CONTEXT.md  (§2 Tech Constraints, §3 DB Schema)
+#
+# This specification is the canonical contract consumed by:
+#   - Flutter/Dart mobile client (Rider & Driver apps)
+#   - React Fleet Owner Dashboard (web)
+#
+# HTTP Entrypoints are Lambda-backed API Gateway REST routes.
+# WebSocket route keys are dispatched by the API Gateway WebSocket API
+# and processed by the Bidding Engine Lambda worker.
+# =============================================================================
+
+info:
+  title: kwella Platform API
+  version: 1.0.0
+  description: |
+    The **kwella** API exposes two transport layers for its client applications:
+
+    ### 1. REST API (HTTP/S — API Gateway → Lambda)
+    Used for identity-plane operations: creating or updating Rider/Driver profiles
+    and registering vehicles. All REST routes require a valid Cognito JWT supplied
+    in the `Authorization: Bearer <token>` header and are verified by the custom
+    Lambda Token Authorizer before the backing Lambda is invoked.
+
+    ### 2. WebSocket API (WSS — API Gateway WebSocket → Bidding Engine Lambda)
+    Used for real-time bidding events during active trip solicitation. Clients
+    connect once and exchange JSON-framed messages using the `action_type` field
+    as the route discriminator. The same Cognito JWT must be passed as a query
+    parameter at connection time (`?token=<jwt>`).
+
+    ---
+    **Platform Context:**
+    - Target vehicle scope: 7-seater *amaphela* (minibus taxis are out of MVP scope)
+    - Physical hub: Philippi Village, Cape Town
+    - Cloud region: `af-south-1` (AWS Cape Town)
+    - Runtime: Python 3.12 on AWS Lambda, DynamoDB single-table (`kwella-core-production`)
+  contact:
+    name: kwella Engineering
+    url: https://kwella.co.za
+  license:
+    name: Proprietary
+    url: https://kwella.co.za/legal
+
+# =============================================================================
+# Server Targets
+# =============================================================================
+servers:
+  - url: https://{apiId}.execute-api.af-south-1.amazonaws.com/{stage}
+    description: AWS API Gateway REST endpoint (Cape Town region)
+    variables:
+      apiId:
+        description: API Gateway REST API identifier (resolved at deploy time via Terraform output)
+        default: "REPLACE_WITH_API_ID"
+      stage:
+        description: Deployment stage name
+        enum:
+          - production
+          - staging
+        default: production
+
+  - url: wss://{wsApiId}.execute-api.af-south-1.amazonaws.com/{stage}
+    description: AWS API Gateway WebSocket endpoint (bidding plane)
+    variables:
+      wsApiId:
+        description: API Gateway WebSocket API identifier (resolved at deploy time)
+        default: "REPLACE_WITH_WS_API_ID"
+      stage:
+        description: Deployment stage name
+        enum:
+          - production
+          - staging
+        default: production
+
+# =============================================================================
+# Global Security — Cognito User Pool JWT (Bearer Token)
+# =============================================================================
+# All REST endpoints are protected by the kwella Custom Lambda Token Authorizer
+# (src/lambdas/auth_authorizer/handler.py).
+#
+# The authorizer:
+#   1. Extracts the JWT from the Authorization header (Bearer scheme).
+#   2. Decodes the Cognito JWT claims to resolve the user_id / sub field.
+#   3. Queries DynamoDB (PK=USR#<user_id>, SK=PROFILE) to detect suspension.
+#   4. Returns an IAM Allow or Deny policy to API Gateway.
+#
+# Cognito User Pool (af-south-1):
+#   - Username attribute : phone_number (E.164 format)
+#   - App clients        : kwella-mobile-client-production (Flutter)
+#                          kwella-fleet-web-client-production (React)
+# =============================================================================
+security:
+  - bearerAuth: []
+
+components:
+  # ---------------------------------------------------------------------------
+  # Security Schemes
+  # ---------------------------------------------------------------------------
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Cognito-issued JWT obtained after successful phone-number SRP authentication.
+
+        **Obtain token flow:**
+        1. Authenticate via Cognito `InitiateAuth` with `ALLOW_USER_SRP_AUTH`.
+        2. Supply the `IdToken` (or `AccessToken`) from the response as the bearer value.
+
+        **Token validation:** Performed by the custom Lambda Token Authorizer which
+        decodes the JWT payload, resolves `user_id` / `sub`, and performs a live
+        DynamoDB suspension check before granting access.
+
+        **Suspension response:** A suspended Rider (outstanding `cancellation_debt`)
+        receives a `403 Forbidden` response from the authorizer Deny policy.
+
+  # ---------------------------------------------------------------------------
+  # Reusable Schemas — exact mirrors of the Pydantic v2 models in Phase 5
+  # (src/layers/kwella_shared/python/models/schemas.py)
+  # ---------------------------------------------------------------------------
+  schemas:
+
+    # ── Shared base fields (BaseProfile) ──────────────────────────────────────
+    BaseProfileFields:
+      description: Fields shared by all kwella user profiles (Rider, Driver, Owner).
+      type: object
+      properties:
+        phone:
+          type: string
+          description: >
+            E.164-formatted mobile number. Leading '+' followed by 9–15 digits.
+            Whitespace and hyphens are stripped and normalised by the validator.
+          minLength: 10
+          maxLength: 16
+          example: "+27821234567"
+        rating:
+          type: number
+          format: decimal
+          description: Platform star rating clamped to [0.0, 5.0]. Defaults to 5.0 on creation.
+          minimum: 0.0
+          maximum: 5.0
+          default: 5.0
+          example: 4.7
+        created_at:
+          type: string
+          format: date-time
+          description: >
+            UTC ISO-8601 timestamp of account creation. Auto-populated by the Lambda
+            handler if not provided; clients should omit this field on creation requests.
+          readOnly: true
+          example: "2025-11-03T08:15:00Z"
+
+    # ── Rider Profile ──────────────────────────────────────────────────────────
+    RiderProfile:
+      description: |
+        Pydantic v2 schema for a kwella Rider entity.
+
+        **DynamoDB single-table key pattern:**
+        | Key      | Value              |
+        |----------|--------------------|
+        | `PK`     | `USR#<RiderId>`    |
+        | `SK`     | `PROFILE`          |
+
+        **Suspension logic:** A non-zero `cancellation_debt` places the account in
+        Debt Status. The Lambda authorizer enforces access restrictions; this field
+        is informational at the model layer.
+      allOf:
+        - $ref: '#/components/schemas/BaseProfileFields'
+      type: object
+      required:
+        - phone
+      properties:
+        cancellation_debt:
+          type: number
+          format: decimal
+          description: >
+            Outstanding cash-trip cancellation penalty owed to the platform in ZAR.
+            0.00 indicates a clear account. Non-zero triggers Debt Status and the
+            Driver's fee-holiday compensation mechanism (see KWELLA_SYSTEM_CONTEXT.md §4).
+          minimum: 0.0
+          default: 0.0
+          example: 30.00
+        active_trip_id:
+          type: string
+          nullable: true
+          description: >
+            PK of the rider's currently active Trip entity (e.g. `BID#<connectionId>`),
+            or `null` when no in-progress journey exists.
+          example: "BID#rider-conn-id=="
+
+    # ── Driver Profile ─────────────────────────────────────────────────────────
+    DriverProfile:
+      description: |
+        Pydantic v2 schema for a kwella Driver entity.
+
+        **DynamoDB single-table key pattern:**
+        | Key        | Value                      |
+        |------------|----------------------------|
+        | `PK`       | `USR#<DriverId>`           |
+        | `SK`       | `PROFILE`                  |
+        | `GSI1_PK`  | `VEH#<AssignedCataSticker>`|
+        | `GSI1_SK`  | `DRIVER`                   |
+
+        The GSI1 entry maintains the vehicle → driver reverse-lookup relationship map
+        allowing fleet owners to enumerate drivers assigned to a specific vehicle.
+      allOf:
+        - $ref: '#/components/schemas/BaseProfileFields'
+      type: object
+      required:
+        - phone
+        - assigned_cata_sticker
+      properties:
+        assigned_cata_sticker:
+          type: string
+          description: >
+            Unique CATA regulatory sticker identifier linking the driver to their
+            allocated 7-seater *amaphela* vehicle. Must be non-blank; normalised to
+            uppercase by the validator (e.g. "CT-7001").
+          minLength: 1
+          example: "CT-7001"
+        fee_holiday_balance:
+          type: number
+          format: decimal
+          description: >
+            Cumulative ZAR amount of platform-fee waivers granted as compensation
+            for a rider's unpaid cash-trip cancellation. Capped at R30.00 (the
+            maximum tiered penalty per KWELLA_SYSTEM_CONTEXT.md §4).
+            Resets to 0.00 once the rider clears their cancellation debt and
+            platform fee collection resumes at the standard 10% rate.
+          minimum: 0.0
+          maximum: 30.0
+          default: 0.0
+          example: 15.00
+        is_online:
+          type: boolean
+          description: >
+            `true` when the driver is actively visible to Riders and accepting
+            trip broadcast requests. Toggled by the driver at session start/end.
+          default: false
+          example: true
+
+    # ── Vehicle Asset ──────────────────────────────────────────────────────────
+    VehicleAsset:
+      description: |
+        Pydantic v2 schema for a kwella Vehicle entity (7-seater *amaphela* only).
+
+        The CATA sticker acts as the natural primary key, enforcing vehicle
+        uniqueness natively within the DynamoDB single-table design.
+
+        **DynamoDB single-table key pattern:**
+        | Key        | Value                        |
+        |------------|------------------------------|
+        | `PK`       | `VEH#<CataSticker>`          |
+        | `SK`       | `METADATA`                   |
+        | `GSI1_PK`  | `USR#<OwnerId>`              |
+        | `GSI1_SK`  | `VEH#<CataSticker>`          |
+
+        The GSI1 entry enables owner → fleet queries (all vehicles owned by a user).
+
+        **Uniqueness constraint:** The Lambda handler applies a DynamoDB
+        `ConditionExpression: attribute_not_exists(PK)` on write. A second
+        registration attempt for an existing sticker returns `400 Bad Request`.
+      type: object
+      required:
+        - cata_sticker
+        - make
+        - model
+        - owner_id
+      properties:
+        cata_sticker:
+          type: string
+          description: >
+            Unique CATA regulatory sticker identifier. Normalised to uppercase,
+            stripped of surrounding whitespace. Used as the `VEH#` PK prefix.
+          minLength: 1
+          example: "CT-7001"
+        make:
+          type: string
+          description: Vehicle manufacturer name.
+          minLength: 1
+          maxLength: 64
+          example: "Toyota"
+        model:
+          type: string
+          description: Vehicle model name.
+          minLength: 1
+          maxLength: 64
+          example: "HiAce"
+        owner_id:
+          type: string
+          description: >
+            USR#<OwnerId> of the registered fleet owner. Must carry the `USR#`
+            prefix — enforced by the Pydantic field validator. The prefix is
+            required so the value maps directly to the DynamoDB `GSI1_PK`.
+          minLength: 1
+          example: "USR#owner-456"
+
+    # ── Identity Upsert Request ────────────────────────────────────────────────
+    IdentityUpsertRequest:
+      description: |
+        Request envelope for the `/identity/upsert` POST endpoint.
+        The `action_type` field is fixed to `UPSERT_PROFILE`.
+        The `payload` field is polymorphic: supply `RiderProfile` fields when
+        `role = RIDER`, or `DriverProfile` fields when `role = DRIVER`.
+      type: object
+      required:
+        - action_type
+        - payload
+      properties:
+        action_type:
+          type: string
+          enum:
+            - UPSERT_PROFILE
+          description: Routing discriminator — must be `UPSERT_PROFILE` for this endpoint.
+          example: "UPSERT_PROFILE"
+        payload:
+          type: object
+          required:
+            - user_id
+            - role
+            - phone
+          description: >
+            Profile fields. `user_id` and `role` are stripped from the payload before
+            Pydantic validation so they do not contaminate the model namespace.
+          properties:
+            user_id:
+              type: string
+              description: >
+                Bare Cognito `sub` or user identifier (without the `USR#` prefix —
+                the Lambda handler prepends it). Must be non-empty.
+              example: "abc-123"
+            role:
+              type: string
+              enum:
+                - RIDER
+                - DRIVER
+              description: User role. Determines which Pydantic model validates the remaining fields.
+              example: "DRIVER"
+            phone:
+              type: string
+              description: E.164-formatted mobile number. Required by BaseProfile.
+              minLength: 10
+              maxLength: 16
+              example: "+27821234567"
+            rating:
+              type: number
+              format: decimal
+              description: Optional star rating [0.0, 5.0]. Defaults to 5.0.
+              minimum: 0.0
+              maximum: 5.0
+              example: 4.7
+            # Rider-specific optional fields
+            cancellation_debt:
+              type: number
+              format: decimal
+              description: "(RIDER only) Outstanding cash-trip cancellation debt in ZAR."
+              minimum: 0.0
+              example: 0.0
+            active_trip_id:
+              type: string
+              nullable: true
+              description: "(RIDER only) PK of the rider's current active trip, or null."
+              example: null
+            # Driver-specific required field
+            assigned_cata_sticker:
+              type: string
+              description: "(DRIVER only, required) CATA sticker ID linking driver to their vehicle."
+              example: "CT-7001"
+            fee_holiday_balance:
+              type: number
+              format: decimal
+              description: "(DRIVER only) Outstanding fee-holiday balance in ZAR. Max R30."
+              minimum: 0.0
+              maximum: 30.0
+              example: 0.0
+            is_online:
+              type: boolean
+              description: "(DRIVER only) Whether the driver is currently accepting trips."
+              example: false
+
+    # ── Identity Vehicle Request ───────────────────────────────────────────────
+    IdentityVehicleRequest:
+      description: |
+        Request envelope for the `/identity/vehicle` POST endpoint.
+        The `action_type` field is fixed to `REGISTER_VEHICLE`.
+        The `payload` fields map directly to the `VehicleAsset` Pydantic model.
+      type: object
+      required:
+        - action_type
+        - payload
+      properties:
+        action_type:
+          type: string
+          enum:
+            - REGISTER_VEHICLE
+          description: Routing discriminator — must be `REGISTER_VEHICLE` for this endpoint.
+          example: "REGISTER_VEHICLE"
+        payload:
+          $ref: '#/components/schemas/VehicleAsset'
+
+    # ── Standard Success Response ──────────────────────────────────────────────
+    SuccessResponse:
+      description: Standard 200 OK response body from Lambda → API Gateway integration.
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: Human-readable confirmation of the operation.
+          example: "Profile upserted successfully."
+        PK:
+          type: string
+          description: DynamoDB partition key of the written record.
+          example: "USR#abc-123"
+        SK:
+          type: string
+          description: DynamoDB sort key of the written record.
+          example: "PROFILE"
+        role:
+          type: string
+          description: Confirmed role of the upserted profile (present on UPSERT_PROFILE responses).
+          example: "DRIVER"
+        GSI1_PK:
+          type: string
+          description: GSI1 partition key (present on REGISTER_VEHICLE responses).
+          example: "USR#owner-456"
+        GSI1_SK:
+          type: string
+          description: GSI1 sort key (present on REGISTER_VEHICLE responses).
+          example: "VEH#CT-7001"
+
+    # ── Validation Error Response (400) ───────────────────────────────────────
+    ValidationErrorResponse:
+      description: |
+        400 Bad Request — Pydantic v2 `ValidationError` payload or handler-level
+        field guard rejection. The `detail` field contains the Pydantic v2
+        serialised error list when triggered by schema validation.
+      type: object
+      required:
+        - error
+        - detail
+      properties:
+        error:
+          type: string
+          enum:
+            - ValidationError
+          example: "ValidationError"
+        detail:
+          description: >
+            Pydantic v2 error list (JSON-serialised via `exc.model_dump_json()`)
+            or a plain string message for handler-level guards.
+          oneOf:
+            - type: string
+              example: "'user_id' is required for UPSERT_PROFILE."
+            - type: array
+              items:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    example: "value_error"
+                  loc:
+                    type: array
+                    items:
+                      type: string
+                    example: ["payload", "phone"]
+                  msg:
+                    type: string
+                    example: "Phone number '+27' must be in E.164 format (e.g. +27821234567)."
+                  input:
+                    type: string
+                    example: "+27"
+
+    # ── Unauthorized Response (401) ────────────────────────────────────────────
+    UnauthorizedResponse:
+      description: |
+        401 Unauthorized — No Authorization token was supplied, or the supplied
+        JWT could not be decoded. API Gateway returns this when the Lambda
+        Authorizer raises `Exception("Unauthorized")`.
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          enum:
+            - Unauthorized
+          example: "Unauthorized"
+
+    # ── Forbidden / Suspended Response (403) ──────────────────────────────────
+    SuspendedUserResponse:
+      description: |
+        403 Forbidden — The authenticated user is in Debt Status (non-zero
+        `cancellation_debt` on their Rider profile). The custom Lambda Authorizer
+        issued a DynamoDB `Deny` policy; API Gateway translates this to 403.
+        The Rider must clear their outstanding cancellation debt to regain access.
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          enum:
+            - Forbidden
+          example: "Forbidden"
+
+    # ── Infrastructure Error Response (500) ───────────────────────────────────
+    InfrastructureErrorResponse:
+      description: |
+        500 Internal Server Error — An unrecoverable AWS infrastructure fault
+        occurred (DynamoDB `ClientError`, failed write, etc.). The Lambda handler
+        catches `botocore.exceptions.ClientError` and returns the DynamoDB error
+        code in the `detail` field for operational tracing.
+      type: object
+      required:
+        - error
+        - detail
+      properties:
+        error:
+          type: string
+          enum:
+            - InfrastructureError
+          example: "InfrastructureError"
+        detail:
+          type: string
+          description: Human-readable DynamoDB error code and context.
+          example: "DynamoDB error [ProvisionedThroughputExceededException]: unable to write profile."
+
+    # ── WebSocket — BROADCAST_REQUEST message ─────────────────────────────────
+    WsBroadcastRequestMessage:
+      description: |
+        Client-to-server WebSocket message for the `BROADCAST_REQUEST` route key.
+
+        A **Rider** sends this message when they are ready to solicit Driver bids
+        for a trip. It captures all data a Driver needs to formulate a counter-offer.
+
+        **DynamoDB record written by the handler:**
+        | Key  | Value                     |
+        |------|---------------------------|
+        | `PK` | `BID#<connectionId>`      |
+        | `SK` | `OPEN`                    |
+
+        Drivers query open bids via a `begins_with("BID#")` filter on the table.
+
+        **Pydantic v2 model:** `BroadcastRequestPayload`
+        (src/lambdas/bidding_engine/handler.py)
+      type: object
+      required:
+        - action_type
+        - rider_id
+        - pickup_location
+        - destination
+        - passenger_count
+        - baseline_fare
+        - connection_id
+      properties:
+        action_type:
+          type: string
+          enum:
+            - BROADCAST_REQUEST
+          description: >
+            Route discriminator — must be `BROADCAST_REQUEST`. Mapped to the
+            `routeKey` field in the API Gateway WebSocket route selection expression.
+          example: "BROADCAST_REQUEST"
+        rider_id:
+          type: string
+          description: >
+            `USR#<RiderId>` of the broadcasting Rider. Must carry the `USR#` prefix —
+            enforced by the Pydantic field validator `rider_id_must_have_prefix`.
+          minLength: 5
+          example: "USR#abc-123"
+        pickup_location:
+          type: string
+          description: >
+            Pickup point as a coordinate pair (`"-33.9249,18.4241"`) or a
+            human-readable address string (e.g. `"Bellville Station"`).
+          minLength: 1
+          maxLength: 512
+          example: "Bellville Station"
+        destination:
+          type: string
+          description: Target route or destination string.
+          minLength: 1
+          maxLength: 512
+          example: "Cape Town CBD"
+        passenger_count:
+          type: integer
+          description: Number of passengers boarding. Bounded to [1, 7] for a 7-seater *amaphela*.
+          minimum: 1
+          maximum: 7
+          example: 3
+        baseline_fare:
+          type: string
+          format: decimal
+          description: >
+            Rider's opening fare offer in ZAR. Transmitted as a string to preserve
+            Decimal precision end-to-end; the handler converts to `Decimal` via
+            Pydantic coercion. Must be strictly greater than 0.00.
+          example: "25.00"
+        connection_id:
+          type: string
+          description: >
+            API Gateway `connectionId` of the originating Rider. This value is
+            embedded in the DynamoDB `PK` (`BID#<connectionId>`) to allow targeted
+            responses back to the Rider's WebSocket session.
+          minLength: 1
+          example: "rider-conn-id=="
+
+    # ── WebSocket — SUBMIT_BID message ────────────────────────────────────────
+    WsSubmitBidMessage:
+      description: |
+        Client-to-server WebSocket message for the `SUBMIT_BID` route key.
+
+        A **Driver** sends this to counter the Rider's baseline fare with their own
+        offer. The bid is written under the open broadcast record's key space.
+
+        **DynamoDB record written by the handler:**
+        | Key  | Value                             |
+        |------|-----------------------------------|
+        | `PK` | `BID#<broadcast_pk>`             |
+        | `SK` | `OFFER#USR#<driver_id>`          |
+
+        This key scheme allows a Rider to retrieve all offers for their broadcast
+        via a `begins_with("OFFER#")` sort-key filter with no GSI scan.
+
+        **Pydantic v2 model:** `SubmitBidPayload`
+        (src/lambdas/bidding_engine/handler.py)
+      type: object
+      required:
+        - action_type
+        - driver_id
+        - broadcast_pk
+        - counter_fare
+        - connection_id
+      properties:
+        action_type:
+          type: string
+          enum:
+            - SUBMIT_BID
+          description: >
+            Route discriminator — must be `SUBMIT_BID`. Mapped to the `routeKey`
+            field in the API Gateway WebSocket route selection expression.
+          example: "SUBMIT_BID"
+        driver_id:
+          type: string
+          description: >
+            `USR#<DriverId>` of the bidding Driver. Must carry the `USR#` prefix —
+            enforced by `driver_id_must_have_prefix` validator.
+          minLength: 5
+          example: "USR#drv-456"
+        broadcast_pk:
+          type: string
+          description: >
+            PK of the open BID# broadcast record created by `BROADCAST_REQUEST`.
+            Must carry the `BID#` prefix — enforced by `broadcast_pk_must_have_prefix`
+            validator. Allows the handler to key the offer record under the correct
+            broadcast without an additional lookup.
+          minLength: 1
+          example: "BID#rider-conn-id=="
+        counter_fare:
+          type: string
+          format: decimal
+          description: >
+            Driver's counter-offer fare in ZAR. Transmitted as a string to preserve
+            Decimal precision; converted by Pydantic. Must be strictly greater than 0.00.
+          example: "22.50"
+        estimated_pickup:
+          type: string
+          description: >
+            Driver's free-text ETA string (e.g. `"5 minutes"`, `"2 mins away"`).
+            Optional — defaults to an empty string if omitted.
+          maxLength: 128
+          default: ""
+          example: "4 minutes"
+        connection_id:
+          type: string
+          description: >
+            API Gateway `connectionId` of the bidding Driver. Used by the server
+            to route asynchronous Rider acceptance/rejection messages back to
+            the correct Driver WebSocket session.
+          minLength: 1
+          example: "driver-conn-id=="
+
+    # ── WebSocket — Server acknowledgement ────────────────────────────────────
+    WsAcknowledgement:
+      description: |
+        Server-to-client WebSocket acknowledgement returned by the handler after
+        successfully processing a `BROADCAST_REQUEST` or `SUBMIT_BID` message.
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: Human-readable operation confirmation.
+          example: "Broadcast published. Awaiting Driver bids."
+        broadcast_pk:
+          type: string
+          description: PK of the persisted BID# record (present on BROADCAST_REQUEST ack).
+          example: "BID#rider-conn-id=="
+        SK:
+          type: string
+          description: Sort key of the persisted DynamoDB record.
+          example: "OPEN"
+        rider_id:
+          type: string
+          description: Echoed `rider_id` from the request (present on BROADCAST_REQUEST ack).
+          example: "USR#abc-123"
+        baseline_fare:
+          type: string
+          description: Echoed `baseline_fare` as string (present on BROADCAST_REQUEST ack).
+          example: "25.00"
+        offer_sk:
+          type: string
+          description: Sort key of the persisted offer record (present on SUBMIT_BID ack).
+          example: "OFFER#USR#drv-456"
+        driver_id:
+          type: string
+          description: Echoed `driver_id` (present on SUBMIT_BID ack).
+          example: "USR#drv-456"
+        counter_fare:
+          type: string
+          description: Echoed `counter_fare` (present on SUBMIT_BID ack).
+          example: "22.50"
+
+  # ---------------------------------------------------------------------------
+  # Reusable Responses
+  # ---------------------------------------------------------------------------
+  responses:
+    200_Success:
+      description: Operation completed successfully.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SuccessResponse'
+
+    400_ValidationDefect:
+      description: |
+        **400 Validation Defect** — The request payload failed Pydantic v2 schema
+        validation or a handler-level field guard. No DynamoDB write was attempted.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorResponse'
+          examples:
+            missing_user_id:
+              summary: Handler guard — missing user_id
+              value:
+                error: "ValidationError"
+                detail: "'user_id' is required for UPSERT_PROFILE."
+            invalid_phone:
+              summary: Pydantic v2 — E.164 phone format violation
+              value:
+                error: "ValidationError"
+                detail:
+                  - type: "value_error"
+                    loc: ["phone"]
+                    msg: "Phone number '0821234567' must be in E.164 format (e.g. +27821234567)."
+                    input: "0821234567"
+            duplicate_vehicle:
+              summary: Duplicate vehicle registration
+              value:
+                error: "ValidationError"
+                detail: "Vehicle 'CT-7001' is already registered. Use a dedicated update action to amend an existing record."
+
+    401_Unauthorized:
+      description: |
+        **401 Unauthorized** — Missing or malformed Authorization header.
+        No JWT was supplied, or the JWT structure was invalid (not a three-segment
+        dot-separated string). Returned directly by API Gateway when the custom
+        Lambda Authorizer raises `Exception("Unauthorized")`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/UnauthorizedResponse'
+
+    403_SuspendedUser:
+      description: |
+        **403 Forbidden — Suspended User** — The authenticated Rider account is
+        in Debt Status (`cancellation_debt > 0.00`). The custom Lambda Authorizer
+        issued an IAM `Deny` policy; API Gateway converts this to a 403 response.
+
+        **Resolution:** The Rider must settle their outstanding cancellation debt
+        through the platform payment rail before access is restored.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SuspendedUserResponse'
+
+    500_InfrastructureCrash:
+      description: |
+        **500 Infrastructure Crash** — An unrecoverable AWS infrastructure fault.
+        Typical causes: DynamoDB `ProvisionedThroughputExceededException`,
+        `InternalServerError`, or network-level connectivity failures.
+        The `detail` field contains the DynamoDB error code for operational triage.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/InfrastructureErrorResponse'
+
+# =============================================================================
+# REST API Paths — Identity Plane
+# =============================================================================
+paths:
+
+  # ---------------------------------------------------------------------------
+  # POST /identity/upsert
+  # Lambda: src/lambdas/identity_service/handler.py → _upsert_profile()
+  # Action: UPSERT_PROFILE
+  # ---------------------------------------------------------------------------
+  /identity/upsert:
+    post:
+      operationId: upsertIdentityProfile
+      summary: Upsert a Rider or Driver profile
+      description: |
+        Creates or fully replaces a user profile record in the kwella DynamoDB
+        single-table (`kwella-core-production`).
+
+        **Dispatch mechanism:** The Lambda handler reads the top-level `action_type`
+        field and routes to `_upsert_profile()`. The `role` field inside `payload`
+        determines whether the `RiderProfile` or `DriverProfile` Pydantic v2 model
+        is applied for field-level validation.
+
+        **DynamoDB write pattern:**
+        - Rider:  `PK = USR#<user_id>`, `SK = PROFILE`
+        - Driver: `PK = USR#<user_id>`, `SK = PROFILE`,
+                  `GSI1_PK = VEH#<assigned_cata_sticker>`, `GSI1_SK = DRIVER`
+
+        The `put_item` call is unconditional (upsert semantics — existing records
+        are replaced). Financial fields (`cancellation_debt`, `fee_holiday_balance`)
+        are serialised as JSON numbers (not strings) in responses, via the
+        `_DecimalEncoder` / `_serialise` helper chain.
+
+        **Authorization:** Bearer JWT issued by Cognito User Pool
+        (`kwella-user-pool-production`). Suspension check is performed by the
+        custom Lambda Authorizer before this Lambda is invoked.
+      tags:
+        - Identity Service
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        description: Profile upsert envelope containing action type and role-specific payload.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IdentityUpsertRequest'
+            examples:
+              upsert_rider:
+                summary: Upsert a Rider profile
+                value:
+                  action_type: "UPSERT_PROFILE"
+                  payload:
+                    user_id: "abc-123"
+                    role: "RIDER"
+                    phone: "+27821234567"
+                    cancellation_debt: 0.0
+                    active_trip_id: null
+              upsert_driver:
+                summary: Upsert a Driver profile with vehicle link
+                value:
+                  action_type: "UPSERT_PROFILE"
+                  payload:
+                    user_id: "drv-456"
+                    role: "DRIVER"
+                    phone: "+27831234567"
+                    assigned_cata_sticker: "CT-7001"
+                    fee_holiday_balance: 0.0
+                    is_online: true
+      responses:
+        "200":
+          $ref: '#/components/responses/200_Success'
+          description: |
+            Profile upserted successfully. Response body includes the DynamoDB
+            composite key (`PK`, `SK`) and confirmed `role`.
+        "400":
+          $ref: '#/components/responses/400_ValidationDefect'
+        "401":
+          $ref: '#/components/responses/401_Unauthorized'
+        "403":
+          $ref: '#/components/responses/403_SuspendedUser'
+        "500":
+          $ref: '#/components/responses/500_InfrastructureCrash'
+
+  # ---------------------------------------------------------------------------
+  # POST /identity/vehicle
+  # Lambda: src/lambdas/identity_service/handler.py → _register_vehicle()
+  # Action: REGISTER_VEHICLE
+  # ---------------------------------------------------------------------------
+  /identity/vehicle:
+    post:
+      operationId: registerIdentityVehicle
+      summary: Register a new vehicle asset
+      description: |
+        Registers a new 7-seater *amaphela* vehicle in the kwella platform.
+        Vehicle identity is anchored to the CATA sticker, which serves as the
+        natural unique primary key.
+
+        **Dispatch mechanism:** The Lambda handler reads `action_type = REGISTER_VEHICLE`
+        and routes to `_register_vehicle()`. The entire `payload` object is passed
+        to the `VehicleAsset` Pydantic v2 model for validation.
+
+        **DynamoDB write pattern:**
+        ```
+        PK       = VEH#<cata_sticker>    SK      = METADATA
+        GSI1_PK  = USR#<owner_id>        GSI1_SK = VEH#<cata_sticker>
+        ```
+        - `owner_id` must already carry the `USR#` prefix (validated by Pydantic).
+        - Write is conditional: `attribute_not_exists(PK)` prevents accidental
+          overwrite. Re-registration of an existing sticker returns `400`.
+
+        **Authorization:** Bearer JWT. Fleet Owner or Admin role required in
+        practice; the custom authorizer enforces suspension checks on the calling
+        user's profile.
+      tags:
+        - Identity Service
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        description: Vehicle registration envelope containing action type and VehicleAsset payload.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IdentityVehicleRequest'
+            examples:
+              register_vehicle:
+                summary: Register a new Toyota HiAce
+                value:
+                  action_type: "REGISTER_VEHICLE"
+                  payload:
+                    cata_sticker: "CT-7001"
+                    make: "Toyota"
+                    model: "HiAce"
+                    owner_id: "USR#owner-456"
+      responses:
+        "200":
+          description: |
+            Vehicle registered successfully. Response body includes the full DynamoDB
+            key set: primary key (`PK`, `SK`) and GSI1 key (`GSI1_PK`, `GSI1_SK`)
+            enabling immediate owner → fleet and vehicle → driver index lookups.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                message: "Vehicle registered successfully."
+                PK: "VEH#CT-7001"
+                SK: "METADATA"
+                GSI1_PK: "USR#owner-456"
+                GSI1_SK: "VEH#CT-7001"
+        "400":
+          $ref: '#/components/responses/400_ValidationDefect'
+        "401":
+          $ref: '#/components/responses/401_Unauthorized'
+        "403":
+          $ref: '#/components/responses/403_SuspendedUser'
+        "500":
+          $ref: '#/components/responses/500_InfrastructureCrash'
+
+# =============================================================================
+# WebSocket API — Bidding Engine
+# =============================================================================
+# The WebSocket API is not natively representable in OpenAPI 3.0.3 paths.
+# The section below documents the WSS gateway contract as a dedicated extension
+# block using x-kwella-websocket for Flutter/React client SDK generation.
+#
+# Transport: wss://{wsApiId}.execute-api.af-south-1.amazonaws.com/{stage}
+# Lambda:    src/lambdas/bidding_engine/handler.py
+# Route selection expression: $request.body.action_type
+#
+# Lifecycle routes handled by API Gateway before message dispatch:
+#   $connect    → _handle_connect()    — Accepts the WebSocket upgrade; logs telemetry.
+#                                        Cognito JWT supplied as query param: ?token=<jwt>
+#   $disconnect → _handle_disconnect() — Logs teardown; ephemeral state cleanup is
+#                                        deferred to a TTL sweep (not the disconnect path).
+#
+# Application message routes (require non-empty JSON body):
+#   BROADCAST_REQUEST → _handle_broadcast_request()
+#   SUBMIT_BID        → _handle_submit_bid()
+# =============================================================================
+x-kwella-websocket:
+  description: |
+    # kwella WebSocket Bidding Plane
+
+    ## Connection
+
+    ```
+    wss://{wsApiId}.execute-api.af-south-1.amazonaws.com/{stage}?token={cognito_jwt}
+    ```
+
+    The Cognito JWT must be supplied as a query parameter at connection time.
+    The custom Lambda Authorizer validates it during the `$connect` handshake.
+    A 200 response from the connect handler confirms a successful WebSocket upgrade.
+
+    ## Message Frame Format
+
+    All client → server application messages must be valid JSON objects. The
+    `action_type` string field is the route selection expression used by API
+    Gateway to dispatch to the correct Lambda route handler.
+
+    ```json
+    { "action_type": "<ROUTE_KEY>", ...fieldspecificpayload }
+    ```
+
+    ## Supported Application Route Keys
+
+  routes:
+    $connect:
+      description: |
+        WebSocket upgrade handshake. No message body required. Returns 200 to
+        accept the connection. Logs `connectionId`, `sourceIp`, and `stage`.
+      authorization: cognito_jwt_query_param
+      response:
+        statusCode: 200
+        body:
+          message: "Connection established."
+          connectionId: "rider-conn-id=="
+
+    $disconnect:
+      description: |
+        WebSocket teardown notification. Fired by API Gateway when the client
+        disconnects (explicit close or timeout). Always acknowledged with 200.
+        Ephemeral presence records are cleaned up by a separate TTL sweep job.
+      response:
+        statusCode: 200
+        body:
+          message: "Connection closed."
+          connectionId: "rider-conn-id=="
+
+    BROADCAST_REQUEST:
+      description: Rider broadcasts a trip solicitation to available Drivers.
+      request:
+        schema:
+          $ref: '#/components/schemas/WsBroadcastRequestMessage'
+        example:
+          action_type: "BROADCAST_REQUEST"
+          rider_id: "USR#abc-123"
+          pickup_location: "Bellville Station"
+          destination: "Cape Town CBD"
+          passenger_count: 3
+          baseline_fare: "25.00"
+          connection_id: "rider-conn-id=="
+      responses:
+        "200":
+          description: Broadcast persisted; awaiting Driver bids.
+          schema:
+            $ref: '#/components/schemas/WsAcknowledgement'
+          example:
+            message: "Broadcast published. Awaiting Driver bids."
+            broadcast_pk: "BID#rider-conn-id=="
+            SK: "OPEN"
+            rider_id: "USR#abc-123"
+            baseline_fare: "25.00"
+        "400":
+          description: Pydantic v2 validation failure or malformed JSON body.
+          schema:
+            $ref: '#/components/schemas/ValidationErrorResponse'
+        "500":
+          description: DynamoDB write failure.
+          schema:
+            $ref: '#/components/schemas/InfrastructureErrorResponse'
+
+    SUBMIT_BID:
+      description: Driver submits a counter-offer fare in response to an open broadcast.
+      request:
+        schema:
+          $ref: '#/components/schemas/WsSubmitBidMessage'
+        example:
+          action_type: "SUBMIT_BID"
+          driver_id: "USR#drv-456"
+          broadcast_pk: "BID#rider-conn-id=="
+          counter_fare: "22.50"
+          estimated_pickup: "4 minutes"
+          connection_id: "driver-conn-id=="
+      responses:
+        "200":
+          description: Bid persisted; awaiting Rider acceptance.
+          schema:
+            $ref: '#/components/schemas/WsAcknowledgement'
+          example:
+            message: "Bid submitted. Awaiting Rider acceptance."
+            broadcast_pk: "BID#rider-conn-id=="
+            offer_sk: "OFFER#USR#drv-456"
+            driver_id: "USR#drv-456"
+            counter_fare: "22.50"
+        "400":
+          description: Pydantic v2 validation failure, missing BID# prefix, or malformed JSON.
+          schema:
+            $ref: '#/components/schemas/ValidationErrorResponse'
+        "500":
+          description: DynamoDB write failure.
+          schema:
+            $ref: '#/components/schemas/InfrastructureErrorResponse'
+
+# =============================================================================
+# Tag Metadata
+# =============================================================================
+tags:
+  - name: Identity Service
+    description: |
+      Profile and vehicle management operations backed by the Identity Service Lambda
+      (`src/lambdas/identity_service/handler.py`). All routes are fronted by the
+      custom Lambda Token Authorizer (`src/lambdas/auth_authorizer/handler.py`).
+  - name: Bidding Engine (WebSocket)
+    description: |
+      Real-time bidding plane routes processed by the Bidding Engine Lambda
+      (`src/lambdas/bidding_engine/handler.py`). Communicated via the AWS API
+      Gateway WebSocket API; documented in the `x-kwella-websocket` extension block.
+
+# =============================================================================
+# External Documentation
+# =============================================================================
+externalDocs:
+  description: kwella System Architecture & Business Logic Master Blueprint
+  url: https://github.com/kwella/kwella-backend/blob/main/KWELLA_SYSTEM_CONTEXT.md

@@ -1,0 +1,138 @@
+# =============================================================================
+# kwella — Primary CI/CD Engine Pipeline
+# Phase 7, Step 1 — GitHub Actions Automated Deployment Gate
+# =============================================================================
+#
+# Trigger policy:
+#   • All push events targeting 'main' or 'develop'
+#   • All pull_request events targeting 'main' or 'develop'
+#
+# Job execution order:
+#   Job 1 → backend_quality_gate   (Python 3.12 / pytest + moto + pydantic)
+#   Job 2 → terraform_quality_gate (Terraform 1.6.x / validate)
+# =============================================================================
+
+name: kwella CI/CD Engine Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+# Cancel any in-progress run for the same ref/branch to avoid queuing duplicates.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ---------------------------------------------------------------------------
+# Job 1: Backend Python Quality Gate
+# ---------------------------------------------------------------------------
+jobs:
+  backend_quality_gate:
+    name: "Backend — Python 3.12 Quality Gate"
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        # All Python commands resolve relative to the backend workspace root.
+        working-directory: kwella-backend
+
+    steps:
+      # ── 1. Checkout source tree ─────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Provision the exact Python 3.12 runtime ──────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ── 3. Restore cached virtual environment ───────────────────────────
+      #    Cache key is scoped to the OS + the exact contents of the test
+      #    requirements file to guarantee cache invalidation on any dep change.
+      - name: Cache virtual environment
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: kwella-backend/.venv
+          key: venv-${{ runner.os }}-py3.12-${{ hashFiles('kwella-backend/tests/requirements-test.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-py3.12-
+
+      # ── 4. Bootstrap the virtual environment (cache miss path) ──────────
+      - name: Install test dependencies
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r tests/requirements-test.txt
+
+      # ── 5. Execute the complete test suite ──────────────────────────────
+      #    Runs all test modules discovered under kwella-backend/tests/.
+      #    JUnit XML is emitted for CI reporting; coverage data is written
+      #    to coverage.xml so the runner can surface line-coverage metrics.
+      - name: Run pytest suite
+        run: |
+          .venv/bin/pytest tests/ \
+            --tb=short \
+            --junitxml=tests/junit.xml \
+            --cov=src \
+            --cov-report=xml:tests/coverage.xml \
+            -v
+
+      # ── 6. Upload test reports as workflow artifacts ─────────────────────
+      #    Retained for 7 days so engineers can inspect failures without
+      #    having to re-run the pipeline locally.
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-reports
+          path: |
+            kwella-backend/tests/junit.xml
+            kwella-backend/tests/coverage.xml
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Terraform Infrastructure Quality Gate
+  # ---------------------------------------------------------------------------
+  terraform_quality_gate:
+    name: "Infrastructure — Terraform 1.6.x Quality Gate"
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        # All Terraform commands resolve relative to the IaC workspace root.
+        working-directory: kwella-backend/terraform
+
+    steps:
+      # ── 1. Checkout source tree ─────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Pin the exact Terraform engine version ────────────────────────
+      #    Governance mandates >= 1.6.0. We pin to the latest patch of 1.6.x
+      #    to honour the semver constraint without accidentally pulling a
+      #    major-version bump in future runner image refreshes.
+      - name: Set up Terraform 1.6.x
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.6"
+
+      # ── 3. Initialise the provider graph (no backend, no remote state) ───
+      #    '-backend=false' prevents any attempt to connect to S3/DynamoDB
+      #    state backends, making the gate safe to run without AWS credentials.
+      - name: Terraform Init (local provider graph only)
+        run: terraform init -backend=false
+
+      # ── 4. Strict HCL syntax validation ─────────────────────────────────
+      #    Validates all .tf files for syntactic correctness and internal
+      #    type consistency without making any provider API calls.
+      - name: Terraform Validate
+        run: terraform validate

@@ -1,0 +1,84 @@
+# ==========================================
+# kwella Core System Guardrails - gitignore
+# ==========================================
+
+# --- Development & IDE Artifacts ---
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+.DS_Store
+
+# --- Google Antigravity & AI Agent Telemetry ---
+.antigravity/
+*agent_workspace_state*
+*.tmp
+*.log
+
+# --- Terraform & AWS Infrastructure ---
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+
+# --- Python 3.12 Backend Layer ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+env/
+venv/
+ENV/
+dist/
+build/
+*.egg-info/
+src/layers/kwella_shared/python/boto3/
+src/layers/kwella_shared/python/botocore/
+.mypy_cache/
+.ruff_cache/
+
+# --- Unit Test Infrastructure (pytest + moto) ---
+# pytest artefacts
+.pytest_cache/
+# Per-test coverage data and reports
+.coverage
+coverage.xml
+htmlcov/
+# moto stores no disk state but pytest-cov may write here
+junit.xml
+
+# --- Flutter & Dart Client Mobile App ---
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.ephemeral
+ephemeral/
+linux/flutter/ephemeral/
+macos/flutter/ephemeral/
+windows/flutter/ephemeral/
+
+# --- GitHub Actions CI/CD Engine Pipeline ---
+# Local act-runner cache (https://github.com/nektos/act)
+.act/
+.actrc
+# Ephemeral environment secrets files materialised by workflow env steps
+.env
+.env.*
+!.env.example
+# Runner-level diagnostic and timing logs
+runner-*.log
+# Terraform provider plugin cache written during local 'act' runs
+.terraform.d/

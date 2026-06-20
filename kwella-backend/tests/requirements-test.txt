@@ -1,0 +1,24 @@
+# ============================================================
+# kwella — Test-Environment Dependencies
+# ============================================================
+# Install into the project .venv with:
+#   pip install -r kwella-backend/tests/requirements-test.txt
+#
+# Do NOT install these into the Lambda layer; they are strictly
+# local mock-testing utilities.
+# ============================================================
+
+# --- Core test runner ---
+pytest==8.3.5
+
+# --- AWS service mocking (DynamoDB) ---
+moto[dynamodb]==5.0.21
+
+# --- Data validation (must match Lambda layer version) ---
+pydantic==2.7.4
+
+# --- Type-checking support for pytest ---
+pytest-mock==3.14.0
+
+# --- Coverage reporting (optional but recommended) ---
+pytest-cov==5.0.0
