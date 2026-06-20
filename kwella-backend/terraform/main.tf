@@ -67,10 +67,10 @@ resource "aws_dynamodb_table" "kwella_core" {
   #   • Vehicle → Driver reverse lookup  (GSI1_PK = VEH#<Sticker>, GSI1_SK = DRIVER)
   #   • Owner   → Fleet lookup           (GSI1_PK = USR#<OwnerId>, GSI1_SK = VEH#<Sticker>)
   global_secondary_index {
-    name               = "GSI1"
-    hash_key           = "GSI1_PK"
-    range_key          = "GSI1_SK"
-    projection_type    = "ALL"
+    name            = "GSI1"
+    hash_key        = "GSI1_PK"
+    range_key       = "GSI1_SK"
+    projection_type = "ALL"
   }
 
   # ── Durability: Point-in-Time Recovery ──────────────────────────────────
@@ -96,7 +96,7 @@ resource "aws_cognito_user_pool" "kwella_user_pool" {
   name = "kwella-user-pool-${var.environment}"
 
   username_attributes      = ["phone_number"]
-  auto_verified_attributes = ["phone_number"]
+  auto_verified_attributes = ["email"]
 
   password_policy {
     minimum_length    = 8
@@ -141,12 +141,12 @@ resource "aws_cognito_user_pool_client" "fleet_owner_dashboard" {
 # ---------------------------------------------------------------------------
 
 resource "aws_lambda_function" "auth_authorizer" {
-  function_name = "kwella-auth-authorizer-${var.environment}"
-  description   = "Custom REQUEST Lambda authorizer: validates Cognito JWT and enforces DynamoDB suspension state."
-  runtime       = "python3.12"
-  handler       = "handler.lambda_handler"
-  role          = aws_iam_role.lambda_exec.arn
-  filename      = "${path.module}/../../dist/auth_authorizer.zip"
+  function_name    = "kwella-auth-authorizer-${var.environment}"
+  description      = "Custom REQUEST Lambda authorizer: validates Cognito JWT and enforces DynamoDB suspension state."
+  runtime          = "python3.12"
+  handler          = "handler.lambda_handler"
+  role             = aws_iam_role.lambda_exec.arn
+  filename         = "${path.module}/../../dist/auth_authorizer.zip"
   source_code_hash = filebase64sha256("${path.module}/../../dist/auth_authorizer.zip")
 
   layers = [aws_lambda_layer_version.kwella_shared.arn]
@@ -160,12 +160,12 @@ resource "aws_lambda_function" "auth_authorizer" {
 }
 
 resource "aws_lambda_function" "identity_service" {
-  function_name = "kwella-identity-service-${var.environment}"
-  description   = "Identity Service: handles UPSERT_PROFILE and REGISTER_VEHICLE operations against the kwella core DynamoDB table."
-  runtime       = "python3.12"
-  handler       = "handler.lambda_handler"
-  role          = aws_iam_role.lambda_exec.arn
-  filename      = "${path.module}/../../dist/identity_service.zip"
+  function_name    = "kwella-identity-service-${var.environment}"
+  description      = "Identity Service: handles UPSERT_PROFILE and REGISTER_VEHICLE operations against the kwella core DynamoDB table."
+  runtime          = "python3.12"
+  handler          = "handler.lambda_handler"
+  role             = aws_iam_role.lambda_exec.arn
+  filename         = "${path.module}/../../dist/identity_service.zip"
   source_code_hash = filebase64sha256("${path.module}/../../dist/identity_service.zip")
 
   layers = [aws_lambda_layer_version.kwella_shared.arn]
@@ -178,12 +178,12 @@ resource "aws_lambda_function" "identity_service" {
 }
 
 resource "aws_lambda_function" "ledger_service" {
-  function_name = "kwella-ledger-service-${var.environment}"
-  description   = "Ledger Service: handles PROCESS_CANCELLATION and APPLY_TRIP_FEE operations."
-  runtime       = "python3.12"
-  handler       = "handler.lambda_handler"
-  role          = aws_iam_role.lambda_exec.arn
-  filename      = "${path.module}/../../dist/ledger_service.zip"
+  function_name    = "kwella-ledger-service-${var.environment}"
+  description      = "Ledger Service: handles PROCESS_CANCELLATION and APPLY_TRIP_FEE operations."
+  runtime          = "python3.12"
+  handler          = "handler.lambda_handler"
+  role             = aws_iam_role.lambda_exec.arn
+  filename         = "${path.module}/../../dist/ledger_service.zip"
   source_code_hash = filebase64sha256("${path.module}/../../dist/ledger_service.zip")
 
   layers = [aws_lambda_layer_version.kwella_shared.arn]
