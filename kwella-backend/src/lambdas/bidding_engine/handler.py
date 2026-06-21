@@ -31,6 +31,7 @@ from typing import Any
 
 import boto3
 import botocore.exceptions
+from decimal import Decimal
 
 from geofence_utils import calculate_distance, is_inside_geofence
 
@@ -59,6 +60,7 @@ _RIDE_OFFER_TTL_SECONDS: int = 15
 # Connection-pooled DynamoDB Table resource at module scope
 _dynamodb = boto3.resource("dynamodb", region_name=_AWS_REGION)
 _table = _dynamodb.Table(_TABLE_NAME)
+_dynamodb_client = boto3.client("dynamodb", region_name=_AWS_REGION)
 
 
 def get_table():
@@ -356,6 +358,151 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return {
                 "statusCode": 200,
                 "body": json.dumps(response_body),
+            }
+
+        elif route_key == "confirmArrival":
+            raw_body = event.get("body")
+            if raw_body:
+                try:
+                    payload = json.loads(raw_body)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Failed to parse JSON body for confirmArrival route on connectionId=%s: %s",
+                        connection_id,
+                        exc,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Request body must be valid JSON.",
+                        }),
+                    }
+            else:
+                payload = event
+
+            driver_id = payload.get("driverId")
+            trip_id = payload.get("tripId")
+            final_bid_amount = payload.get("final_bid_amount")
+
+            if not driver_id or not isinstance(driver_id, str):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'driverId'.",
+                    }),
+                }
+            if not trip_id or not isinstance(trip_id, str):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'tripId'.",
+                    }),
+                }
+            if not isinstance(final_bid_amount, (int, float, Decimal)) or isinstance(final_bid_amount, bool):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'final_bid_amount'.",
+                    }),
+                }
+
+            # Safely convert to Decimal for accurate math
+            amount_decimal = Decimal(str(final_bid_amount))
+            net_earnings = (amount_decimal * Decimal("0.85")).quantize(Decimal("0.01"))
+
+            try:
+                logger.info(
+                    "Executing payout transact_write_items for driverId=%s tripId=%s final_bid_amount=%s",
+                    driver_id,
+                    trip_id,
+                    final_bid_amount,
+                )
+                _dynamodb_client.transact_write_items(
+                    TransactItems=[
+                        {
+                            "Update": {
+                                "TableName": _TABLE_NAME,
+                                "Key": {
+                                    "PK": {"S": f"TRIP#{trip_id}"},
+                                    "SK": {"S": "METADATA"},
+                                },
+                                "UpdateExpression": "SET #status = :completed",
+                                "ConditionExpression": "#status = :accepted OR #status = :arrived",
+                                "ExpressionAttributeNames": {
+                                    "#status": "status",
+                                },
+                                "ExpressionAttributeValues": {
+                                    ":completed": {"S": "COMPLETED"},
+                                    ":accepted": {"S": "ACCEPTED"},
+                                    ":arrived": {"S": "ARRIVED"},
+                                },
+                            }
+                        },
+                        {
+                            "Update": {
+                                "TableName": _TABLE_NAME,
+                                "Key": {
+                                    "PK": {"S": f"DRIVER#{driver_id}"},
+                                    "SK": {"S": "WALLET"},
+                                },
+                                "UpdateExpression": (
+                                    "SET balance = if_not_exists(balance, :zero) + :payout, "
+                                    "daily_total = if_not_exists(daily_total, :zero) + :payout"
+                                ),
+                                "ExpressionAttributeValues": {
+                                    ":payout": {"N": str(net_earnings)},
+                                    ":zero": {"N": "0.00"},
+                                },
+                            }
+                        },
+                    ]
+                )
+            except botocore.exceptions.ClientError as exc:
+                error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+                if error_code == "TransactionCanceledException":
+                    reasons = exc.response.get("CancellationReasons", [])
+                    logger.warning(
+                        "Transaction canceled for tripId=%s driverId=%s. Reasons: %s",
+                        trip_id,
+                        driver_id,
+                        reasons,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Payout settlement failed. Trip status must be ACCEPTED or ARRIVED.",
+                        }),
+                    }
+                raise
+
+            # Transaction succeeded. Read driver's wallet to get updated daily total.
+            wallet_res = table.get_item(
+                Key={
+                    "PK": f"DRIVER#{driver_id}",
+                    "SK": "WALLET",
+                }
+            )
+            wallet_item = wallet_res.get("Item") or {}
+            updated_daily_total = wallet_item.get("daily_total")
+            if updated_daily_total is not None:
+                updated_daily_total = float(updated_daily_total)
+            else:
+                updated_daily_total = float(net_earnings)
+
+            return {
+                "statusCode": 200,
+                "body": json.dumps({
+                    "status": "WalletSettled",
+                    "tripId": trip_id,
+                    "net_earnings": float(net_earnings),
+                    "currency": "ZAR",
+                    "updated_daily_total": updated_daily_total,
+                }),
             }
 
         elif route_key == "requestTrip":

@@ -918,3 +918,224 @@ def test_request_trip_with_no_active_drivers_returns_empty_matched_list():
     assert body["status"] == "TripBroadcast"
     assert body["matched_drivers"] == []
 
+
+# ---------------------------------------------------------------------------
+# Route: confirmArrival Tests (Phase 15 — Secure Payout Settlement)
+# ---------------------------------------------------------------------------
+
+_CONFIRM_ARRIVAL_EVENT_BASE = {
+    "requestContext": {
+        "routeKey": "confirmArrival",
+        "connectionId": "conn-driver-confirm-arrival",
+    },
+}
+
+
+@mock_aws
+def test_confirm_arrival_settles_accepted_trip_successfully():
+    """Verify confirmArrival calculates net payout, executes transact_write_items, updates trip to COMPLETED, and updates driver wallet."""
+    from decimal import Decimal
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Pre-populate trip record in ACCEPTED state
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-accepted-123",
+            "SK": "METADATA",
+            "status": "ACCEPTED",
+        }
+    )
+
+    payload = {
+        "action": "confirmArrival",
+        "driverId": "USR#drv-12345",
+        "tripId": "trip-accepted-123",
+        "final_bid_amount": 150.0,
+    }
+
+    event = {
+        **_CONFIRM_ARRIVAL_EVENT_BASE,
+        "body": json.dumps(payload),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "WalletSettled"
+    assert body["tripId"] == "trip-accepted-123"
+    assert body["net_earnings"] == pytest.approx(127.50)
+    assert body["currency"] == "ZAR"
+    assert body["updated_daily_total"] == pytest.approx(127.50)
+
+    # Verify database updates
+    trip_res = table.get_item(Key={"PK": "TRIP#trip-accepted-123", "SK": "METADATA"})
+    assert trip_res["Item"]["status"] == "COMPLETED"
+
+    wallet_res = table.get_item(Key={"PK": "DRIVER#USR#drv-12345", "SK": "WALLET"})
+    wallet_item = wallet_res["Item"]
+    assert wallet_item["balance"] == Decimal("127.50")
+    assert wallet_item["daily_total"] == Decimal("127.50")
+
+
+@mock_aws
+def test_confirm_arrival_settles_arrived_trip_and_increments_existing_wallet():
+    """Verify confirmArrival increments pre-existing wallet balances for arrived trip."""
+    from decimal import Decimal
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Pre-populate trip record in ARRIVED state
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-arrived-456",
+            "SK": "METADATA",
+            "status": "ARRIVED",
+        }
+    )
+
+    # Pre-populate driver wallet
+    table.put_item(
+        Item={
+            "PK": "DRIVER#USR#drv-12345",
+            "SK": "WALLET",
+            "balance": Decimal("1000.00"),
+            "daily_total": Decimal("1000.00"),
+        }
+    )
+
+    payload = {
+        "action": "confirmArrival",
+        "driverId": "USR#drv-12345",
+        "tripId": "trip-arrived-456",
+        "final_bid_amount": 200.0,  # 85% of 200 is 170
+    }
+
+    event = {
+        **_CONFIRM_ARRIVAL_EVENT_BASE,
+        "body": json.dumps(payload),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "WalletSettled"
+    assert body["tripId"] == "trip-arrived-456"
+    assert body["net_earnings"] == pytest.approx(170.00)
+    assert body["updated_daily_total"] == pytest.approx(1170.00)
+
+    # Verify database updates
+    trip_res = table.get_item(Key={"PK": "TRIP#trip-arrived-456", "SK": "METADATA"})
+    assert trip_res["Item"]["status"] == "COMPLETED"
+
+    wallet_res = table.get_item(Key={"PK": "DRIVER#USR#drv-12345", "SK": "WALLET"})
+    wallet_item = wallet_res["Item"]
+    assert wallet_item["balance"] == Decimal("1170.00")
+    assert wallet_item["daily_total"] == Decimal("1170.00")
+
+
+@mock_aws
+def test_confirm_arrival_fails_on_already_completed_trip():
+    """Verify that trying to settle an already 'COMPLETED' trip fails with a clean transactional conditional check error."""
+    from decimal import Decimal
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Pre-populate trip in COMPLETED state
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-completed-789",
+            "SK": "METADATA",
+            "status": "COMPLETED",
+        }
+    )
+
+    # Pre-populate driver wallet
+    table.put_item(
+        Item={
+            "PK": "DRIVER#USR#drv-12345",
+            "SK": "WALLET",
+            "balance": Decimal("500.00"),
+            "daily_total": Decimal("500.00"),
+        }
+    )
+
+    payload = {
+        "action": "confirmArrival",
+        "driverId": "USR#drv-12345",
+        "tripId": "trip-completed-789",
+        "final_bid_amount": 150.0,
+    }
+
+    event = {
+        **_CONFIRM_ARRIVAL_EVENT_BASE,
+        "body": json.dumps(payload),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "status must be ACCEPTED or ARRIVED" in body["detail"]
+
+    # Verify database remains unmodified
+    trip_res = table.get_item(Key={"PK": "TRIP#trip-completed-789", "SK": "METADATA"})
+    assert trip_res["Item"]["status"] == "COMPLETED"
+
+    wallet_res = table.get_item(Key={"PK": "DRIVER#USR#drv-12345", "SK": "WALLET"})
+    wallet_item = wallet_res["Item"]
+    assert wallet_item["balance"] == Decimal("500.00")
+    assert wallet_item["daily_total"] == Decimal("500.00")
+
+
+@mock_aws
+def test_confirm_arrival_validation_failures():
+    """Verify confirmArrival validates required inputs and their data types."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Case 1: Missing driverId
+    payload = {
+        "action": "confirmArrival",
+        "tripId": "trip-123",
+        "final_bid_amount": 150.0,
+    }
+    response = handler.lambda_handler({**_CONFIRM_ARRIVAL_EVENT_BASE, "body": json.dumps(payload)}, context=None)
+    assert response["statusCode"] == 400
+    assert "driverId" in json.loads(response["body"])["detail"]
+
+    # Case 2: Missing tripId
+    payload = {
+        "action": "confirmArrival",
+        "driverId": "USR#drv-123",
+        "final_bid_amount": 150.0,
+    }
+    response = handler.lambda_handler({**_CONFIRM_ARRIVAL_EVENT_BASE, "body": json.dumps(payload)}, context=None)
+    assert response["statusCode"] == 400
+    assert "tripId" in json.loads(response["body"])["detail"]
+
+    # Case 3: Missing final_bid_amount
+    payload = {
+        "action": "confirmArrival",
+        "driverId": "USR#drv-123",
+        "tripId": "trip-123",
+    }
+    response = handler.lambda_handler({**_CONFIRM_ARRIVAL_EVENT_BASE, "body": json.dumps(payload)}, context=None)
+    assert response["statusCode"] == 400
+    assert "final_bid_amount" in json.loads(response["body"])["detail"]
+
+    # Case 4: Non-numeric final_bid_amount
+    payload = {
+        "action": "confirmArrival",
+        "driverId": "USR#drv-123",
+        "tripId": "trip-123",
+        "final_bid_amount": "one-hundred-fifty",
+    }
+    response = handler.lambda_handler({**_CONFIRM_ARRIVAL_EVENT_BASE, "body": json.dumps(payload)}, context=None)
+    assert response["statusCode"] == 400
+    assert "final_bid_amount" in json.loads(response["body"])["detail"]
+
+
