@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../bidding/models/active_ride_offer.dart';
+import '../../../bidding/services/kwella_websocket_service.dart';
 import '../../../location/presentation/controllers/kwella_telemetry_controller.dart';
 import '../../models/bidding_state.dart';
 import '../../providers/bidding_provider.dart';
@@ -44,6 +48,14 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                 ),
               ],
             ),
+            // Ride-offer overlay — rendered above the map / bid list.
+            if (telemetryState.activeOffer != null)
+              _buildRideOfferOverlay(
+                context,
+                telemetryState.activeOffer!,
+                telemetryState.offerSecondsRemaining,
+              ),
+            // Geofence overlay — rendered on top of everything else.
             if (telemetryState.isWithinGeofenceRadius)
               _buildGeofenceOverlay(context, telemetryState, telemetryController),
           ],
@@ -385,6 +397,242 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Ride Offer Overlay
+  // ---------------------------------------------------------------------------
+
+  Widget _buildRideOfferOverlay(
+    BuildContext context,
+    ActiveRideOffer offer,
+    int secondsRemaining,
+  ) {
+    final progress = secondsRemaining / 15.0;
+    final fareText =
+        'R\${offer.baseFare.toStringAsFixed(2)}';
+
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: TweenAnimationBuilder<double>(
+          key: ValueKey(offer.tripId),
+          tween: Tween<double>(begin: 0.0, end: 1.0),
+          duration: const Duration(milliseconds: 380),
+          curve: Curves.easeOutBack,
+          builder: (context, value, child) {
+            return Transform.translate(
+              offset: Offset(0, (1 - value) * -80),
+              child: Opacity(opacity: value.clamp(0.0, 1.0), child: child),
+            );
+          },
+          child: Material(
+            elevation: 14,
+            borderRadius: BorderRadius.circular(20),
+            shadowColor: Colors.black38,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                gradient: LinearGradient(
+                  colors: [
+                    const Color(0xFF0D1B2A),
+                    const Color(0xFF1A3A5C),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                border: Border.all(
+                  color: Colors.blueAccent.withOpacity(0.35),
+                  width: 1.5,
+                ),
+              ),
+              padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ---- Header row ----
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.blueAccent.withOpacity(0.18),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.local_taxi_rounded,
+                          color: Colors.blueAccent,
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'New Ride Offer',
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                      ),
+                      // ---- Countdown badge ----
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: secondsRemaining <= 5
+                              ? Colors.redAccent.withOpacity(0.85)
+                              : Colors.blueAccent.withOpacity(0.25),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: secondsRemaining <= 5
+                                ? Colors.redAccent
+                                : Colors.blueAccent.withOpacity(0.6),
+                            width: 1,
+                          ),
+                        ),
+                        child: Text(
+                          '${secondsRemaining}s',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w900,
+                            color: secondsRemaining <= 5
+                                ? Colors.white
+                                : Colors.blueAccent.shade100,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  // ---- Locations ----
+                  _OfferLocationRow(
+                    icon: Icons.trip_origin_rounded,
+                    iconColor: const Color(0xFF4CAF50),
+                    label: 'Pickup',
+                    value: offer.pickupLocation,
+                  ),
+                  const SizedBox(height: 8),
+                  _OfferLocationRow(
+                    icon: Icons.location_on_rounded,
+                    iconColor: Colors.redAccent,
+                    label: 'Dropoff',
+                    value: offer.dropoffLocation,
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  // ---- Fare + CTA row ----
+                  Row(
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'BASE FARE',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white54,
+                              letterSpacing: 1.1,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            fareText,
+                            style: const TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Spacer(),
+                      ElevatedButton(
+                        key: const Key('accept_base_fare_button'),
+                        onPressed: () => _acceptBaseFare(offer),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF1565C0),
+                          foregroundColor: Colors.white,
+                          elevation: 4,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: const Text(
+                          'Accept Base Fare',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // ---- Progress bar ----
+                  _RideOfferCountdownBar(progress: progress),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Dispatches a `sendBid` action payload to the cloud over the shared
+  /// [KwellaWebSocketService] sink, accepting the server's base fare.
+  void _acceptBaseFare(ActiveRideOffer offer) {
+    final payload = jsonEncode({
+      'action': 'sendBid',
+      'tripId': offer.tripId,
+      'amount': offer.baseFare.toStringAsFixed(2),
+      'bidType': 'BASE_FARE_ACCEPT',
+      'timestamp': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    debugPrint('[BiddingMarketplaceScreen] Dispatching sendBid: $payload');
+    KwellaWebSocketService.instance.sink.add(payload);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle_rounded,
+                  color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              Text('Bid accepted for R${offer.baseFare.toStringAsFixed(2)}!'),
+            ],
+          ),
+          backgroundColor: const Color(0xFF1565C0),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Geofence Overlay (existing)
+  // ---------------------------------------------------------------------------
+
   Widget _buildGeofenceOverlay(
     BuildContext context,
     TelemetryState state,
@@ -718,6 +966,110 @@ class _SlideToConfirmButtonState extends State<_SlideToConfirmButton>
           ),
         );
       },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ride-Offer helper widgets
+// ---------------------------------------------------------------------------
+
+/// A single location row (pickup or dropoff) inside the ride-offer card.
+class _OfferLocationRow extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final String value;
+
+  const _OfferLocationRow({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(icon, color: iconColor, size: 18),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label.toUpperCase(),
+                style: const TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white38,
+                  letterSpacing: 0.9,
+                ),
+              ),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// An animated linear progress bar mapping the remaining countdown [0.0–1.0]
+/// to a coloured fill that transitions from blue → amber → red as time runs out.
+class _RideOfferCountdownBar extends StatelessWidget {
+  final double progress; // 1.0 = full time, 0.0 = expired
+
+  const _RideOfferCountdownBar({required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    final Color barColor = progress > 0.5
+        ? const Color(0xFF1E88E5)
+        : progress > 0.25
+            ? Colors.amber.shade600
+            : Colors.redAccent;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'OFFER EXPIRES IN',
+          style: TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            color: Colors.white38,
+            letterSpacing: 0.9,
+          ),
+        ),
+        const SizedBox(height: 5),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween<double>(begin: progress + (1 / 15), end: progress),
+            duration: const Duration(milliseconds: 900),
+            curve: Curves.easeOut,
+            builder: (context, value, _) {
+              return LinearProgressIndicator(
+                value: value.clamp(0.0, 1.0),
+                minHeight: 7,
+                backgroundColor: Colors.white10,
+                valueColor: AlwaysStoppedAnimation<Color>(barColor),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

@@ -125,6 +125,27 @@ Position _makePosition({
 }
 
 // ---------------------------------------------------------------------------
+// Helper: build a well-formed rideOfferAvailable payload map.
+// ---------------------------------------------------------------------------
+Map<String, dynamic> _makeRideOfferPayload({
+  String tripId = 'TRIP#test-001',
+  String pickupLocation = 'Cape Town CBD',
+  String dropoffLocation = 'V&A Waterfront',
+  double baseFare = 45.50,
+  DateTime? expiresAt,
+}) {
+  final expiry = expiresAt ?? DateTime.now().toUtc().add(const Duration(seconds: 15));
+  return {
+    'action': 'rideOfferAvailable',
+    'tripId': tripId,
+    'pickupLocation': pickupLocation,
+    'dropoffLocation': dropoffLocation,
+    'baseFare': baseFare,
+    'expiresAt': expiry.toIso8601String(),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
 
@@ -394,6 +415,196 @@ void main() {
 
         await streamController.close();
       },
+    );
+  });
+
+  // ---- Ride Offer Hydration ------------------------------------------------
+
+  group('Ride Offer — state hydration —', () {
+    test(
+      'receiving rideOfferAvailable event hydrates activeOffer and starts '
+      'the countdown at 15 seconds',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        // Initially no offer is present.
+        expect(controller.state.activeOffer, isNull);
+        expect(controller.state.offerSecondsRemaining, equals(0));
+
+        // Feed the marketplace event.
+        final payload = _makeRideOfferPayload(
+          tripId: 'TRIP#hydrate-001',
+          pickupLocation: 'Cape Town CBD',
+          dropoffLocation: 'V&A Waterfront',
+          baseFare: 55.00,
+        );
+        wsService.feedMessage(payload);
+
+        // Wait for the stream event to be processed.
+        await Future<void>.delayed(Duration.zero);
+
+        final offer = controller.state.activeOffer;
+        expect(offer, isNotNull);
+        expect(offer!.tripId, equals('TRIP#hydrate-001'));
+        expect(offer.pickupLocation, equals('Cape Town CBD'));
+        expect(offer.dropoffLocation, equals('V&A Waterfront'));
+        expect(offer.baseFare, closeTo(55.00, 0.001));
+        expect(controller.state.offerSecondsRemaining, equals(15));
+      },
+    );
+
+    test(
+      'all required ActiveRideOffer fields are correctly parsed from the '
+      'WebSocket payload',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        final expiresAt =
+            DateTime.utc(2024, 6, 21, 8, 0, 15); // fixed for assertion
+
+        wsService.feedMessage({
+          'action': 'rideOfferAvailable',
+          'tripId': 'TRIP#field-check',
+          'pickupLocation': 'Sandton City',
+          'dropoffLocation': 'OR Tambo International',
+          'baseFare': 320.75,
+          'expiresAt': expiresAt.toIso8601String(),
+        });
+
+        await Future<void>.delayed(Duration.zero);
+
+        final offer = controller.state.activeOffer!;
+        expect(offer.tripId, equals('TRIP#field-check'));
+        expect(offer.pickupLocation, equals('Sandton City'));
+        expect(offer.dropoffLocation, equals('OR Tambo International'));
+        expect(offer.baseFare, closeTo(320.75, 0.001));
+        expect(offer.expiresAt, equals(expiresAt));
+      },
+    );
+
+    test(
+      'a second rideOfferAvailable event replaces the previous offer and '
+      'resets the countdown to 15',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        // Feed first offer.
+        wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#first'));
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.state.activeOffer?.tripId, equals('TRIP#first'));
+
+        // Feed a replacement offer immediately.
+        wsService.feedMessage(_makeRideOfferPayload(
+          tripId: 'TRIP#second',
+          baseFare: 99.00,
+        ));
+        await Future<void>.delayed(Duration.zero);
+
+        expect(controller.state.activeOffer?.tripId, equals('TRIP#second'));
+        expect(controller.state.activeOffer?.baseFare, closeTo(99.00, 0.001));
+        // Countdown must have been reset to 15.
+        expect(controller.state.offerSecondsRemaining, equals(15));
+      },
+    );
+
+    test(
+      'a malformed rideOfferAvailable payload is gracefully ignored without '
+      'throwing or corrupting existing state',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        // Feed a valid offer first so we can assert state is unchanged.
+        wsService.feedMessage(
+            _makeRideOfferPayload(tripId: 'TRIP#valid'));
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.state.activeOffer?.tripId, equals('TRIP#valid'));
+
+        // Feed a malformed offer (missing required fields).
+        wsService.feedMessage({
+          'action': 'rideOfferAvailable',
+          // Missing tripId, pickupLocation, etc.
+          'baseFare': 'not-a-number',
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        // The previous valid offer must remain unchanged.
+        expect(controller.state.activeOffer?.tripId, equals('TRIP#valid'));
+      },
+    );
+
+    test(
+      'stopDriverTracking clears an active offer and resets the countdown',
+      () async {
+        final posStream = StreamController<Position>();
+        locationService.fakeStream = posStream.stream;
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#stop-test'));
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.state.activeOffer, isNotNull);
+
+        controller.stopDriverTracking();
+
+        expect(controller.state.activeOffer, isNull);
+        expect(controller.state.offerSecondsRemaining, equals(0));
+
+        await posStream.close();
+      },
+    );
+  });
+
+  // ---- Countdown Timer Expiry ----------------------------------------------
+
+  group('Ride Offer — countdown timer expiry —', () {
+    test(
+      'the countdown decrements by 1 each second and the offer is purged when '
+      'it reaches zero',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#expire-001'));
+        await Future<void>.delayed(Duration.zero);
+
+        // Countdown should be at 15 immediately after hydration.
+        expect(controller.state.offerSecondsRemaining, equals(15));
+        expect(controller.state.activeOffer, isNotNull);
+
+        // Advance fake time by 16 seconds — one past the countdown boundary.
+        await Future<void>.delayed(const Duration(seconds: 16));
+
+        // The offer must have been purged.
+        expect(controller.state.activeOffer, isNull,
+            reason: 'Offer should be null after the 15-second countdown expires');
+        expect(controller.state.offerSecondsRemaining, equals(0));
+      },
+      // This test relies on a real Timer, so set a generous timeout.
+      timeout: const Timeout(Duration(seconds: 25)),
+    );
+
+    test(
+      'the countdown is still live at 1 second before expiry',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#expire-partial'));
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.state.offerSecondsRemaining, equals(15));
+
+        // Advance 14 seconds — offer should still be active.
+        await Future<void>.delayed(const Duration(seconds: 14));
+
+        expect(controller.state.activeOffer, isNotNull,
+            reason: 'Offer should still be present at t+14s');
+        expect(controller.state.offerSecondsRemaining, inInclusiveRange(0, 2),
+            reason: 'Remaining seconds should be between 0 and 2 at t+14s');
+      },
+      timeout: const Timeout(Duration(seconds: 25)),
     );
   });
 }
