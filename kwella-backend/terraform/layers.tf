@@ -24,5 +24,6 @@ resource "aws_lambda_layer_version" "kwella_shared" {
   # This placeholder path satisfies Terraform schema validation; the file is
   # materialised by the 'build-layer' step in .github/workflows/ci-cd.yml
   # before any infrastructure apply is executed.
-  filename = "${path.module}/../build/kwella_shared_layer.zip"
+  filename         = "${path.module}/../build/kwella_shared_layer.zip"
+  source_code_hash = filebase64sha256("${path.module}/../build/kwella_shared_layer.zip")
 }

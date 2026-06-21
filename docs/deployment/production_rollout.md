@@ -67,7 +67,7 @@ terraform plan -out=kwella_production.tfplan
 |---|---|---|
 | `aws_dynamodb_table.kwella_core` | `create` | `billing_mode = PAY_PER_REQUEST`, PITR enabled, SSE enabled |
 | `aws_cognito_user_pool.kwella_user_pool` | `create` | `username_attributes = ["phone_number"]` |
-| `aws_cognito_user_pool_client.mobile_app` | `create` | `generate_secret = false` |
+| `aws_cognito_user_pool_client.mobile_app` | `create` | `generate_secret = false`, `ALLOW_USER_PASSWORD_AUTH` flow present |
 | `aws_cognito_user_pool_client.fleet_owner_dashboard` | `create` | `ALLOW_ADMIN_USER_PASSWORD_AUTH` flow present |
 | `aws_iam_role.lambda_exec` | `create` | Shared execution role |
 | `aws_lambda_layer_version.kwella_shared` | `create` | `compatible_runtimes = ["python3.12"]` |
@@ -424,7 +424,7 @@ AWS Account (af-south-1 / production)
 │
 ├── Cognito
 │   └── kwella-user-pool-production
-│       ├── kwella-mobile-client-production       (no secret · SRP + refresh)
+│       ├── kwella-mobile-client-production       (no secret · USER_PASSWORD_AUTH + SRP + refresh)
 │       └── kwella-fleet-web-client-production    (no secret · admin + SRP + refresh)
 │
 ├── IAM

@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Kwella Live Gateway Smoke-Testing Suite
+# =============================================================================
+# Usage:
+#   ./scripts/smoke_test.sh
+#
+# Required environment (loaded automatically from .env at project root):
+#   KWELLA_API_URL   — Base URL of the deployed API Gateway $default stage.
+#                      The $default stage in API Gateway v2 is served from the
+#                      *bare* endpoint (no stage path prefix). This is the value
+#                      exported by Terraform's `http_api_endpoint` output.
+#                      Example: https://dbmi2nczz8.execute-api.af-south-1.amazonaws.com/
+#                      DO NOT append /production — that yields a 404 because
+#                      the deployed stage name is "$default", not "production".
+#
+#   TEST_MOCK_JWT    — A valid Bearer token accepted by the custom authorizer.
+# =============================================================================
+
+set -euo pipefail
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+# ---------------------------------------------------------------------------
+# Step 0: Load .env from the project root (sibling of scripts/)
+# ---------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ENV_FILE="${PROJECT_ROOT}/.env"
+
+if [[ -f "${ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  set -a; source "${ENV_FILE}"; set +a
+  echo -e "${YELLOW}[preflight] Loaded environment from ${ENV_FILE}${NC}"
+else
+  echo -e "${YELLOW}[preflight] No .env file found at ${ENV_FILE} — relying on shell environment.${NC}"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 1: Preflight validation — fail fast with actionable messages
+# ---------------------------------------------------------------------------
+PREFLIGHT_OK=true
+
+if [[ -z "${KWELLA_API_URL:-}" ]]; then
+  echo -e "${RED}[preflight] FATAL: KWELLA_API_URL is not set.${NC}"
+  echo "  Set it to the bare API Gateway endpoint (Terraform output: http_api_endpoint)."
+  echo "  Example: export KWELLA_API_URL=https://dbmi2nczz8.execute-api.af-south-1.amazonaws.com/"
+  PREFLIGHT_OK=false
+fi
+
+if [[ -z "${TEST_MOCK_JWT:-}" ]]; then
+  echo -e "${RED}[preflight] FATAL: TEST_MOCK_JWT is not set.${NC}"
+  echo "  Set it to a valid Bearer token accepted by the kwella custom authorizer."
+  PREFLIGHT_OK=false
+fi
+
+# Warn (non-fatal) if the JWT still contains the placeholder 'signature' stub.
+if echo "${TEST_MOCK_JWT:-}" | grep -q '\.signature$'; then
+  echo -e "${YELLOW}[preflight] WARNING: TEST_MOCK_JWT ends with '.signature' — this looks like the"
+  echo -e "  placeholder token from .env. Replace it with a valid Cognito JWT or sandbox"
+  echo -e "  token or the custom authorizer will return 401/403 and all tests will fail.${NC}"
+fi
+
+if [[ "${PREFLIGHT_OK}" == "false" ]]; then
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Step 2: Validate URL structure — guard against common misconfiguration
+# ---------------------------------------------------------------------------
+# The deployed stage is named "$default" in API Gateway v2. Terraform's
+# aws_apigatewayv2_stage with name = "$default" is served at the bare
+# endpoint (no path prefix). A request to /production or /staging returns
+# 404 "Not Found" because those stage names do not exist in this deployment.
+if echo "${KWELLA_API_URL}" | grep -qE '/(production|staging|dev|development)/?$'; then
+  echo -e "${RED}[preflight] FATAL: KWELLA_API_URL contains an explicit stage path prefix.${NC}"
+  echo "  The deployed stage name is '\$default', which means API Gateway"
+  echo "  serves routes from the bare endpoint with NO path prefix."
+  echo ""
+  echo "  Your URL:    ${KWELLA_API_URL}"
+  CORRECTED_URL=$(echo "${KWELLA_API_URL}" | sed -E 's#/(production|staging|dev|development)/?$#/#')
+  echo "  Correct URL: ${CORRECTED_URL}"
+  echo ""
+  echo "  Fix: Update KWELLA_API_URL in your .env to remove the stage path suffix."
+  exit 1
+fi
+
+# Normalise: strip trailing slash so we can consistently append /route below.
+BASE_URL="${KWELLA_API_URL%/}"
+
+echo "=== Kwella Live Gateway Smoke-Testing Suite ==="
+echo "Targeting API Gateway: ${BASE_URL}"
+echo "(Stage: \$default — bare endpoint, no path prefix)"
+echo ""
+
+# 1. SMOKE TEST: POST /identity/upsert — Driver profile creation
+echo "[1/3] Testing POST /identity/upsert..."
+IDENTITY_PAYLOAD='{
+  "user_id": "driver-sipho-dlamini-001",
+  "role": "DRIVER",
+  "phone": "+27831234567",
+  "assigned_cata_sticker": "CT-TEST-001"
+}'
+
+RESPONSE_IDENTITY=$(curl -s -w "\n%{http_code}" \
+  -X POST "${BASE_URL}/identity/upsert" \
+  -H "Authorization: Bearer ${TEST_MOCK_JWT}" \
+  -H "Content-Type: application/json" \
+  -d "${IDENTITY_PAYLOAD}")
+
+HTTP_STATUS_IDENTITY=$(echo "$RESPONSE_IDENTITY" | tail -n1)
+BODY_IDENTITY=$(echo "$RESPONSE_IDENTITY" | sed '$d')
+
+if [ "$HTTP_STATUS_IDENTITY" -eq 200 ] || [ "$HTTP_STATUS_IDENTITY" -eq 201 ]; then
+  echo -e "${GREEN}✓ Identity Upsert Successful ($HTTP_STATUS_IDENTITY)${NC}"
+  echo "Response: $BODY_IDENTITY"
+elif [ "$HTTP_STATUS_IDENTITY" -eq 401 ] || [ "$HTTP_STATUS_IDENTITY" -eq 403 ]; then
+  echo -e "${RED}✗ Identity Upsert Failed ($HTTP_STATUS_IDENTITY) — Authorizer rejected the token.${NC}"
+  echo "  The custom authorizer returned $HTTP_STATUS_IDENTITY. Check that TEST_MOCK_JWT is a"
+  echo "  valid, non-expired Cognito ID token and that the user is not suspended in DynamoDB."
+  echo "Response: $BODY_IDENTITY"
+  exit 1
+else
+  echo -e "${RED}✗ Identity Upsert Failed ($HTTP_STATUS_IDENTITY)${NC}"
+  echo "Response: $BODY_IDENTITY"
+  exit 1
+fi
+
+# 2. SMOKE TEST: POST /identity/vehicle — Vehicle CATA sticker binding
+echo ""
+echo "[2/3] Testing POST /identity/vehicle..."
+VEHICLE_PAYLOAD='{
+  "cata_sticker": "CT-TEST-001",
+  "make": "Suzuki",
+  "model": "Ertiga",
+  "owner_id": "USR#driver-sipho-dlamini-001"
+}'
+
+RESPONSE_VEHICLE=$(curl -s -w "\n%{http_code}" \
+  -X POST "${BASE_URL}/identity/vehicle" \
+  -H "Authorization: Bearer ${TEST_MOCK_JWT}" \
+  -H "Content-Type: application/json" \
+  -d "${VEHICLE_PAYLOAD}")
+
+HTTP_STATUS_VEHICLE=$(echo "$RESPONSE_VEHICLE" | tail -n1)
+BODY_VEHICLE=$(echo "$RESPONSE_VEHICLE" | sed '$d')
+
+if [ "$HTTP_STATUS_VEHICLE" -eq 200 ] || [ "$HTTP_STATUS_VEHICLE" -eq 201 ]; then
+  echo -e "${GREEN}✓ Vehicle CATA Binding Successful ($HTTP_STATUS_VEHICLE)${NC}"
+  echo "Response: $BODY_VEHICLE"
+elif [ "$HTTP_STATUS_VEHICLE" -eq 401 ] || [ "$HTTP_STATUS_VEHICLE" -eq 403 ]; then
+  echo -e "${RED}✗ Vehicle CATA Binding Failed ($HTTP_STATUS_VEHICLE) — Authorizer rejected the token.${NC}"
+  echo "  The custom authorizer returned $HTTP_STATUS_VEHICLE. Check that TEST_MOCK_JWT is a"
+  echo "  valid, non-expired Cognito ID token and that the user is not suspended in DynamoDB."
+  echo "Response: $BODY_VEHICLE"
+  exit 1
+else
+  echo -e "${RED}✗ Vehicle CATA Binding Failed ($HTTP_STATUS_VEHICLE)${NC}"
+  echo "Response: $BODY_VEHICLE"
+  exit 1
+fi
+
+# 3. SMOKE TEST: POST /ledger/trip-fee — Self-balancing ledger entry
+echo ""
+echo "[3/3] Testing POST /ledger/trip-fee..."
+LEDGER_PAYLOAD='{
+  "tripId": "trip-abc-12345",
+  "driverId": "test-cada-rider",
+  "amount": 15.00,
+  "paymentMethod": "CASH",
+  "isPlatformHoliday": false
+}'
+
+RESPONSE_LEDGER=$(curl -s -w "\n%{http_code}" \
+  -X POST "${BASE_URL}/ledger/trip-fee" \
+  -H "Authorization: Bearer ${TEST_MOCK_JWT}" \
+  -H "Content-Type: application/json" \
+  -d "${LEDGER_PAYLOAD}")
+
+HTTP_STATUS_LEDGER=$(echo "$RESPONSE_LEDGER" | tail -n1)
+BODY_LEDGER=$(echo "$RESPONSE_LEDGER" | sed '$d')
+
+if [ "$HTTP_STATUS_LEDGER" -eq 200 ] || [ "$HTTP_STATUS_LEDGER" -eq 201 ]; then
+  echo -e "${GREEN}✓ Ledger Entry Successful ($HTTP_STATUS_LEDGER)${NC}"
+  echo "Response: $BODY_LEDGER"
+elif [ "$HTTP_STATUS_LEDGER" -eq 401 ] || [ "$HTTP_STATUS_LEDGER" -eq 403 ]; then
+  echo -e "${RED}✗ Ledger Entry Failed ($HTTP_STATUS_LEDGER) — Authorizer rejected the token.${NC}"
+  echo "  The custom authorizer returned $HTTP_STATUS_LEDGER. Check that TEST_MOCK_JWT is a"
+  echo "  valid, non-expired Cognito ID token and that the user is not suspended in DynamoDB."
+  echo "Response: $BODY_LEDGER"
+  exit 1
+else
+  echo -e "${RED}✗ Ledger Entry Failed ($HTTP_STATUS_LEDGER)${NC}"
+  echo "Response: $BODY_LEDGER"
+  exit 1
+fi
+
+echo ""
+echo -e "${GREEN}=== ALL SMOKE TESTS PASSED CLEANLY ===${NC}"

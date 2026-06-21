@@ -315,75 +315,103 @@ _ROUTER: dict[str, Any] = {
 
 
 # ---------------------------------------------------------------------------
-# Lambda entrypoint
+# Route key → action_type mapping (API Gateway v2 HTTP proxy integration)
 # ---------------------------------------------------------------------------
+# When the Lambda is invoked via API Gateway v2 (payload_format_version = "2.0")
+# the raw HTTP body arrives as a JSON string in event["body"] and the matched
+# route is available in event["routeKey"] (e.g. "POST /identity/upsert").
+# Direct-invocation callers (tests, other Lambdas) may still supply
+# action_type + payload at the top level — both paths are supported.
+
+_ROUTE_KEY_MAP: dict[str, str] = {
+    "POST /identity/upsert": "UPSERT_PROFILE",
+    "POST /identity/vehicle": "REGISTER_VEHICLE",
+    "GET /identity/profile": "GET_PROFILE",
+}
+
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Primary Lambda entrypoint for the kwella Identity & Profile Service.
 
-    Routes inbound events to the correct action handler based on the
-    ``action_type`` field present on the event payload.
+    Supports two invocation styles:
+
+    1. **API Gateway v2 HTTP proxy** (``payload_format_version = "2.0"``):
+       API Gateway wraps the HTTP request into a proxy envelope::
+
+           {
+               "version": "2.0",
+               "routeKey": "POST /identity/upsert",
+               "body": "{\"user_id\": \"abc-123\", ...}",
+               "requestContext": { ... }
+           }
+
+       In this mode the handler unwraps ``event["body"]`` (a JSON string) as
+       the payload dict and derives ``action_type`` from ``event["routeKey"]``
+       via ``_ROUTE_KEY_MAP``.
+
+    2. **Direct invocation** (CI tests, internal Lambda-to-Lambda calls)::
+
+           {
+               "action_type": "UPSERT_PROFILE",
+               "payload": { "user_id": "abc-123", "role": "RIDER", ... }
+           }
 
     Args:
-        event:   The Lambda event dict. Must contain an ``action_type`` string
-                 key and a ``payload`` dict with action-specific fields.
+        event:   The Lambda event dict (either proxy envelope or direct call).
         context: The Lambda runtime context object (reserved for future use).
 
     Returns:
         An API Gateway-compatible response dict containing a ``statusCode``,
         ``headers``, and JSON-serialised ``body``.
-
-    Event contract::
-
-        {
-            "action_type": "UPSERT_PROFILE" | "REGISTER_VEHICLE" | "GET_PROFILE",
-            "payload": { ... }
-        }
-
-    Example — upsert a rider::
-
-        {
-            "action_type": "UPSERT_PROFILE",
-            "payload": {
-                "user_id": "abc-123",
-                "role": "RIDER",
-                "phone": "+27821234567"
-            }
-        }
-
-    Example — register a vehicle::
-
-        {
-            "action_type": "REGISTER_VEHICLE",
-            "payload": {
-                "cata_sticker": "CT-7001",
-                "make": "Toyota",
-                "model": "HiAce",
-                "owner_id": "USR#owner-456"
-            }
-        }
-
-    Example — fetch a profile::
-
-        {
-            "action_type": "GET_PROFILE",
-            "payload": {
-                "PK": "USR#abc-123",
-                "SK": "PROFILE"
-            }
-        }
     """
-    action_type: str = event.get("action_type", "").upper()
-    payload: dict[str, Any] = event.get("payload", {})
+    try:
+        # ------------------------------------------------------------------
+        # Step 1: Detect invocation style and extract (action_type, payload)
+        # ------------------------------------------------------------------
+        is_apigw_proxy = "routeKey" in event or "requestContext" in event
 
-    logger.info("Identity service invoked: action_type=%s", action_type)
+        if is_apigw_proxy:
+            # API Gateway v2 proxy envelope — body is a JSON *string*.
+            route_key: str = event.get("routeKey", "")
+            action_type: str = _ROUTE_KEY_MAP.get(route_key, "").upper()
 
-    handler_fn = _ROUTER.get(action_type)
-    if handler_fn is None:
-        supported = ", ".join(_ROUTER.keys())
-        logger.warning("Unknown action_type received: '%s'", action_type)
-        return _bad_request(
-            f"Unknown action_type '{action_type}'. Supported actions: {supported}."
-        )
+            raw_body: str = event.get("body") or "{}"
+            try:
+                payload: dict[str, Any] = json.loads(raw_body)
+            except json.JSONDecodeError as exc:
+                logger.warning("Malformed JSON body on route '%s': %s", route_key, exc)
+                return _bad_request(f"Request body is not valid JSON: {exc}")
 
-    return handler_fn(payload)
+            logger.info(
+                "Identity service invoked via API GW proxy: routeKey=%s → action_type=%s",
+                route_key,
+                action_type,
+            )
+        else:
+            # Direct invocation — action_type and payload are top-level keys.
+            action_type = event.get("action_type", "").upper()
+            payload = event.get("payload", {})
+
+            logger.info(
+                "Identity service invoked directly: action_type=%s", action_type
+            )
+
+        # ------------------------------------------------------------------
+        # Step 2: Route to the correct action handler
+        # ------------------------------------------------------------------
+        handler_fn = _ROUTER.get(action_type)
+        if handler_fn is None:
+            supported = ", ".join(_ROUTER.keys())
+            logger.warning("Unknown action_type received: '%s'", action_type)
+            return _bad_request(
+                f"Unknown action_type '{action_type}'. Supported actions: {supported}."
+            )
+
+        return handler_fn(payload)
+
+    except Exception as exc:  # pylint: disable=broad-except
+        # Top-level guard: any unhandled exception is caught here so that a
+        # raw Python traceback can never escape to API Gateway and cause an
+        # opaque 500 {"message": "Internal Server Error"} response.
+        logger.exception("Unhandled exception in identity lambda_handler: %s", exc)
+        return _server_error(f"Unexpected error: {type(exc).__name__}")
