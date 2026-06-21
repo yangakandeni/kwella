@@ -21,6 +21,26 @@ class KwellaRiderController {
     }
   }
 
+  void setPassengerCount(int count) {
+    if (count < 1 || count > 6) {
+      return;
+    }
+    _emit(_state.copyWith(passengerCount: count));
+  }
+
+  void updatePickupLocation(String pickupLocation) {
+    _emit(_state.copyWith(pickupLocation: pickupLocation));
+  }
+
+  void updateDropoffLocation(String dropoffLocation) {
+    _emit(_state.copyWith(dropoffLocation: dropoffLocation));
+  }
+
+  void requestTrip() {
+    _emit(_state.copyWith(status: RiderTripStatus.searching));
+    // Live WebSocket lookup loop should begin here in the rider booking flow.
+  }
+
   void handleIncomingWebSocketEvent(Map<String, dynamic> payload) {
     final String? action = payload['action'] as String?;
     final String? status = payload['status'] as String?;
