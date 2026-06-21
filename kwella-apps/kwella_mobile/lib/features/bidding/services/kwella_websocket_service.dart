@@ -14,6 +14,12 @@ class KwellaWebSocketService {
   factory KwellaWebSocketService() => _instance;
   KwellaWebSocketService._internal();
 
+  /// Public getter for the singleton instance
+  static KwellaWebSocketService get instance => _instance;
+
+  /// Exposes the real-time bid stream (alias for `stream` to support UI/Riverpod layers)
+  Stream<Map<String, dynamic>> get bidStream => stream;
+
   /// Resets the singleton instance, primarily used for clean unit testing.
   @visibleForTesting
   static void reset() {
