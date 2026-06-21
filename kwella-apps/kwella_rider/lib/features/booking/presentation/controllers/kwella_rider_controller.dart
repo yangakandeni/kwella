@@ -1,17 +1,48 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'rider_trip_state.dart';
+
+final kwellaRiderControllerProvider =
+    Provider.autoDispose<KwellaRiderController>((ref) {
+      final controller = KwellaRiderController();
+      ref.onDispose(controller.dispose);
+      return controller;
+    });
+
+final riderTripStateProvider = StreamProvider.autoDispose<RiderTripState>((
+  ref,
+) {
+  final controller = ref.watch(kwellaRiderControllerProvider);
+  return controller.stateStream;
+});
+
+final availableBidsProvider =
+    StreamProvider.autoDispose<List<Map<String, dynamic>>>((ref) {
+      final controller = ref.watch(kwellaRiderControllerProvider);
+      return controller.availableBidsStream;
+    });
 
 class KwellaRiderController {
   RiderTripState _state = const RiderTripState();
   final StreamController<RiderTripState> _stateController =
       StreamController.broadcast();
+  StreamSink<String>? _webSocketSink;
 
   Stream<RiderTripState> get stateStream => _stateController.stream;
   RiderTripState get state => _state;
+  Stream<List<Map<String, dynamic>>> get availableBidsStream =>
+      stateStream.map((state) => state.availableBids);
 
   void dispose() {
+    _webSocketSink = null;
     _stateController.close();
+  }
+
+  void connectWebSocketSink(StreamSink<String> sink) {
+    _webSocketSink = sink;
   }
 
   void _emit(RiderTripState nextState) {
@@ -41,9 +72,24 @@ class KwellaRiderController {
     // Live WebSocket lookup loop should begin here in the rider booking flow.
   }
 
+  void selectBid(String driverId) {
+    _pushWebSocketMessage({
+      'action': 'selectBid',
+      'tripId': _state.tripId,
+      'driverId': driverId,
+    });
+    _emit(_state.copyWith(status: RiderTripStatus.accepted));
+  }
+
+  void _pushWebSocketMessage(Map<String, dynamic> payload) {
+    final String message = jsonEncode(payload);
+    _webSocketSink?.add(message);
+  }
+
   void handleIncomingWebSocketEvent(Map<String, dynamic> payload) {
     final String? action = payload['action'] as String?;
     final String? status = payload['status'] as String?;
+    final String? incomingTripId = payload['tripId'] as String?;
     final Map<String, dynamic> event = Map.unmodifiable(payload);
 
     if (action == 'driverBidReceived') {
@@ -58,6 +104,7 @@ class KwellaRiderController {
       _emit(
         _state.copyWith(
           status: RiderTripStatus.biddingOpen,
+          tripId: incomingTripId ?? _state.tripId,
           bidMetrics: newBidMetrics,
           latestEvent: event,
         ),
@@ -67,7 +114,11 @@ class KwellaRiderController {
 
     if (action == 'tripMatchConfirmed') {
       _emit(
-        _state.copyWith(status: RiderTripStatus.accepted, latestEvent: event),
+        _state.copyWith(
+          status: RiderTripStatus.accepted,
+          tripId: incomingTripId ?? _state.tripId,
+          latestEvent: event,
+        ),
       );
       return;
     }

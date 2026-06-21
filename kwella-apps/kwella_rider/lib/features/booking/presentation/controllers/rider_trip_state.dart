@@ -12,6 +12,7 @@ class RiderTripState {
   final int passengerCount;
   final String pickupLocation;
   final String dropoffLocation;
+  final String tripId;
   final List<Map<String, dynamic>> bidMetrics;
   final Map<String, dynamic>? latestEvent;
 
@@ -20,15 +21,19 @@ class RiderTripState {
     this.passengerCount = 1,
     this.pickupLocation = '',
     this.dropoffLocation = '',
+    this.tripId = '',
     this.bidMetrics = const [],
     this.latestEvent,
   });
+
+  List<Map<String, dynamic>> get availableBids => List.unmodifiable(bidMetrics);
 
   RiderTripState copyWith({
     RiderTripStatus? status,
     int? passengerCount,
     String? pickupLocation,
     String? dropoffLocation,
+    String? tripId,
     List<Map<String, dynamic>>? bidMetrics,
     Map<String, dynamic>? latestEvent,
   }) {
@@ -37,6 +42,7 @@ class RiderTripState {
       passengerCount: passengerCount ?? this.passengerCount,
       pickupLocation: pickupLocation ?? this.pickupLocation,
       dropoffLocation: dropoffLocation ?? this.dropoffLocation,
+      tripId: tripId ?? this.tripId,
       bidMetrics: bidMetrics ?? this.bidMetrics,
       latestEvent: latestEvent ?? this.latestEvent,
     );
