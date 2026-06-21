@@ -120,6 +120,51 @@ def test_process_cancellation_rejects_penalty_amount_exceeding_max_cap():
     assert body["error"] == "ValidationError"
 
 
+@mock_aws
+def test_process_cancellation_supports_ledger_cancellation_route_key_and_computes_transit_seconds():
+    table = _create_mock_table()
+    handler = _reload_ledger_handler()
+
+    event = {
+        "routeKey": "ledger_cancellation",
+        "body": json.dumps({
+            "riderId": "rider-1",
+            "driverId": "driver-1",
+            "tripId": "trip-1",
+            "amount": "25.50",
+            "driverEnRouteAt": "2026-06-21T10:10:00Z",
+            "cancelledAt": "2026-06-21T10:13:30Z",
+        }),
+    }
+
+    response = handler.lambda_handler(event, None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["driver_in_transit_seconds"] == 210
+    assert body["late_cancellation_applied"] is True
+
+
+@mock_aws
+def test_process_cancellation_returns_400_when_mandatory_transaction_markers_are_missing():
+    _create_mock_table()
+    handler = _reload_ledger_handler()
+
+    event = {
+        "routeKey": "POST /ledger/cancellation",
+        "body": json.dumps({
+            "riderId": "rider-1",
+            "driverId": "driver-1",
+            "tripId": "trip-1",
+            "amount": "25.50",
+            "driverEnRouteAt": "2026-06-21T10:10:00Z",
+        }),
+    }
+
+    response = handler.lambda_handler(event, None)
+    assert response["statusCode"] == 400
+    assert response["body"] == "Missing mandatory transaction markers"
+
+
 # ---------------------------------------------------------------------------
 # APPLY_TRIP_FEE
 # ---------------------------------------------------------------------------

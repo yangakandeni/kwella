@@ -99,6 +99,9 @@ The following core modules are fully implemented, thoroughly tested (144+ automa
 
 ### B. Ledger Service Enforcement Rule
 - **Owning Module:** `kwella-backend/src/lambdas/ledger_service/cancellation_handler.py` now owns the hybrid payment late-cancellation transaction assembly.
+- **API Surface:** API Gateway route `POST /ledger/cancellation` and the WebSocket action key `ledger_cancellation` are now fully wired to the `PROCESS_CANCELLATION` action in `kwella-backend/src/lambdas/ledger_service/handler.py`.
+- **Strict Input Contract:** The route accepts `tripId`, `amount`, `driverEnRouteAt` and `cancelledAt` from the request body and computes `driverInTransitSeconds` when needed.
+- **Validation Response:** Missing mandatory timing markers now return a clean `400` payload with `Missing mandatory transaction markers`.
 - **Eligibility Gate:** The transaction only executes when the rider cancels after the driver has been in transit for more than 180 seconds (3 minutes).
 - **Atomic Write Contract:** The backend issues a single DynamoDB `TransactWriteItems` call containing exactly two conditional `Put` operations: the rider debt item and the driver compensating credit item.
 - **Rollback Guarantee:** If either conditional write fails, DynamoDB cancels the entire transaction so no partial debt or credit record is persisted.

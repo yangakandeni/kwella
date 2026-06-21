@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -118,6 +119,54 @@ def _server_error(message: str) -> dict[str, Any]:
         "headers": {"Content-Type": "application/json"},
         "body": json.dumps({"error": "InfrastructureError", "detail": message}),
     }
+
+
+def _route_key_to_action(route_key: str) -> str:
+    if not route_key:
+        return ""
+    if route_key in _ROUTE_KEY_MAP:
+        return _ROUTE_KEY_MAP[route_key]
+    return _ROUTE_KEY_MAP.get(route_key.lower(), "")
+
+
+def _parse_iso_timestamp(value: str) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("Timestamp must be an ISO-8601 string.")
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
+
+
+def _missing_cancellation_transaction_markers(payload: dict[str, Any]) -> bool:
+    if payload.get("driver_in_transit_seconds") is not None:
+        return False
+    if payload.get("driver_en_route_at") is not None and payload.get("cancelled_at") is not None:
+        return False
+    return True
+
+
+def _ensure_cancellation_transit_seconds(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(payload)
+    if payload.get("driver_in_transit_seconds") is None:
+        driver_en_route_at = payload.get("driver_en_route_at")
+        cancelled_at = payload.get("cancelled_at")
+        if driver_en_route_at is not None and cancelled_at is not None:
+            try:
+                if isinstance(driver_en_route_at, str):
+                    driver_en_route_at = _parse_iso_timestamp(driver_en_route_at)
+                if isinstance(cancelled_at, str):
+                    cancelled_at = _parse_iso_timestamp(cancelled_at)
+                if driver_en_route_at.tzinfo is None:
+                    driver_en_route_at = driver_en_route_at.replace(tzinfo=timezone.utc)
+                if cancelled_at.tzinfo is None:
+                    cancelled_at = cancelled_at.replace(tzinfo=timezone.utc)
+                payload["driver_in_transit_seconds"] = max(
+                    int((cancelled_at - driver_en_route_at).total_seconds()),
+                    0,
+                )
+            except (TypeError, ValueError):
+                pass
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +273,9 @@ _ROUTER = {
 # still supply action_type + payload at the top level — both are supported.
 
 _ROUTE_KEY_MAP: dict[str, str] = {
-    "POST /ledger/cancellation": "PROCESS_CANCELLATION",
-    "POST /ledger/trip-fee": "APPLY_TRIP_FEE",
+    "post /ledger/cancellation": "PROCESS_CANCELLATION",
+    "post /ledger/trip-fee": "APPLY_TRIP_FEE",
+    "ledger_cancellation": "PROCESS_CANCELLATION",
 }
 
 
@@ -311,21 +361,33 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         is_apigw_proxy = "routeKey" in event or "requestContext" in event
 
         if is_apigw_proxy:
-            route_key: str = event.get("routeKey", "")
-            action_type: str = _ROUTE_KEY_MAP.get(route_key, "").upper()
+            request_context = event.get("requestContext") or {}
+            route_key: str = event.get("routeKey") or request_context.get("routeKey") or ""
+            action_type: str = _route_key_to_action(route_key).upper()
 
-            raw_body: str = event.get("body") or "{}"
+            raw_body: str = event.get("body") or request_context.get("body") or "{}"
             try:
                 raw_payload: dict[str, Any] = json.loads(raw_body)
             except json.JSONDecodeError as exc:
                 logger.warning("Malformed JSON body on route '%s': %s", route_key, exc)
                 return _bad_request(f"Request body is not valid JSON: {exc}")
 
+            if not action_type:
+                action_hint = raw_payload.get("action") if isinstance(raw_payload, dict) else None
+                if action_hint:
+                    action_type = _route_key_to_action(str(action_hint)).upper()
+
             # Normalise camelCase HTTP client keys → snake_case model keys.
             if action_type == "APPLY_TRIP_FEE":
                 payload: dict[str, Any] = _normalise_trip_fee_payload(raw_payload)
             elif action_type == "PROCESS_CANCELLATION":
-                payload = _normalise_cancellation_payload(raw_payload)
+                payload = _ensure_cancellation_transit_seconds(_normalise_cancellation_payload(raw_payload))
+                if _missing_cancellation_transaction_markers(payload):
+                    return {
+                        "statusCode": 400,
+                        "headers": {"Content-Type": "application/json"},
+                        "body": "Missing mandatory transaction markers",
+                    }
             else:
                 payload = raw_payload
 
@@ -336,8 +398,23 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             )
         else:
             # Direct invocation — action_type and payload are top-level keys.
-            action_type = event.get("action_type", "").upper()
+            action_type = event.get("action_type") or event.get("action") or ""
+            action_type = str(action_type).upper()
             payload = event.get("payload", {})
+
+            if not action_type and isinstance(payload, dict):
+                action_hint = payload.get("action")
+                if action_hint:
+                    action_type = _route_key_to_action(str(action_hint)).upper()
+
+            if action_type == "PROCESS_CANCELLATION" and isinstance(payload, dict):
+                payload = _ensure_cancellation_transit_seconds(_normalise_cancellation_payload(payload))
+                if _missing_cancellation_transaction_markers(payload):
+                    return {
+                        "statusCode": 400,
+                        "headers": {"Content-Type": "application/json"},
+                        "body": "Missing mandatory transaction markers",
+                    }
 
             logger.info("Ledger service invoked directly: action_type=%s", action_type)
 
