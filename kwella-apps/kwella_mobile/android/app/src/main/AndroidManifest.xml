@@ -1,4 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- ===== Phase 12: Location Tracking Permissions ===== -->
+    <!-- Grants access to precise GPS-level location (required by geolocator) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Grants access to approximate network-based location -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Grants background location access (Android 10+). Must be requested separately
+         after ACCESS_FINE_LOCATION has already been granted. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- Required to keep the foreground location service alive -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <application
         android:label="kwella_mobile"
         android:name="${applicationName}"
@@ -30,6 +41,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- ===== Phase 12: Foreground Location Service ===== -->
+        <!-- Declares a foreground service that publishes the device's GPS location
+             to the Kwella telematics backend while the driver app is in use. -->
+        <service
+            android:name="com.baseflow.geolocator.GeolocatorLocationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

@@ -45,5 +45,21 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<!-- ===== Phase 12: Location Tracking Usage Descriptions ===== -->
+	<!-- Foreground location rationale – shown when requesting 'When In Use' permission -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Kwella uses your location to match you with nearby drivers and calculate accurate pickup times in real time.</string>
+	<!-- Background + foreground rationale – shown when requesting 'Always' permission -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Kwella needs continuous access to your location so drivers can track your pickup point and provide live telematics updates, even when the app is in the background.</string>
+
+	<!-- ===== Phase 12: Background Location Capability ===== -->
+	<!-- Registers the location background execution mode, equivalent to enabling
+	     'Location updates' under Signing & Capabilities in Xcode. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 </dict>
 </plist>
