@@ -56,9 +56,16 @@ resource "aws_apigatewayv2_route" "disconnect" {
 }
 
 resource "aws_apigatewayv2_route" "send_bid" {
-  api_id    = aws_apigatewayv2_api.kwella_websocket_api.id
-  route_key = "sendBid"
-  target    = "integrations/${aws_apigatewayv2_integration.bidding_engine.id}"
+  api_id                              = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_key                           = "sendBid"
+  target                              = "integrations/${aws_apigatewayv2_integration.bidding_engine.id}"
+  route_response_selection_expression = "$default"
+}
+
+resource "aws_apigatewayv2_route_response" "send_bid" {
+  api_id             = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_id           = aws_apigatewayv2_route.send_bid.id
+  route_response_key = "$default"
 }
 
 # ── Lambda Permissions ─────────────────────────────────────────────────────
