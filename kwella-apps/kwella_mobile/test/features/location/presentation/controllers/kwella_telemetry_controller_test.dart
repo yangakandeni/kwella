@@ -607,6 +607,57 @@ void main() {
       timeout: const Timeout(Duration(seconds: 25)),
     );
   });
+
+  // ---- Wallet Settlement tests ----------------------------------------------
+
+  group('Wallet Settlement —', () {
+    test(
+      'receiving WalletSettled message updates dailyEarningsTotal and lastNetEarnings',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        expect(controller.state.dailyEarningsTotal, equals(0.0));
+        expect(controller.state.lastNetEarnings, isNull);
+
+        // Simulate WalletSettled event
+        wsService.feedMessage({
+          'status': 'WalletSettled',
+          'net_earnings': 120.50,
+          'updated_daily_total': 450.00,
+        });
+
+        // Allow microtasks to complete
+        await Future<void>.delayed(Duration.zero);
+
+        expect(controller.state.dailyEarningsTotal, equals(450.00));
+        expect(controller.state.lastNetEarnings, equals(120.50));
+      },
+    );
+
+    test(
+      'clearLastNetEarnings resets lastNetEarnings to null without mutating dailyEarningsTotal',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        wsService.feedMessage({
+          'status': 'WalletSettled',
+          'net_earnings': 85.00,
+          'updated_daily_total': 170.00,
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(controller.state.lastNetEarnings, equals(85.00));
+        expect(controller.state.dailyEarningsTotal, equals(170.00));
+
+        controller.clearLastNetEarnings();
+
+        expect(controller.state.lastNetEarnings, isNull);
+        expect(controller.state.dailyEarningsTotal, equals(170.00));
+      },
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -24,19 +24,29 @@ class TelemetryState {
   /// Meaningful only when [activeOffer] is non-null.
   final int offerSecondsRemaining;
 
+  /// Total earnings for the current shift.
+  final double dailyEarningsTotal;
+
+  /// The net earnings of the last completed trip.
+  final double? lastNetEarnings;
+
   const TelemetryState({
     required this.isTracking,
     required this.isWithinGeofenceRadius,
     this.activeOffer,
     this.offerSecondsRemaining = 0,
+    this.dailyEarningsTotal = 0.0,
+    this.lastNetEarnings,
   });
 
   TelemetryState copyWith({
     bool? isTracking,
     bool? isWithinGeofenceRadius,
-    // Use a sentinel to allow explicitly nulling activeOffer.
+    // Use a sentinel to allow explicitly nulling activeOffer and lastNetEarnings.
     Object? activeOffer = _sentinel,
     int? offerSecondsRemaining,
+    double? dailyEarningsTotal,
+    Object? lastNetEarnings = _sentinel,
   }) {
     return TelemetryState(
       isTracking: isTracking ?? this.isTracking,
@@ -47,6 +57,10 @@ class TelemetryState {
           : activeOffer as ActiveRideOffer?,
       offerSecondsRemaining:
           offerSecondsRemaining ?? this.offerSecondsRemaining,
+      dailyEarningsTotal: dailyEarningsTotal ?? this.dailyEarningsTotal,
+      lastNetEarnings: identical(lastNetEarnings, _sentinel)
+          ? this.lastNetEarnings
+          : lastNetEarnings as double?,
     );
   }
 
@@ -58,7 +72,9 @@ class TelemetryState {
           isTracking == other.isTracking &&
           isWithinGeofenceRadius == other.isWithinGeofenceRadius &&
           activeOffer == other.activeOffer &&
-          offerSecondsRemaining == other.offerSecondsRemaining;
+          offerSecondsRemaining == other.offerSecondsRemaining &&
+          dailyEarningsTotal == other.dailyEarningsTotal &&
+          lastNetEarnings == other.lastNetEarnings;
 
   @override
   int get hashCode => Object.hash(
@@ -66,6 +82,8 @@ class TelemetryState {
         isWithinGeofenceRadius,
         activeOffer,
         offerSecondsRemaining,
+        dailyEarningsTotal,
+        lastNetEarnings,
       );
 
   @override
@@ -73,7 +91,9 @@ class TelemetryState {
       'isTracking: $isTracking, '
       'isWithinGeofenceRadius: $isWithinGeofenceRadius, '
       'activeOffer: $activeOffer, '
-      'offerSecondsRemaining: $offerSecondsRemaining)';
+      'offerSecondsRemaining: $offerSecondsRemaining, '
+      'dailyEarningsTotal: $dailyEarningsTotal, '
+      'lastNetEarnings: $lastNetEarnings)';
 }
 
 // Sentinel object used to distinguish "not passed" from explicit null in copyWith.
@@ -227,6 +247,18 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
     _wsSubscription = _wsService.bidStream.listen(
       (data) {
         final action = data['action'];
+        final status = data['status'];
+
+        // --- Wallet settlement --------------------------------------------------
+        if (status == 'WalletSettled') {
+          debugPrint('[KwellaTelemetryController] WalletSettled status intercepted: $data');
+          final double updatedDailyTotal = (data['updated_daily_total'] as num?)?.toDouble() ?? 0.0;
+          final double netEarnings = (data['net_earnings'] as num?)?.toDouble() ?? 0.0;
+          state = state.copyWith(
+            dailyEarningsTotal: updatedDailyTotal,
+            lastNetEarnings: netEarnings,
+          );
+        }
 
         // --- Geofencing: ARRIVED flag ------------------------------------------
         final flags = data['flags'];
@@ -270,6 +302,11 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
     state = state.copyWith(isWithinGeofenceRadius: false);
   }
 
+  /// Resets the last net earnings to null to prevent displaying the toast UI multiple times.
+  void clearLastNetEarnings() {
+    state = state.copyWith(lastNetEarnings: null);
+  }
+
   /// Cancels the underlying [StreamSubscription] and halts all telemetry
   /// dispatches. Also cancels any active ride-offer countdown timer.
   ///
@@ -289,6 +326,7 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
         isWithinGeofenceRadius: false,
         activeOffer: null,
         offerSecondsRemaining: 0,
+        lastNetEarnings: null,
       );
     }
 
