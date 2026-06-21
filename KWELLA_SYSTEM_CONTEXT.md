@@ -78,3 +78,10 @@ The following core modules are fully implemented, thoroughly tested (144+ automa
 - **Live Telematics Map Stream:** Added `liveDriverLocation` payload parsing in `kwella-apps/kwella_rider/lib/features/booking/presentation/controllers/kwella_rider_controller.dart`, stored in `RiderTripState.currentDriverLocation`, and surface a moving marker UI in `kwella-apps/kwella_rider/lib/features/booking/presentation/screens/rider_booking_screen.dart` when `RiderTripStatus` is `accepted` or `arrived`.
 - **Geofence Arrival Overlay:** Implemented instant overlay banner text for `geofenceTrigger` events with `geofence_status: ARRIVED` on the rider booking screen.
 - **Widget-Level Tracking Tests:** Added `kwella-apps/kwella_rider/test/features/booking/presentation/screens/rider_booking_map_widget_test.dart` validating live driver location animation updates for `RiderTripStatus.accepted` and arrival overlay rendering for `RiderTripStatus.arrived`, preventing silent regression in marker rendering and arrival banner visibility.
+
+### F. Local Integration Simulation Orchestration (Phase 18)
+- **Local Simulator:** Added `scripts/simulate_marketplace_trip.py`, a pure Python 3.12 standard-library WebSocket lifecycle simulator for LocalStack/API Gateway WebSocket local testing.
+- **Shell Hook Wrapper:** Added `scripts/smoke_test.sh` as the companion shell execution hook that validates local environment setup, launches the Python simulator, and captures non-zero simulator exits with a clear failure banner.
+- **Dual-Client Parallelism:** The simulator spawns concurrent `mock_rider_client()` and `mock_driver_client()` flows to execute a full lifecycle against the live WebSocket bidding plane.
+- **Lifecycle Coverage:** The orchestrator drives `requestTrip`, `rideOfferAvailable`, `sendBid`, `selectBid`, `updateLocation`, `confirmArrival`, `startTrip`, and `submitRating` actions, validating the backend's `WalletSettled` settlement event and rider driver-location sync.
+- **Timeout & State Assertions:** The script enforces 5-second per-step timeouts and aborts on invalid payload contracts, with color-coded console phase blocks for each major lifecycle stage.

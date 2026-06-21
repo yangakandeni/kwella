@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # =============================================================================
 # Kwella Live Gateway Smoke-Testing Suite
 # =============================================================================
@@ -202,6 +202,37 @@ else
   echo "Response: $BODY_LEDGER"
   exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Step 4: Local simulation hook — orchestrate the Python marketplace trip simulator
+# ---------------------------------------------------------------------------
+SIMULATOR_SCRIPT="${PROJECT_ROOT}/scripts/simulate_marketplace_trip.py"
+
+if [[ ! -f "${SIMULATOR_SCRIPT}" ]]; then
+  echo -e "${RED}[simulator] FATAL: Missing simulation script at ${SIMULATOR_SCRIPT}.${NC}"
+  exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo -e "${RED}[simulator] FATAL: python3 is not available in PATH.${NC}"
+  echo "  Install Python 3 and ensure 'python3' resolves to the runtime used for local orchestration."
+  exit 1
+fi
+
+echo ""
+echo -e "${YELLOW}[simulator] Launching local marketplace simulation via python3 scripts/simulate_marketplace_trip.py${NC}"
+if ! python3 "${SIMULATOR_SCRIPT}"; then
+  EXIT_CODE=$?
+  echo ""
+  echo -e "${RED}========================================================${NC}"
+  echo -e "${RED}[simulator] ERROR: Local simulation failed with exit code ${EXIT_CODE}.${NC}"
+  echo -e "${RED}  Review the simulator output for state exceptions, payload drift, or timeout failures.${NC}"
+  echo -e "${RED}========================================================${NC}"
+  exit ${EXIT_CODE}
+fi
+
+echo ""
+echo -e "${GREEN}=== LOCAL MARKETPLACE SIMULATION PASSED ===${NC}"
 
 echo ""
 echo -e "${GREEN}=== ALL SMOKE TESTS PASSED CLEANLY ===${NC}"
