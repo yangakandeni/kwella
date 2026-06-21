@@ -8,12 +8,16 @@ Supported WebSocket route keys (dispatched by API Gateway WebSocket proxy):
   $disconnect       — Delete connection session metadata.
   sendBid           — Parse and extract particulars from Driver counter-offers.
   updateLocation    — Ingest real-time driver telematics telemetry and persist to DynamoDB.
+  requestTrip       — Rider-initiated spatial matching: scan active driver TELEMETRY records,
+                      filter by 5000 m proximity, and broadcast rideOfferAvailable offers.
 
 Governance compliance (KWELLA_CODE_GOVERNANCE.md):
   - Python 3.12 native syntax and type hints; no legacy typing imports (e.g. List, Dict).
   - boto3 resource/client initialized at module scope for connection pooling.
   - DynamoDB operations wrapped in explicit botocore.exceptions.ClientError exception handling.
   - Sourced from os.environ['KWELLA_TABLE_NAME'].
+  - WebSocket dispatch endpoint sourced from os.environ['KWELLA_APIGW_ENDPOINT'] (optional;
+    omitted in local test contexts where moto cannot simulate the Management API).
 """
 
 from __future__ import annotations
@@ -21,13 +25,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, UTC
 from typing import Any
 
 import boto3
 import botocore.exceptions
 
-from geofence_utils import is_inside_geofence
+from geofence_utils import calculate_distance, is_inside_geofence
 
 # Initialize Logger
 logger = logging.getLogger(__name__)
@@ -39,6 +44,17 @@ if not _TABLE_NAME:
     raise RuntimeError("Environment variable KWELLA_TABLE_NAME must be set")
 
 _AWS_REGION = os.environ.get("AWS_REGION", "af-south-1")
+
+# Optional: API Gateway Management API endpoint for WebSocket push dispatch.
+# Format: https://<api-id>.execute-api.<region>.amazonaws.com/<stage>
+# Absent in local/test contexts — dispatch is skipped gracefully when unset.
+_APIGW_ENDPOINT = os.environ.get("KWELLA_APIGW_ENDPOINT")
+
+# Spatial matching radius (metres) for requestTrip proximity filtering.
+_TRIP_MATCH_RADIUS_M: float = 5000.0
+
+# Ride offer TTL broadcast to matching drivers (seconds).
+_RIDE_OFFER_TTL_SECONDS: int = 15
 
 # Connection-pooled DynamoDB Table resource at module scope
 _dynamodb = boto3.resource("dynamodb", region_name=_AWS_REGION)
@@ -340,6 +356,220 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return {
                 "statusCode": 200,
                 "body": json.dumps(response_body),
+            }
+
+        elif route_key == "requestTrip":
+            # -----------------------------------------------------------------
+            # Phase 14 — Marketplace Matching Engine
+            # Rider-initiated trip request: locate spatially eligible drivers
+            # and broadcast ride offer invitations down their WebSocket pipes.
+            # -----------------------------------------------------------------
+            raw_body = event.get("body")
+            if raw_body:
+                try:
+                    payload = json.loads(raw_body)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Failed to parse JSON body for requestTrip route on connectionId=%s: %s",
+                        connection_id,
+                        exc,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Request body must be valid JSON.",
+                        }),
+                    }
+            else:
+                payload = event
+
+            rider_id: str | None = payload.get("riderId")
+            pickup_lat = payload.get("pickup_latitude")
+            pickup_lon = payload.get("pickup_longitude")
+            dropoff_lat = payload.get("dropoff_latitude")
+            dropoff_lon = payload.get("dropoff_longitude")
+            suggested_fare = payload.get("suggested_base_fare")
+
+            # Validate required fields.
+            required_fields = {
+                "riderId": rider_id,
+                "pickup_latitude": pickup_lat,
+                "pickup_longitude": pickup_lon,
+                "dropoff_latitude": dropoff_lat,
+                "dropoff_longitude": dropoff_lon,
+            }
+            missing_fields = [k for k, v in required_fields.items() if v is None]
+            if missing_fields:
+                logger.warning(
+                    "requestTrip payload missing required fields %s on connectionId=%s",
+                    missing_fields,
+                    connection_id,
+                )
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": f"Missing required fields: {missing_fields}",
+                    }),
+                }
+
+            # Validate coordinate numerics.
+            for coord_name, coord_value in (
+                ("pickup_latitude", pickup_lat),
+                ("pickup_longitude", pickup_lon),
+                ("dropoff_latitude", dropoff_lat),
+                ("dropoff_longitude", dropoff_lon),
+            ):
+                if not isinstance(coord_value, (int, float)) or isinstance(coord_value, bool):
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": f"Field '{coord_name}' must be a numeric value.",
+                        }),
+                    }
+
+            # ------------------------------------------------------------------
+            # Spatial Grid Loop — scan all active TELEMETRY records and isolate
+            # drivers within _TRIP_MATCH_RADIUS_M of the rider's pickup point.
+            # ------------------------------------------------------------------
+            logger.info(
+                "requestTrip spatial scan: riderId=%s pickup=(%.6f, %.6f)",
+                rider_id,
+                pickup_lat,
+                pickup_lon,
+            )
+
+            scan_response = table.scan(
+                FilterExpression="SK = :sk",
+                ExpressionAttributeValues={":sk": "TELEMETRY"},
+            )
+            driver_records: list[dict[str, Any]] = scan_response.get("Items", [])
+
+            # Handle DynamoDB pagination for large fleets.
+            while "LastEvaluatedKey" in scan_response:
+                scan_response = table.scan(
+                    FilterExpression="SK = :sk",
+                    ExpressionAttributeValues={":sk": "TELEMETRY"},
+                    ExclusiveStartKey=scan_response["LastEvaluatedKey"],
+                )
+                driver_records.extend(scan_response.get("Items", []))
+
+            matched_driver_ids: list[str] = []
+
+            # Generate a stable trip identifier for this dispatch cycle.
+            trip_id = f"TRP#{uuid.uuid4()}"
+
+            # Construct the offer payload template (mutated per-driver only for
+            # connection-id routing; the offer content itself is broadcast-identical).
+            offer_payload = {
+                "action": "rideOfferAvailable",
+                "tripId": trip_id,
+                "pickup_location": [pickup_lat, pickup_lon],
+                "dropoff_location": [dropoff_lat, dropoff_lon],
+                "base_fare": suggested_fare,
+                "expires_in_seconds": _RIDE_OFFER_TTL_SECONDS,
+            }
+            offer_data = json.dumps(offer_payload).encode("utf-8")
+
+            # Initialise the Management API client only when the endpoint is
+            # configured (absent in local test contexts).
+            apigw_client: Any = None
+            if _APIGW_ENDPOINT:
+                apigw_client = boto3.client(
+                    "apigatewaymanagementapi",
+                    endpoint_url=_APIGW_ENDPOINT,
+                    region_name=_AWS_REGION,
+                )
+
+            for record in driver_records:
+                driver_pk: str = record.get("PK", "")
+                raw_lat = record.get("last_latitude")
+                raw_lon = record.get("last_longitude")
+
+                if raw_lat is None or raw_lon is None:
+                    logger.debug(
+                        "Skipping driver record with missing coordinates: PK=%s", driver_pk
+                    )
+                    continue
+
+                try:
+                    driver_lat = float(raw_lat)
+                    driver_lon = float(raw_lon)
+                except (ValueError, TypeError):
+                    logger.warning(
+                        "Non-numeric coordinates for driver PK=%s; skipping.", driver_pk
+                    )
+                    continue
+
+                distance_m = calculate_distance(
+                    driver_lat, driver_lon,
+                    pickup_lat, pickup_lon,
+                )
+
+                if distance_m > _TRIP_MATCH_RADIUS_M:
+                    logger.debug(
+                        "Driver PK=%s is %.0f m away — outside matching radius; skipped.",
+                        driver_pk,
+                        distance_m,
+                    )
+                    continue
+
+                # Strip the "DRIVER#" namespace prefix to recover the raw driver id.
+                driver_id = driver_pk.removeprefix("DRIVER#")
+                matched_driver_ids.append(driver_id)
+
+                logger.info(
+                    "Matched driver %s at %.0f m — dispatching rideOfferAvailable",
+                    driver_id,
+                    distance_m,
+                )
+
+                # Dispatch the offer to the driver's WebSocket connection.
+                # Resolve the driver's live connectionId from the TELEMETRY record
+                # (populated by updateLocation; absent before first location ping).
+                driver_conn_id: str | None = record.get("connection_id")
+                if apigw_client and driver_conn_id:
+                    try:
+                        apigw_client.post_to_connection(
+                            ConnectionId=driver_conn_id,
+                            Data=offer_data,
+                        )
+                        logger.info(
+                            "Offer dispatched to connectionId=%s (driverId=%s)",
+                            driver_conn_id,
+                            driver_id,
+                        )
+                    except botocore.exceptions.ClientError as dispatch_exc:
+                        # Stale or expired connections must not abort the entire
+                        # dispatch loop; log and continue to remaining drivers.
+                        error_code = dispatch_exc.response.get("Error", {}).get("Code", "Unknown")
+                        logger.warning(
+                            "Failed to dispatch offer to connectionId=%s [%s]; continuing.",
+                            driver_conn_id,
+                            error_code,
+                        )
+                else:
+                    logger.debug(
+                        "WebSocket dispatch skipped for driverId=%s (no endpoint or connectionId).",
+                        driver_id,
+                    )
+
+            logger.info(
+                "requestTrip scan complete: %d driver(s) matched within %.0f m for riderId=%s",
+                len(matched_driver_ids),
+                _TRIP_MATCH_RADIUS_M,
+                rider_id,
+            )
+
+            return {
+                "statusCode": 200,
+                "body": json.dumps({
+                    "status": "TripBroadcast",
+                    "tripId": trip_id,
+                    "matched_drivers": matched_driver_ids,
+                }),
             }
 
         else:

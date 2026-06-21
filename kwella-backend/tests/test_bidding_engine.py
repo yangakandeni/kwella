@@ -767,3 +767,154 @@ def test_update_location_geofence_fallback_not_arrived():
     assert body["status"] == "Telemetry Latched"
     assert "flags" not in body
 
+
+# ---------------------------------------------------------------------------
+# Route: requestTrip Tests  (Phase 14 — Marketplace Matching Engine)
+# ---------------------------------------------------------------------------
+
+#: Rider pickup location: Cape Town CBD, South Africa
+_RIDER_PICKUP_LAT: float = -33.9249
+_RIDER_PICKUP_LON: float = 18.4241
+
+#: Driver A — ~2,000 m from pickup (De Waal Park area).  Must be INCLUDED.
+#  Approx displacement: ~0.018° lat north ≈ 2,000 m
+_DRIVER_NEAR_ID = "USR#drv-near-2000m"
+_DRIVER_NEAR_LAT: float = -33.9069   # ~2,000 m north of pickup
+_DRIVER_NEAR_LON: float = 18.4241
+
+#: Driver B — ~7,000 m from pickup (Camps Bay direction).  Must be EXCLUDED.
+#  Approx displacement: ~0.063° lat north ≈ 7,000 m
+_DRIVER_FAR_ID = "USR#drv-far-7000m"
+_DRIVER_FAR_LAT: float = -33.8620   # ~7,000 m north of pickup
+_DRIVER_FAR_LON: float = 18.4241
+
+_REQUEST_TRIP_EVENT_BASE: dict[str, Any] = {
+    "requestContext": {
+        "routeKey": "requestTrip",
+        "connectionId": "conn-rider-trip-req",
+    },
+}
+
+_REQUEST_TRIP_PAYLOAD: dict[str, Any] = {
+    "action": "requestTrip",
+    "riderId": "USR#rdr-99887",
+    "pickup_latitude": _RIDER_PICKUP_LAT,
+    "pickup_longitude": _RIDER_PICKUP_LON,
+    "dropoff_latitude": -33.9712,
+    "dropoff_longitude": 18.4649,
+    "suggested_base_fare": 120.0,
+}
+
+
+@mock_aws
+def test_request_trip_includes_near_driver_and_excludes_far_driver():
+    """Verify requestTrip spatial filter includes 2 km driver and excludes 7 km driver.
+
+    Seeds two TELEMETRY records:
+      - DRIVER_NEAR  (~2,000 m) — within the 5,000 m radius — must be matched.
+      - DRIVER_FAR   (~7,000 m) — outside the 5,000 m radius — must be excluded.
+
+    Asserts that only DRIVER_NEAR appears in the matched_drivers list.
+    """
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Seed the near driver telemetry record.
+    table.put_item(
+        Item={
+            "PK": f"DRIVER#{_DRIVER_NEAR_ID}",
+            "SK": "TELEMETRY",
+            "last_latitude": str(_DRIVER_NEAR_LAT),
+            "last_longitude": str(_DRIVER_NEAR_LON),
+            "updated_at": "2026-06-21T06:00:00Z",
+        }
+    )
+
+    # Seed the far driver telemetry record.
+    table.put_item(
+        Item={
+            "PK": f"DRIVER#{_DRIVER_FAR_ID}",
+            "SK": "TELEMETRY",
+            "last_latitude": str(_DRIVER_FAR_LAT),
+            "last_longitude": str(_DRIVER_FAR_LON),
+            "updated_at": "2026-06-21T06:00:00Z",
+        }
+    )
+
+    event = {
+        **_REQUEST_TRIP_EVENT_BASE,
+        "body": json.dumps(_REQUEST_TRIP_PAYLOAD),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+
+    assert body["status"] == "TripBroadcast"
+    assert "tripId" in body
+    assert body["tripId"].startswith("TRP#")
+
+    matched = body["matched_drivers"]
+    assert isinstance(matched, list)
+
+    # The near driver (2,000 m) must be in the matched set.
+    assert _DRIVER_NEAR_ID in matched, (
+        f"Expected near driver {_DRIVER_NEAR_ID!r} to be matched but got: {matched}"
+    )
+
+    # The far driver (7,000 m) must be excluded.
+    assert _DRIVER_FAR_ID not in matched, (
+        f"Far driver {_DRIVER_FAR_ID!r} should not be matched but appeared in: {matched}"
+    )
+
+
+@mock_aws
+def test_request_trip_missing_required_fields_returns_400():
+    """Verify requestTrip returns 400 ValidationError when pickup coordinates are absent."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Omit pickup_longitude to trigger validation error.
+    incomplete_payload = {
+        "action": "requestTrip",
+        "riderId": "USR#rdr-99887",
+        "pickup_latitude": _RIDER_PICKUP_LAT,
+        # pickup_longitude intentionally missing
+        "dropoff_latitude": -33.9712,
+        "dropoff_longitude": 18.4649,
+        "suggested_base_fare": 120.0,
+    }
+
+    event = {
+        **_REQUEST_TRIP_EVENT_BASE,
+        "body": json.dumps(incomplete_payload),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "pickup_longitude" in body["detail"]
+
+
+@mock_aws
+def test_request_trip_with_no_active_drivers_returns_empty_matched_list():
+    """Verify requestTrip returns a clean 200 with an empty matched_drivers list when no TELEMETRY records exist."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # No TELEMETRY records are seeded — the scan should return zero results.
+    event = {
+        **_REQUEST_TRIP_EVENT_BASE,
+        "body": json.dumps(_REQUEST_TRIP_PAYLOAD),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "TripBroadcast"
+    assert body["matched_drivers"] == []
+
