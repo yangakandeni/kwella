@@ -29,6 +29,11 @@ import sys
 import urllib.parse
 import uuid
 
+try:
+    import certifi  # type: ignore[import]
+except ImportError:
+    certifi = None
+
 GREEN = "\033[0;32m"
 YELLOW = "\033[0;33m"
 RED = "\033[0;31m"
@@ -64,15 +69,21 @@ class SimpleWebSocketClient:
         port = parsed.port or (443 if parsed.scheme == "wss" else 80)
         ssl_context = None
         if parsed.scheme == "wss":
-            ssl_context = ssl.create_default_context()
-            if self.insecure:
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
+            ssl_context = self._create_ssl_context()
 
-        self.reader, self.writer = await asyncio.wait_for(
-            asyncio.open_connection(host=host, port=port, ssl=ssl_context, server_hostname=host if ssl_context else None),
-            timeout=self.timeout,
-        )
+        try:
+            self.reader, self.writer = await asyncio.wait_for(
+                asyncio.open_connection(host=host, port=port, ssl=ssl_context, server_hostname=host if ssl_context else None),
+                timeout=self.timeout,
+            )
+        except ssl.SSLCertVerificationError as exc:
+            if self.insecure:
+                raise
+            retry_context = self._create_system_root_ssl_context()
+            self.reader, self.writer = await asyncio.wait_for(
+                asyncio.open_connection(host=host, port=port, ssl=retry_context, server_hostname=host),
+                timeout=self.timeout,
+            )
 
         request_path = self._build_request_path(parsed)
         key = base64.b64encode(os.urandom(16)).decode("ascii")
@@ -132,6 +143,18 @@ class SimpleWebSocketClient:
             headers[name.strip().lower()] = value.strip()
 
         return status_code, headers
+
+    def _create_ssl_context(self) -> ssl.SSLContext:
+        ssl_context = ssl.create_default_context()
+        if self.insecure:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+        return ssl_context
+
+    def _create_system_root_ssl_context(self) -> ssl.SSLContext:
+        if certifi is not None:
+            return ssl.create_default_context(cafile=certifi.where())
+        return ssl.create_default_context()
 
     def _build_request_path(self, parsed: urllib.parse.ParseResult) -> str:
         query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
