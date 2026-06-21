@@ -91,6 +91,16 @@ fi
 # Normalise: strip trailing slash so we can consistently append /route below.
 BASE_URL="${KWELLA_API_URL%/}"
 
+# ---------------------------------------------------------------------------
+# Generate a unique test run ID to keep smoke test runs idempotent.
+# The vehicle REGISTER_VEHICLE action uses attribute_not_exists(PK) to prevent
+# duplicate registration. Using a timestamped CATA sticker ensures each run
+# creates a fresh record rather than colliding with a previous successful run.
+# ---------------------------------------------------------------------------
+TEST_RUN_ID=$(date +%Y%m%d%H%M%S)
+TEST_USER_ID="driver-sipho-dlamini-${TEST_RUN_ID}"
+TEST_CATA_STICKER="CT-TEST-${TEST_RUN_ID}"
+
 echo "=== Kwella Live Gateway Smoke-Testing Suite ==="
 echo "Targeting API Gateway: ${BASE_URL}"
 echo "(Stage: \$default — bare endpoint, no path prefix)"
@@ -98,12 +108,12 @@ echo ""
 
 # 1. SMOKE TEST: POST /identity/upsert — Driver profile creation
 echo "[1/3] Testing POST /identity/upsert..."
-IDENTITY_PAYLOAD='{
-  "user_id": "driver-sipho-dlamini-001",
+IDENTITY_PAYLOAD=$(printf '{
+  "user_id": "%s",
   "role": "DRIVER",
   "phone": "+27831234567",
-  "assigned_cata_sticker": "CT-TEST-001"
-}'
+  "assigned_cata_sticker": "%s"
+}' "${TEST_USER_ID}" "${TEST_CATA_STICKER}")
 
 RESPONSE_IDENTITY=$(curl -s -w "\n%{http_code}" \
   -X POST "${BASE_URL}/identity/upsert" \
@@ -132,12 +142,12 @@ fi
 # 2. SMOKE TEST: POST /identity/vehicle — Vehicle CATA sticker binding
 echo ""
 echo "[2/3] Testing POST /identity/vehicle..."
-VEHICLE_PAYLOAD='{
-  "cata_sticker": "CT-TEST-001",
+VEHICLE_PAYLOAD=$(printf '{
+  "cata_sticker": "%s",
   "make": "Suzuki",
   "model": "Ertiga",
-  "owner_id": "USR#driver-sipho-dlamini-001"
-}'
+  "owner_id": "USR#%s"
+}' "${TEST_CATA_STICKER}" "${TEST_USER_ID}")
 
 RESPONSE_VEHICLE=$(curl -s -w "\n%{http_code}" \
   -X POST "${BASE_URL}/identity/vehicle" \
@@ -164,15 +174,10 @@ else
 fi
 
 # 3. SMOKE TEST: POST /ledger/trip-fee — Self-balancing ledger entry
+# Uses TEST_USER_ID from test 1 so the driver profile exists in DynamoDB.
 echo ""
 echo "[3/3] Testing POST /ledger/trip-fee..."
-LEDGER_PAYLOAD='{
-  "tripId": "trip-abc-12345",
-  "driverId": "test-cada-rider",
-  "amount": 15.00,
-  "paymentMethod": "CASH",
-  "isPlatformHoliday": false
-}'
+LEDGER_PAYLOAD=$(printf '{\n  "tripId": "trip-%s",\n  "driverId": "%s",\n  "amount": 15.00,\n  "paymentMethod": "CASH",\n  "isPlatformHoliday": false\n}' "${TEST_RUN_ID}" "${TEST_USER_ID}")
 
 RESPONSE_LEDGER=$(curl -s -w "\n%{http_code}" \
   -X POST "${BASE_URL}/ledger/trip-fee" \

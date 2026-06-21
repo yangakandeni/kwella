@@ -303,28 +303,131 @@ _ROUTER = {
     "APPLY_TRIP_FEE": lambda payload: _apply_trip_fee(ApplyTripFeePayload(**payload)),
 }
 
+# ---------------------------------------------------------------------------
+# Route key → action_type mapping (API Gateway v2 HTTP proxy integration)
+# ---------------------------------------------------------------------------
+# When invoked via API Gateway v2 (payload_format_version = "2.0") the raw
+# HTTP body arrives in event["body"] and the matched route is in
+# event["routeKey"]. Direct-invocation callers (tests, other Lambdas) may
+# still supply action_type + payload at the top level — both are supported.
+
+_ROUTE_KEY_MAP: dict[str, str] = {
+    "POST /ledger/cancellation": "PROCESS_CANCELLATION",
+    "POST /ledger/trip-fee": "APPLY_TRIP_FEE",
+}
+
+
+def _normalise_trip_fee_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """Translate the HTTP client payload to the fields expected by
+    ApplyTripFeePayload, dropping any extra keys that the model's
+    ``extra="forbid"`` policy would reject.
+
+    HTTP contract fields accepted::
+
+        driverId          → driver_id   (required)
+        amount            → fare_amount (required)
+        tripId            → dropped (informational only)
+        paymentMethod     → dropped
+        isPlatformHoliday → dropped
+
+    Direct-invocation payloads using snake_case keys pass through unchanged.
+    """
+    driver_id = raw.get("driver_id") or raw.get("driverId")
+    fare_amount = raw.get("fare_amount") or raw.get("amount")
+    out: dict[str, Any] = {}
+    if driver_id is not None:
+        out["driver_id"] = driver_id
+    if fare_amount is not None:
+        out["fare_amount"] = fare_amount
+    return out
+
+
+def _normalise_cancellation_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """Translate camelCase HTTP client keys to the snake_case keys expected by
+    ProcessCancellationPayload.
+
+    Mapping::
+
+        riderId       → rider_id
+        driverId      → driver_id
+        penaltyAmount → penalty_amount
+    """
+    out = dict(raw)
+    if "riderId" in out and "rider_id" not in out:
+        out["rider_id"] = out.pop("riderId")
+    if "driverId" in out and "driver_id" not in out:
+        out["driver_id"] = out.pop("driverId")
+    if "penaltyAmount" in out and "penalty_amount" not in out:
+        out["penalty_amount"] = out.pop("penaltyAmount")
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Lambda entrypoint
 # ---------------------------------------------------------------------------
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Primary entrypoint for the Cancellation & Fee Ledger Service."""
-    action_type = event.get("action_type", "").upper()
-    payload = event.get("payload", {})
+    """Primary entrypoint for the Cancellation & Fee Ledger Service.
 
-    logger.info("Ledger service invoked: action_type=%s", action_type)
+    Supports two invocation styles:
 
-    handler_fn = _ROUTER.get(action_type)
-    if not handler_fn:
-        supported = ", ".join(_ROUTER.keys())
-        return _bad_request(f"Unknown action_type '{action_type}'. Supported actions: {supported}")
+    1. **API Gateway v2 HTTP proxy** (``payload_format_version = "2.0"``):
+       Unwraps ``event["body"]`` as the payload and derives ``action_type``
+       from ``event["routeKey"]`` via ``_ROUTE_KEY_MAP``.
 
+    2. **Direct invocation** (CI tests, internal Lambda-to-Lambda calls):
+       Reads ``action_type`` and ``payload`` as top-level event keys.
+    """
     try:
+        # ------------------------------------------------------------------
+        # Step 1: Detect invocation style and extract (action_type, payload)
+        # ------------------------------------------------------------------
+        is_apigw_proxy = "routeKey" in event or "requestContext" in event
+
+        if is_apigw_proxy:
+            route_key: str = event.get("routeKey", "")
+            action_type: str = _ROUTE_KEY_MAP.get(route_key, "").upper()
+
+            raw_body: str = event.get("body") or "{}"
+            try:
+                raw_payload: dict[str, Any] = json.loads(raw_body)
+            except json.JSONDecodeError as exc:
+                logger.warning("Malformed JSON body on route '%s': %s", route_key, exc)
+                return _bad_request(f"Request body is not valid JSON: {exc}")
+
+            # Normalise camelCase HTTP client keys → snake_case model keys.
+            if action_type == "APPLY_TRIP_FEE":
+                payload: dict[str, Any] = _normalise_trip_fee_payload(raw_payload)
+            elif action_type == "PROCESS_CANCELLATION":
+                payload = _normalise_cancellation_payload(raw_payload)
+            else:
+                payload = raw_payload
+
+            logger.info(
+                "Ledger service invoked via API GW proxy: routeKey=%s → action_type=%s",
+                route_key,
+                action_type,
+            )
+        else:
+            # Direct invocation — action_type and payload are top-level keys.
+            action_type = event.get("action_type", "").upper()
+            payload = event.get("payload", {})
+
+            logger.info("Ledger service invoked directly: action_type=%s", action_type)
+
+        # ------------------------------------------------------------------
+        # Step 2: Route to the correct action handler
+        # ------------------------------------------------------------------
+        handler_fn = _ROUTER.get(action_type)
+        if not handler_fn:
+            supported = ", ".join(_ROUTER.keys())
+            return _bad_request(f"Unknown action_type '{action_type}'. Supported actions: {supported}")
+
         return handler_fn(payload)
+
     except ValidationError as exc:
         logger.warning("Validation failed for action_type %s: %s", action_type, exc)
         return _bad_request(exc.json())
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-except
         logger.error("Unexpected error in ledger service: %s", exc, exc_info=True)
-        return _server_error(f"Unexpected error: {str(exc)}")
+        return _server_error(f"Unexpected error: {type(exc).__name__}")

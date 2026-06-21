@@ -86,20 +86,23 @@ def _decode_jwt_payload_mock(token: str) -> dict[str, Any]:
         raise Exception("Unauthorized")
 
 
-def _generate_policy(principal_id: str, effect: str, method_arn: str) -> dict[str, Any]:
-    """Generate AWS IAM Policy document matching the Custom Authorizer specification."""
+def _simple_response(is_authorized: bool, principal_id: str) -> dict[str, Any]:
+    """Generate an API Gateway v2 simple authorizer response.
+
+    When the authorizer is configured with:
+      authorizer_payload_format_version = "2.0"
+      enable_simple_responses           = true
+
+    API Gateway expects a response of the form::
+
+        {"isAuthorized": true | false, "context": {...}}
+
+    Returning a full IAM policy document in this mode is treated as a
+    malformed authorizer response and causes a 500 Internal Server Error
+    before the backend Lambda is ever invoked.
+    """
     return {
-        "principalId": principal_id,
-        "policyDocument": {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Action": "execute-api:Invoke",
-                    "Effect": effect,
-                    "Resource": method_arn,
-                }
-            ],
-        },
+        "isAuthorized": is_authorized,
         "context": {
             "user_id": principal_id,
         },
@@ -107,30 +110,37 @@ def _generate_policy(principal_id: str, effect: str, method_arn: str) -> dict[st
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Primary handler for API Gateway Custom Token & Request Authorizers.
+    """Primary handler for the kwella API Gateway v2 simple-response authorizer.
+
+    Configured in Terraform with:
+      authorizer_payload_format_version = "2.0"
+      enable_simple_responses           = true
+
+    This mode requires the response to be::
+
+        {"isAuthorized": true | false, "context": {"user_id": "..."}}
 
     Args:
-        event: Inbound custom authorizer payload event mapping to TOKEN or REQUEST spec.
+        event: Inbound REQUEST authorizer payload (API GW v2 format 2.0).
         context: Lambda execution context.
 
     Returns:
-        IAM Policy dict containing Allow or Deny directives for execution gateway.
+        Simple response dict with ``isAuthorized`` and optional ``context``.
     """
     logger.info("Authorizer lambda invoked.")
-    
+
     # Extract authorization header/token
     token = _extract_token(event)
-    
+
     # Decode mock claims
     claims = _decode_jwt_payload_mock(token)
-    
+
     # Extract user identity
     user_id = claims.get("user_id") or claims.get("sub")
     if not user_id:
         logger.warning("Token claims missing 'user_id' and 'sub'.")
         raise Exception("Unauthorized")
 
-    method_arn = event.get("methodArn", "*")
     is_suspended = False
 
     pk = f"USR#{user_id}"
@@ -145,10 +155,14 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except botocore.exceptions.ClientError as exc:
         error_code = exc.response.get("Error", {}).get("Code", "Unknown")
         logger.error("DynamoDB ClientError [%s] during profile retrieval for %s: %s", error_code, pk, exc)
-        # Secure default: Deny access if database fetch throws error (fail-closed)
+        # Secure default: deny access if the DB check fails (fail-closed).
         is_suspended = True
 
-    effect = "Deny" if is_suspended else "Allow"
-    logger.info("Auth decision: %s access for user %s on resource %s", effect, user_id, method_arn)
-    
-    return _generate_policy(user_id, effect, method_arn)
+    is_authorized = not is_suspended
+    logger.info(
+        "Auth decision: isAuthorized=%s for user %s",
+        is_authorized,
+        user_id,
+    )
+
+    return _simple_response(is_authorized, user_id)
