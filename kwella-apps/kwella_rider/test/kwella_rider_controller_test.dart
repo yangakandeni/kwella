@@ -20,5 +20,30 @@ void main() {
 
       controller.dispose();
     });
+
+    test('parses liveDriverLocation events and updates driver coordinates', () {
+      final controller = KwellaRiderController();
+
+      controller.handleIncomingWebSocketEvent({
+        'action': 'liveDriverLocation',
+        'latitude': -34.0012,
+        'longitude': 18.6013,
+      });
+
+      expect(controller.state.currentDriverLocation, isNotNull);
+      expect(
+        controller.state.currentDriverLocation?.latitude,
+        equals(-34.0012),
+      );
+      expect(
+        controller.state.currentDriverLocation?.longitude,
+        equals(18.6013),
+      );
+      expect(controller.state.status, equals(RiderTripStatus.idle));
+      expect(controller.state.pickupLocation, equals(''));
+      expect(controller.state.dropoffLocation, equals(''));
+
+      controller.dispose();
+    });
   });
 }

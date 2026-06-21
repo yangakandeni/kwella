@@ -112,6 +112,122 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen> {
     );
   }
 
+  Alignment _mapAlignmentForLocation(DriverLocation location) {
+    const double latitudeCenter = -34.0012;
+    const double longitudeCenter = 18.6013;
+    const double latitudeSpan = 0.14;
+    const double longitudeSpan = 0.2;
+
+    final double normalizedX =
+        ((location.longitude - longitudeCenter) / (longitudeSpan / 2)).clamp(
+          -1.0,
+          1.0,
+        );
+    final double normalizedY =
+        -((location.latitude - latitudeCenter) / (latitudeSpan / 2)).clamp(
+          -1.0,
+          1.0,
+        );
+
+    return Alignment(normalizedX, normalizedY);
+  }
+
+  Widget _buildTrackingMap(RiderTripState state) {
+    final DriverLocation? location = state.currentDriverLocation;
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF152E44), Color(0xFF0A1720)],
+        ),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Container(
+              margin: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF192D3F),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white12, width: 1.2),
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 22),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 10,
+                  horizontal: 14,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.09),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  location != null
+                      ? 'Tracking driver at ${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}'
+                      : 'Waiting for driver telemetry…',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (location != null)
+            AnimatedAlign(
+              alignment: _mapAlignmentForLocation(location),
+              duration: const Duration(milliseconds: 650),
+              curve: Curves.easeInOut,
+              child: Padding(
+                padding: const EdgeInsets.all(48),
+                child: Container(
+                  key: const Key('driver_marker'),
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E4620),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.32),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: const Center(
+                    child: Icon(
+                      Icons.directions_car,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (location == null)
+            const Align(
+              alignment: Alignment.center,
+              child: Padding(
+                padding: EdgeInsets.all(24.0),
+                child: Text(
+                  'Driver telemetry is coming live. Hold tight.',
+                  style: TextStyle(color: Colors.white70, fontSize: 16),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = ref.watch(kwellaRiderControllerProvider);
@@ -131,16 +247,57 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: Container(
-              color: const Color(0xFF111111),
-              child: const Center(
-                child: Text(
-                  'Map placeholder',
-                  style: TextStyle(color: Colors.white70, fontSize: 18),
+            child:
+                state.status == RiderTripStatus.accepted ||
+                    state.status == RiderTripStatus.arrived
+                ? _buildTrackingMap(state)
+                : Container(
+                    color: const Color(0xFF111111),
+                    child: const Center(
+                      child: Text(
+                        'Map placeholder',
+                        style: TextStyle(color: Colors.white70, fontSize: 18),
+                      ),
+                    ),
+                  ),
+          ),
+          if (state.latestEvent != null &&
+              state.latestEvent!['action'] == 'geofenceTrigger' &&
+              state.latestEvent!['geofence_status'] == 'ARRIVED')
+            Positioned(
+              left: 16,
+              right: 16,
+              top: 56,
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 14,
+                    horizontal: 18,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E4620),
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.22),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: const Text(
+                    'Your driver has arrived! Meet them at the pickup point.',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
                 ),
               ),
             ),
-          ),
           if (state.status == RiderTripStatus.biddingOpen)
             Positioned(
               left: 16,

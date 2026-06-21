@@ -130,11 +130,40 @@ class KwellaRiderController {
       return;
     }
 
+    if (action == 'liveDriverLocation') {
+      final DriverLocation? liveLocation = _parseDriverLocationFromPayload(
+        payload,
+      );
+      if (liveLocation != null) {
+        _emit(
+          _state.copyWith(
+            currentDriverLocation: liveLocation,
+            latestEvent: event,
+          ),
+        );
+      }
+      return;
+    }
+
     if (status == 'WalletSettled') {
       _emit(
         _state.copyWith(status: RiderTripStatus.completed, latestEvent: event),
       );
       return;
     }
+  }
+
+  DriverLocation? _parseDriverLocationFromPayload(
+    Map<String, dynamic> payload,
+  ) {
+    final dynamic latitude = payload['latitude'];
+    final dynamic longitude = payload['longitude'];
+    if (latitude is num && longitude is num) {
+      return DriverLocation(
+        latitude: latitude.toDouble(),
+        longitude: longitude.toDouble(),
+      );
+    }
+    return null;
   }
 }

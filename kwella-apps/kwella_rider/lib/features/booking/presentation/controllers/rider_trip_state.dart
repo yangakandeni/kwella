@@ -7,6 +7,13 @@ enum RiderTripStatus {
   completed,
 }
 
+class DriverLocation {
+  final double latitude;
+  final double longitude;
+
+  const DriverLocation({required this.latitude, required this.longitude});
+}
+
 class RiderTripState {
   final RiderTripStatus status;
   final int passengerCount;
@@ -14,6 +21,7 @@ class RiderTripState {
   final String dropoffLocation;
   final String tripId;
   final List<Map<String, dynamic>> bidMetrics;
+  final DriverLocation? currentDriverLocation;
   final Map<String, dynamic>? latestEvent;
 
   const RiderTripState({
@@ -23,6 +31,7 @@ class RiderTripState {
     this.dropoffLocation = '',
     this.tripId = '',
     this.bidMetrics = const [],
+    this.currentDriverLocation,
     this.latestEvent,
   });
 
@@ -35,6 +44,7 @@ class RiderTripState {
     String? dropoffLocation,
     String? tripId,
     List<Map<String, dynamic>>? bidMetrics,
+    DriverLocation? currentDriverLocation,
     Map<String, dynamic>? latestEvent,
   }) {
     return RiderTripState(
@@ -44,6 +54,8 @@ class RiderTripState {
       dropoffLocation: dropoffLocation ?? this.dropoffLocation,
       tripId: tripId ?? this.tripId,
       bidMetrics: bidMetrics ?? this.bidMetrics,
+      currentDriverLocation:
+          currentDriverLocation ?? this.currentDriverLocation,
       latestEvent: latestEvent ?? this.latestEvent,
     );
   }
