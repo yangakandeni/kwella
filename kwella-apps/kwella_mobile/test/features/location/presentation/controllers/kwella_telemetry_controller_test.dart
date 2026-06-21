@@ -75,14 +75,30 @@ class _FakeWebSocketService extends KwellaWebSocketService {
   _FakeWebSocketService() : super.forTesting();
 
   final _CapturingSink _fakeSink = _CapturingSink();
+  final StreamController<Map<String, dynamic>> _controller =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   List<String> get capturedPayloads => _fakeSink.captured;
+
+  void feedMessage(Map<String, dynamic> message) {
+    _controller.add(message);
+  }
+
+  @override
+  Stream<Map<String, dynamic>> get stream => _controller.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get bidStream => _controller.stream;
 
   @override
   WebSocketSink get sink => _fakeSink;
 
   @override
   bool get isConnected => true;
+
+  void close() {
+    _controller.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +144,7 @@ void main() {
 
   tearDown(() {
     controller.stopDriverTracking();
+    wsService.close();
   });
 
   // ---- Core dispatch -------------------------------------------------------
@@ -290,6 +307,94 @@ void main() {
       // Must not throw.
       expect(() => controller.stopDriverTracking(), returnsNormally);
     });
+  });
+
+  // ---- Geofencing triggers --------------------------------------------------
+
+  group('Geofencing Handshake —', () {
+    test(
+      'updates isWithinGeofenceRadius when WebSocket message carries geofence_status ARRIVED',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+        expect(controller.state.isWithinGeofenceRadius, isFalse);
+
+        // Simulate websocket event
+        wsService.feedMessage({
+          'status': 'Telemetry Latched',
+          'flags': {
+            'geofence_status': 'ARRIVED',
+          }
+        });
+
+        // Allow microtasks to complete
+        await Future<void>.delayed(Duration.zero);
+
+        expect(controller.state.isWithinGeofenceRadius, isTrue);
+      },
+    );
+
+    test(
+      'confirmArrival sends confirmArrival action and resets geofence radius state',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        // Set arrived status
+        wsService.feedMessage({
+          'flags': {
+            'geofence_status': 'ARRIVED',
+          }
+        });
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.state.isWithinGeofenceRadius, isTrue);
+
+        // Confirm arrival
+        await controller.confirmArrival(
+          driverId: 'USR#drv-12345',
+          tripId: 'trip-abc-123',
+        );
+
+        // Assert state reset
+        expect(controller.state.isWithinGeofenceRadius, isFalse);
+
+        // Assert network confirmation message dispatched
+        expect(wsService.capturedPayloads.length, equals(1));
+        final decoded = jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+        expect(decoded['action'], equals('confirmArrival'));
+        expect(decoded['driverId'], equals('USR#drv-12345'));
+        expect(decoded['tripId'], equals('trip-abc-123'));
+        expect(decoded.containsKey('timestamp'), isTrue);
+      },
+    );
+
+    test(
+      'stopDriverTracking cancels subscriptions and resets geofence state',
+      () async {
+        final streamController = StreamController<Position>();
+        locationService.fakeStream = streamController.stream;
+
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+        expect(controller.isTracking, isTrue);
+
+        wsService.feedMessage({
+          'flags': {
+            'geofence_status': 'ARRIVED',
+          }
+        });
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.state.isWithinGeofenceRadius, isTrue);
+
+        controller.stopDriverTracking();
+
+        expect(controller.state.isWithinGeofenceRadius, isFalse);
+        expect(controller.isTracking, isFalse);
+
+        await streamController.close();
+      },
+    );
   });
 }
 

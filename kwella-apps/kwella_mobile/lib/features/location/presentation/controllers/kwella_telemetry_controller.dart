@@ -7,6 +7,43 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../bidding/services/kwella_websocket_service.dart';
 import '../../services/kwella_location_service.dart';
 
+/// State object representing the telemetry and geofencing status of the driver.
+@immutable
+class TelemetryState {
+  final bool isTracking;
+  final bool isWithinGeofenceRadius;
+
+  const TelemetryState({
+    required this.isTracking,
+    required this.isWithinGeofenceRadius,
+  });
+
+  TelemetryState copyWith({
+    bool? isTracking,
+    bool? isWithinGeofenceRadius,
+  }) {
+    return TelemetryState(
+      isTracking: isTracking ?? this.isTracking,
+      isWithinGeofenceRadius: isWithinGeofenceRadius ?? this.isWithinGeofenceRadius,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TelemetryState &&
+          runtimeType == other.runtimeType &&
+          isTracking == other.isTracking &&
+          isWithinGeofenceRadius == other.isWithinGeofenceRadius;
+
+  @override
+  int get hashCode => isTracking.hashCode ^ isWithinGeofenceRadius.hashCode;
+
+  @override
+  String toString() =>
+      'TelemetryState(isTracking: $isTracking, isWithinGeofenceRadius: $isWithinGeofenceRadius)';
+}
+
 /// Automates real-time driver location tracking by bridging the hardware
 /// position stream from [KwellaLocationService] directly into the live
 /// WebSocket sink of [KwellaWebSocketService].
@@ -18,7 +55,7 @@ import '../../services/kwella_location_service.dart';
 ///    through the WebSocket sink to the AWS API Gateway telemetry route.
 /// 4. Call [stopDriverTracking] to cleanly cancel the stream and halt battery
 ///    drain when the driver goes offline or disconnects.
-class KwellaTelemetryController {
+class KwellaTelemetryController extends StateNotifier<TelemetryState> {
   // ---------------------------------------------------------------------------
   // Dependencies — injectable for testing.
   // ---------------------------------------------------------------------------
@@ -31,9 +68,10 @@ class KwellaTelemetryController {
   // ---------------------------------------------------------------------------
 
   StreamSubscription<void>? _positionSubscription;
+  StreamSubscription<Map<String, dynamic>>? _wsSubscription;
 
   /// Whether driver tracking is currently active.
-  bool get isTracking => _positionSubscription != null;
+  bool get isTracking => state.isTracking;
 
   // ---------------------------------------------------------------------------
   // Constructor
@@ -41,14 +79,13 @@ class KwellaTelemetryController {
 
   /// Creates a telemetry controller backed by the provided service instances.
   ///
-  /// In production, use [KwellaTelemetryController.instance] or the
-  /// [telemetryControllerProvider] Riverpod handle instead of constructing
-  /// this directly.
+  /// In production, use the [telemetryControllerProvider] Riverpod handle.
   KwellaTelemetryController({
     KwellaLocationService? locationService,
     KwellaWebSocketService? wsService,
   })  : _locationService = locationService ?? KwellaLocationService.instance,
-        _wsService = wsService ?? KwellaWebSocketService.instance;
+        _wsService = wsService ?? KwellaWebSocketService.instance,
+        super(const TelemetryState(isTracking: false, isWithinGeofenceRadius: false));
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -67,7 +104,7 @@ class KwellaTelemetryController {
   ///
   /// Calling this method while tracking is already active is a no-op.
   Future<void> startDriverTracking({required String driverId}) async {
-    if (isTracking) {
+    if (state.isTracking) {
       debugPrint(
         '[KwellaTelemetryController] startDriverTracking called while '
         'already tracking. Call stopDriverTracking() first.',
@@ -90,6 +127,8 @@ class KwellaTelemetryController {
       );
       return;
     }
+
+    state = state.copyWith(isTracking: true);
 
     // Step 2 — Subscribe to the hardware position stream.
     _positionSubscription = _locationService
@@ -124,13 +163,47 @@ class KwellaTelemetryController {
             );
             // Null the subscription reference so isTracking reflects reality.
             _positionSubscription = null;
+            state = state.copyWith(isTracking: false);
           },
           cancelOnError: false,
         );
 
+    // Intercept geofencing status response flags on WebSocket stream channel
+    _wsSubscription = _wsService.bidStream.listen(
+      (data) {
+        final flags = data['flags'];
+        if (flags is Map && flags['geofence_status'] == 'ARRIVED') {
+          debugPrint('[KwellaTelemetryController] Geofence ARRIVED status intercepted.');
+          state = state.copyWith(isWithinGeofenceRadius: true);
+        }
+      },
+      onError: (Object error) {
+        debugPrint('[KwellaTelemetryController] WebSocket telemetry subscription error: $error');
+      },
+    );
+
     debugPrint(
       '[KwellaTelemetryController] Tracking active for driver: $driverId',
     );
+  }
+
+  /// Dispatches a manual arrival confirmation event over the WebSocket channel
+  /// and resets the local geofence alert state.
+  Future<void> confirmArrival({
+    required String driverId,
+    required String tripId,
+  }) async {
+    final payload = jsonEncode({
+      'action': 'confirmArrival',
+      'driverId': driverId,
+      'tripId': tripId,
+      'timestamp': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    debugPrint('[KwellaTelemetryController] Dispatching confirmArrival: $payload');
+    _wsService.sink.add(payload);
+
+    state = state.copyWith(isWithinGeofenceRadius: false);
   }
 
   /// Cancels the underlying [StreamSubscription] and halts all telemetry
@@ -138,18 +211,26 @@ class KwellaTelemetryController {
   ///
   /// Safe to call even when tracking is not active.
   void stopDriverTracking() {
-    if (!isTracking) {
-      debugPrint(
-        '[KwellaTelemetryController] stopDriverTracking called but '
-        'tracking is not active.',
-      );
-      return;
-    }
-
     _positionSubscription?.cancel();
     _positionSubscription = null;
 
-    debugPrint('[KwellaTelemetryController] Tracking stopped. Stream cancelled.');
+    _wsSubscription?.cancel();
+    _wsSubscription = null;
+
+    if (mounted) {
+      state = state.copyWith(
+        isTracking: false,
+        isWithinGeofenceRadius: false,
+      );
+    }
+
+    debugPrint('[KwellaTelemetryController] Tracking stopped. Streams cancelled and geofence flags reset.');
+  }
+
+  @override
+  void dispose() {
+    stopDriverTracking();
+    super.dispose();
   }
 }
 
@@ -157,23 +238,15 @@ class KwellaTelemetryController {
 // Riverpod v2 provider
 // ---------------------------------------------------------------------------
 
-/// A Riverpod [Provider] that exposes a [KwellaTelemetryController] scoped to
-/// the widget tree.
+/// A Riverpod [StateNotifierProvider] that exposes a [KwellaTelemetryController] and its state.
 ///
 /// Usage:
 /// ```dart
-/// final controller = ref.read(telemetryControllerProvider);
+/// final state = ref.watch(telemetryControllerProvider);
+/// final controller = ref.read(telemetryControllerProvider.notifier);
 /// await controller.startDriverTracking(driverId: 'USR#drv-12345');
 /// ```
-///
-/// The controller is automatically torn down when the provider is disposed
-/// (e.g., when the widget subtree that reads it is removed).
-final telemetryControllerProvider = Provider<KwellaTelemetryController>((ref) {
-  final controller = KwellaTelemetryController();
-
-  // Register teardown so stopDriverTracking is called when the provider scope
-  // is destroyed, preventing battery drain from orphaned subscriptions.
-  ref.onDispose(controller.stopDriverTracking);
-
-  return controller;
+final telemetryControllerProvider =
+    StateNotifierProvider<KwellaTelemetryController, TelemetryState>((ref) {
+  return KwellaTelemetryController();
 });
