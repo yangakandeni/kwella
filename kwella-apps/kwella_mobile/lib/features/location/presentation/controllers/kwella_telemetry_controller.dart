@@ -302,6 +302,30 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
     state = state.copyWith(isWithinGeofenceRadius: false);
   }
 
+  /// Dispatches a counter-bid or base fare acceptance bid over the WebSocket channel
+  /// and resets the local ride-offer state.
+  Future<void> submitBid({
+    required String driverId,
+    required String tripId,
+    required double bidAmount,
+  }) async {
+    final payload = jsonEncode({
+      'action': 'sendBid',
+      'driverId': driverId,
+      'tripId': tripId,
+      'bid_amount': bidAmount,
+    });
+
+    debugPrint('[KwellaTelemetryController] Dispatching submitBid: $payload');
+    _wsService.sink.add(payload);
+
+    _cancelOfferCountdown();
+    state = state.copyWith(
+      activeOffer: null,
+      offerSecondsRemaining: 0,
+    );
+  }
+
   /// Resets the last net earnings to null to prevent displaying the toast UI multiple times.
   void clearLastNetEarnings() {
     state = state.copyWith(lastNetEarnings: null);

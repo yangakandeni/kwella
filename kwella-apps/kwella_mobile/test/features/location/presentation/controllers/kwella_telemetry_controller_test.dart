@@ -658,6 +658,142 @@ void main() {
       },
     );
   });
+
+  // ---- submitBid — counter-proposal / acceptance ----
+
+  group('Ride Offer — submitBid (counter-proposal/acceptance) —', () {
+    test(
+      'submitBid dispatches a correctly structured sendBid payload with the '
+      'targeted bid_amount to the WebSocket sink',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        // Hydrate an active offer first so the context is realistic.
+        wsService.feedMessage(_makeRideOfferPayload(
+          tripId: 'TRIP#bid-001',
+          baseFare: 120.0,
+        ));
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.state.activeOffer, isNotNull);
+
+        // Act — driver taps "+R15" counter-bid.
+        await controller.submitBid(
+          driverId: 'USR#drv-12345',
+          tripId: 'TRIP#bid-001',
+          bidAmount: 135.0,
+        );
+
+        // Assert: exactly one payload was captured (location stream is empty,
+        // so the only sink.add() comes from submitBid).
+        expect(wsService.capturedPayloads.length, equals(1));
+        final decoded =
+            jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+        expect(decoded['action'], equals('sendBid'));
+        expect(decoded['driverId'], equals('USR#drv-12345'));
+        expect(decoded['tripId'], equals('TRIP#bid-001'));
+        expect(decoded['bid_amount'], closeTo(135.0, 0.001));
+      },
+    );
+
+    test(
+      'submitBid with base fare amount dispatches bid_amount equal to baseFare',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        wsService.feedMessage(_makeRideOfferPayload(
+          tripId: 'TRIP#bid-base',
+          baseFare: 90.0,
+        ));
+        await Future<void>.delayed(Duration.zero);
+
+        await controller.submitBid(
+          driverId: 'USR#drv-12345',
+          tripId: 'TRIP#bid-base',
+          bidAmount: 90.0,
+        );
+
+        final decoded =
+            jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+        expect(decoded['bid_amount'], closeTo(90.0, 0.001));
+      },
+    );
+
+    test(
+      'submitBid with +R30 counter dispatches bid_amount equal to baseFare + 30',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        wsService.feedMessage(_makeRideOfferPayload(
+          tripId: 'TRIP#bid-r30',
+          baseFare: 200.0,
+        ));
+        await Future<void>.delayed(Duration.zero);
+
+        await controller.submitBid(
+          driverId: 'USR#drv-12345',
+          tripId: 'TRIP#bid-r30',
+          bidAmount: 230.0,
+        );
+
+        final decoded =
+            jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+        expect(decoded['bid_amount'], closeTo(230.0, 0.001));
+      },
+    );
+
+    test(
+      'submitBid cancels the countdown timer and clears activeOffer state '
+      'to prevent double-submitting',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#bid-reset'));
+        await Future<void>.delayed(Duration.zero);
+
+        // Offer and countdown must be live before the bid.
+        expect(controller.state.activeOffer, isNotNull);
+        expect(controller.state.offerSecondsRemaining, equals(15));
+
+        await controller.submitBid(
+          driverId: 'USR#drv-12345',
+          tripId: 'TRIP#bid-reset',
+          bidAmount: 60.0,
+        );
+
+        // Both offer and countdown must be reset after submission.
+        expect(controller.state.activeOffer, isNull);
+        expect(controller.state.offerSecondsRemaining, equals(0));
+      },
+    );
+
+    test(
+      'submitBid payload contains all required JSON keys',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#bid-keys'));
+        await Future<void>.delayed(Duration.zero);
+
+        await controller.submitBid(
+          driverId: 'USR#drv-12345',
+          tripId: 'TRIP#bid-keys',
+          bidAmount: 75.0,
+        );
+
+        final decoded =
+            jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+        expect(decoded.containsKey('action'), isTrue);
+        expect(decoded.containsKey('driverId'), isTrue);
+        expect(decoded.containsKey('tripId'), isTrue);
+        expect(decoded.containsKey('bid_amount'), isTrue);
+      },
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------

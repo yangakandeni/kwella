@@ -1,9 +1,7 @@
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../bidding/models/active_ride_offer.dart';
-import '../../../bidding/services/kwella_websocket_service.dart';
 import '../../../location/presentation/controllers/kwella_telemetry_controller.dart';
 import '../../models/bidding_state.dart';
 import '../../providers/bidding_provider.dart';
@@ -17,6 +15,8 @@ class BiddingMarketplaceScreen extends ConsumerStatefulWidget {
 }
 
 class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScreen> {
+  String? _submittingBidType;
+
   @override
   Widget build(BuildContext context) {
     final biddingState = ref.watch(biddingProvider);
@@ -56,12 +56,16 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
               ],
             ),
             // Ride-offer overlay — rendered above the map / bid list.
-            if (telemetryState.activeOffer != null)
-              _buildRideOfferOverlay(
-                context,
-                telemetryState.activeOffer!,
-                telemetryState.offerSecondsRemaining,
-              ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              child: telemetryState.activeOffer != null
+                  ? _buildRideOfferOverlay(
+                      context,
+                      telemetryState.activeOffer!,
+                      telemetryState.offerSecondsRemaining,
+                    )
+                  : const SizedBox.shrink(key: ValueKey('no_offer_overlay')),
+            ),
             // Geofence overlay — rendered on top of everything else.
             if (telemetryState.isWithinGeofenceRadius)
               _buildGeofenceOverlay(context, telemetryState, telemetryController),
@@ -563,53 +567,66 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
 
                   const SizedBox(height: 14),
 
-                  // ---- Fare + CTA row ----
+                  // ---- Fare display ----
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'BASE FARE',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white54,
+                          letterSpacing: 1.1,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        fareText,
+                        style: const TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  // ---- Quick counter-bid row ----
                   Row(
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'BASE FARE',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white54,
-                              letterSpacing: 1.1,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            fareText,
-                            style: const TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const Spacer(),
-                      ElevatedButton(
-                        key: const Key('accept_base_fare_button'),
-                        onPressed: () => _acceptBaseFare(offer),
-                        style: ElevatedButton.styleFrom(
+                      Expanded(
+                        child: _buildBidButton(
+                          key: const Key('bid_accept_base'),
+                          label: 'Accept Base',
+                          amount: offer.baseFare,
+                          bidType: 'base',
                           backgroundColor: const Color(0xFF1565C0),
-                          foregroundColor: Colors.white,
-                          elevation: 4,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 20, vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
+                          offer: offer,
                         ),
-                        child: const Text(
-                          'Accept Base Fare',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.3,
-                          ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildBidButton(
+                          key: const Key('bid_counter_r15'),
+                          label: '+R15',
+                          amount: offer.baseFare + 15,
+                          bidType: 'r15',
+                          backgroundColor: const Color(0xFF00695C),
+                          offer: offer,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _buildBidButton(
+                          key: const Key('bid_counter_r30'),
+                          label: '+R30',
+                          amount: offer.baseFare + 30,
+                          bidType: 'r30',
+                          backgroundColor: const Color(0xFF4A148C),
+                          offer: offer,
                         ),
                       ),
                     ],
@@ -628,39 +645,118 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
     );
   }
 
-  /// Dispatches a `sendBid` action payload to the cloud over the shared
-  /// [KwellaWebSocketService] sink, accepting the server's base fare.
-  void _acceptBaseFare(ActiveRideOffer offer) {
-    final payload = jsonEncode({
-      'action': 'sendBid',
-      'tripId': offer.tripId,
-      'amount': offer.baseFare.toStringAsFixed(2),
-      'bidType': 'BASE_FARE_ACCEPT',
-      'timestamp': DateTime.now().toUtc().toIso8601String(),
-    });
+  // ---------------------------------------------------------------------------
+  // Bid dispatch helpers
+  // ---------------------------------------------------------------------------
 
-    debugPrint('[BiddingMarketplaceScreen] Dispatching sendBid: $payload');
-    KwellaWebSocketService.instance.sink.add(payload);
+  /// Constructs a styled, full-width quick-bid button.
+  ///
+  /// While this bid type is [_submittingBidType], the button is replaced by a
+  /// loading spinner to give immediate in-flight feedback to the driver.
+  Widget _buildBidButton({
+    required Key key,
+    required String label,
+    required double amount,
+    required String bidType,
+    required Color backgroundColor,
+    required ActiveRideOffer offer,
+  }) {
+    final isThisSubmitting = _submittingBidType == bidType;
+    final anySubmitting = _submittingBidType != null;
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle_rounded,
-                  color: Colors.white, size: 20),
-              const SizedBox(width: 8),
-              Text('Bid accepted for R${offer.baseFare.toStringAsFixed(2)}!'),
-            ],
-          ),
-          backgroundColor: const Color(0xFF1565C0),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          duration: const Duration(seconds: 3),
+    return ElevatedButton(
+      key: key,
+      onPressed: anySubmitting ? null : () => _submitBid(offer: offer, bidType: bidType, bidAmount: amount),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isThisSubmitting ? backgroundColor.withOpacity(0.6) : backgroundColor,
+        foregroundColor: Colors.white,
+        disabledBackgroundColor: backgroundColor.withOpacity(0.4),
+        disabledForegroundColor: Colors.white54,
+        elevation: isThisSubmitting ? 0 : 4,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
         ),
+      ),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        child: isThisSubmitting
+            ? const SizedBox(
+                key: ValueKey('loading'),
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white70),
+                ),
+              )
+            : Column(
+                key: ValueKey('bid_label_$bidType'),
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                  Text(
+                    'R${amount.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  /// Delegates a bid submission to [KwellaTelemetryController.submitBid].
+  ///
+  /// Sets [_submittingBidType] for the duration of the async call to provide
+  /// per-button in-flight feedback, then clears it. The controller handles
+  /// cancelling the countdown timer and nulling out [activeOffer] state.
+  Future<void> _submitBid({
+    required ActiveRideOffer offer,
+    required String bidType,
+    required double bidAmount,
+  }) async {
+    if (_submittingBidType != null) return;
+
+    setState(() => _submittingBidType = bidType);
+
+    try {
+      final controller = ref.read(telemetryControllerProvider.notifier);
+      await controller.submitBid(
+        driverId: 'USR#drv-12345',
+        tripId: offer.tripId,
+        bidAmount: bidAmount,
       );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Text('Bid submitted: R${bidAmount.toStringAsFixed(0)}'),
+              ],
+            ),
+            backgroundColor: const Color(0xFF1B5E20),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _submittingBidType = null);
     }
   }
 
