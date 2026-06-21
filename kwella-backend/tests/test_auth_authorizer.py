@@ -200,12 +200,10 @@ def test_lambda_handler_allows_when_suspended_false():
         "methodArn": "arn:aws:execute-api:af-south-1:123456789012:api123/prod/GET/trips"
     }
     
-    policy = handler.lambda_handler(event, context=None)
+    response = handler.lambda_handler(event, context=None)
     
-    assert policy["principalId"] == "user-allow-1"
-    assert policy["policyDocument"]["Statement"][0]["Effect"] == "Allow"
-    assert policy["policyDocument"]["Statement"][0]["Resource"] == event["methodArn"]
-    assert policy["context"]["user_id"] == "user-allow-1"
+    assert response["isAuthorized"] is True
+    assert response["context"]["user_id"] == "user-allow-1"
 
 
 @mock_aws
@@ -222,10 +220,10 @@ def test_lambda_handler_allows_when_profile_does_not_exist():
         "methodArn": "arn:aws:execute-api:af-south-1:123456789012:api123/prod/GET/trips"
     }
     
-    policy = handler.lambda_handler(event, context=None)
+    response = handler.lambda_handler(event, context=None)
     
-    assert policy["principalId"] == "user-new-2"
-    assert policy["policyDocument"]["Statement"][0]["Effect"] == "Allow"
+    assert response["isAuthorized"] is True
+    assert response["context"]["user_id"] == "user-new-2"
 
 
 @mock_aws
@@ -251,16 +249,15 @@ def test_lambda_handler_denies_when_suspended_true():
         "methodArn": "arn:aws:execute-api:af-south-1:123456789012:api123/prod/GET/trips"
     }
     
-    policy = handler.lambda_handler(event, context=None)
+    response = handler.lambda_handler(event, context=None)
     
-    assert policy["principalId"] == "user-deny-1"
-    assert policy["policyDocument"]["Statement"][0]["Effect"] == "Deny"
-    assert policy["policyDocument"]["Statement"][0]["Resource"] == event["methodArn"]
+    assert response["isAuthorized"] is False
+    assert response["context"]["user_id"] == "user-deny-1"
 
 
 @mock_aws
 def test_lambda_handler_denies_on_database_error_fail_closed():
-    """Verify that if DynamoDB client errors out, we fail-closed (Deny policy generated)."""
+    """Verify that if DynamoDB client errors out, we fail-closed (Deny simple response generated)."""
     # Do NOT create mock table. This causes a ResourceNotFoundException from DynamoDB/moto.
     handler = _reload_auth_handler()
     
@@ -271,7 +268,7 @@ def test_lambda_handler_denies_on_database_error_fail_closed():
         "methodArn": "arn:aws:execute-api:af-south-1:123456789012:api123/prod/GET/trips"
     }
     
-    policy = handler.lambda_handler(event, context=None)
+    response = handler.lambda_handler(event, context=None)
     
-    assert policy["principalId"] == "user-db-error"
-    assert policy["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+    assert response["isAuthorized"] is False
+    assert response["context"]["user_id"] == "user-db-error"
