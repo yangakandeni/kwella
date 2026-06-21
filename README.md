@@ -93,3 +93,25 @@ Autonomous agents must strictly respect this workspace tree when generating infr
 │   └── tests/                      # Pytest Suite (Deterministic backend unit and integration tests)
 │       └── __pycache__/            # Cached Python bytecodes (git-ignored)
 └── scripts/                        # Automated platform tooling, CI/CD utility hooks, and build binaries
+
+## 🚀 Local Marketplace Simulation
+
+Use the root wrapper script to execute an end-to-end verification loop against the live backend gateway and local trip simulator.
+
+Run:
+
+```bash
+./scripts/smoke_test.sh
+```
+
+This script performs a complete marketplace lifecycle validation, including:
+
+* Rider Booking
+* Driver Counter-Bid
+* Match
+* Pickup Geofence
+* In-Transit Stream
+* Payout Settlement
+* Mutual 5-Star Rating
+
+A clean run prints a fully green pass summary at the end, confirming the workflow has progressed through all seven phases successfully.

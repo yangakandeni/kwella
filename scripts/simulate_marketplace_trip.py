@@ -263,7 +263,11 @@ def assert_state(condition: bool, message: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Simulate a marketplace trip lifecycle via WebSocket.")
-    parser.add_argument("--ws-url", default=os.environ.get("KWELLA_WS_URL"), help="WebSocket endpoint URL")
+    parser.add_argument(
+        "--ws-url",
+        default=os.environ.get("KWELLA_WS_URL", "ws://localhost:3001"),
+        help="WebSocket endpoint URL",
+    )
     parser.add_argument("--auth-token", default=os.environ.get("KWELLA_WS_TOKEN"), help="Bearer token for WebSocket authentication")
     parser.add_argument("--insecure", action="store_true", default=os.environ.get("KWELLA_WS_INSECURE", "0") == "1", help="Disable TLS certificate verification for local test endpoints")
     return parser.parse_args()
@@ -276,6 +280,15 @@ def normalize_token(token: str | None) -> str | None:
     if token and not token.lower().startswith("bearer "):
         return f"Bearer {token}"
     return token
+
+
+def build_mock_ws_uri(base_ws_url: str, auth_token: str, user_id: str, sim_tag: str) -> str:
+    parsed = urllib.parse.urlparse(base_ws_url)
+    query_params = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    query_params.append(("Authorization", auth_token))
+    query_params.append(("userId", user_id))
+    new_query = urllib.parse.urlencode(query_params)
+    return urllib.parse.urlunparse(parsed._replace(query=new_query, fragment=sim_tag))
 
 
 async def wait_for_action(client: SimpleWebSocketClient, expected_actions: set[str], timeout: float) -> dict[str, object]:
@@ -296,7 +309,8 @@ async def wait_for_action(client: SimpleWebSocketClient, expected_actions: set[s
 async def mock_driver_client(endpoint: str, auth_token: str | None, shared: dict[str, object]) -> None:
     driver_id = shared["driver_id"]
     log_phase("2 - Driver Discovery & Bid")
-    client = SimpleWebSocketClient(endpoint, auth_token, insecure=shared["insecure"])
+    driver_endpoint = build_mock_ws_uri(endpoint, "MOCK_DRIVER_TOKEN_8765", "DRIVER", "sim-88")
+    client = SimpleWebSocketClient(driver_endpoint, auth_token, insecure=shared["insecure"])
     await client.connect()
     log_success("Driver WebSocket connected")
 
@@ -411,7 +425,8 @@ async def mock_driver_client(endpoint: str, auth_token: str | None, shared: dict
 async def mock_rider_client(endpoint: str, auth_token: str | None, shared: dict[str, object]) -> None:
     rider_id = shared["rider_id"]
     log_phase("1 - Rider Request")
-    client = SimpleWebSocketClient(endpoint, auth_token, insecure=shared["insecure"])
+    rider_endpoint = build_mock_ws_uri(endpoint, "MOCK_RIDER_TOKEN_4321", "RIDER", "sim-99")
+    client = SimpleWebSocketClient(rider_endpoint, auth_token, insecure=shared["insecure"])
     await client.connect()
     log_success("Rider WebSocket connected")
 
@@ -521,9 +536,6 @@ def main() -> int:
         log_error("KWELLA_WS_URL or --ws-url must be provided")
         return 1
     auth_token = normalize_token(args.auth_token)
-    if not auth_token:
-        log_error("KWELLA_WS_TOKEN or --auth-token must be provided")
-        return 1
 
     try:
         asyncio.run(run_simulation(args.ws_url, auth_token, args.insecure))

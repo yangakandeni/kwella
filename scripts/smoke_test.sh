@@ -57,6 +57,12 @@ if [[ -z "${TEST_MOCK_JWT:-}" ]]; then
   PREFLIGHT_OK=false
 fi
 
+if [[ -z "${KWELLA_WS_URL:-}" ]]; then
+  KWELLA_WS_URL="ws://localhost:3001"
+  export KWELLA_WS_URL
+  echo -e "${YELLOW}[preflight] KWELLA_WS_URL not set; defaulting to ${KWELLA_WS_URL}${NC}"
+fi
+
 # Warn (non-fatal) if the JWT still contains the placeholder 'signature' stub.
 if echo "${TEST_MOCK_JWT:-}" | grep -q '\.signature$'; then
   echo -e "${YELLOW}[preflight] WARNING: TEST_MOCK_JWT ends with '.signature' — this looks like the"
