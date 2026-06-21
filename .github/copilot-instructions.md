@@ -1,0 +1,4 @@
+## Workspace State Maintenance Rule
+- This project utilizes `KWELLA_SYSTEM_CONTEXT.md` as its master architecture map.
+- CRITICAL TASK RULE: As the absolute final step ("Definition of Done") for ANY code implementation or feature addition task, you MUST read the current `KWELLA_SYSTEM_CONTEXT.md` file, locate the `## 6. Current State of Implementation` section, and accurately append or update the description of the newly introduced modules, data schemas, or UI layers.
+- Do not mark a task as complete until you have cleanly updated this tracking file to reflect the active progression state of the repository.

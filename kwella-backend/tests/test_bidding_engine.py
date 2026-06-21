@@ -19,9 +19,11 @@ import sys
 from typing import Any
 
 import boto3
+import os
 import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
+from unittest.mock import Mock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +869,98 @@ def test_request_trip_includes_near_driver_and_excludes_far_driver():
     assert _DRIVER_FAR_ID not in matched, (
         f"Far driver {_DRIVER_FAR_ID!r} should not be matched but appeared in: {matched}"
     )
+
+
+@mock_aws
+def test_request_trip_offline_driver_triggers_sns_fallback_push():
+    """Verify stale WebSocket dispatch triggers SNS fallback push with the correct payload."""
+    table = _create_mock_table()
+
+    env_backup = {
+        "KWELLA_SNS_PLATFORM_APPLICATION_ARN": os.environ.get("KWELLA_SNS_PLATFORM_APPLICATION_ARN"),
+        "KWELLA_APIGW_ENDPOINT": os.environ.get("KWELLA_APIGW_ENDPOINT"),
+    }
+    os.environ["KWELLA_SNS_PLATFORM_APPLICATION_ARN"] = "arn:aws:sns:af-south-1:123456789012:app/GCM/kwella"
+    os.environ["KWELLA_APIGW_ENDPOINT"] = "https://example.execute-api.af-south-1.amazonaws.com/prod"
+
+    try:
+        handler = _reload_bidding_handler()
+
+        table.put_item(
+            Item={
+                "PK": f"DRIVER#{_DRIVER_NEAR_ID}",
+                "SK": "TELEMETRY",
+                "last_latitude": str(_DRIVER_NEAR_LAT),
+                "last_longitude": str(_DRIVER_NEAR_LON),
+                "connection_id": "conn-driver-stale",
+                "updated_at": "2026-06-21T06:00:00Z",
+            }
+        )
+
+        table.put_item(
+            Item={
+                "PK": f"DRIVER#{_DRIVER_NEAR_ID}",
+                "SK": "PROFILE",
+                "fcm_token": "fcm-token-abc123",
+            }
+        )
+
+        apigw_mock = Mock()
+        sns_mock = Mock()
+
+        error_response = {"Error": {"Code": "GoneException", "Message": "Stale connection"}}
+        apigw_mock.post_to_connection.side_effect = ClientError(error_response, "PostToConnection")
+        sns_mock.create_platform_endpoint.return_value = {"EndpointArn": "arn:aws:sns:af-south-1:123456789012:endpoint/GCM/kwella/fcm-token-abc123"}
+        sns_mock.publish.return_value = {"MessageId": "msg-123"}
+
+        def client_factory(service_name, region_name=None, endpoint_url=None, **kwargs):
+            if service_name == "apigatewaymanagementapi":
+                return apigw_mock
+            if service_name == "sns":
+                return sns_mock
+            raise RuntimeError(f"Unexpected boto3 client request: {service_name}")
+
+        with patch.object(handler, "boto3") as boto3_mock:
+            boto3_mock.client.side_effect = client_factory
+            boto3_mock.resource = boto3.resource
+
+            event = {
+                **_REQUEST_TRIP_EVENT_BASE,
+                "body": json.dumps(_REQUEST_TRIP_PAYLOAD),
+            }
+
+            response = handler.lambda_handler(event, context=None)
+
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["status"] == "TripBroadcast"
+        assert _DRIVER_NEAR_ID in body["matched_drivers"]
+
+        sns_mock.create_platform_endpoint.assert_called_once_with(
+            PlatformApplicationArn="arn:aws:sns:af-south-1:123456789012:app/GCM/kwella",
+            Token="fcm-token-abc123",
+        )
+
+        assert sns_mock.publish.call_count == 1
+        publish_kwargs = sns_mock.publish.call_args.kwargs
+        assert publish_kwargs["TargetArn"] == "arn:aws:sns:af-south-1:123456789012:endpoint/GCM/kwella/fcm-token-abc123"
+        assert publish_kwargs["MessageStructure"] == "json"
+
+        message = json.loads(publish_kwargs["Message"])
+        assert "GCM" in message
+
+        gcm_message = json.loads(message["GCM"])
+        assert gcm_message["priority"] == "high"
+        assert gcm_message["data"]["action"] == "rideOfferAvailable"
+        assert gcm_message["data"]["tripId"] == body["tripId"]
+        assert gcm_message["data"]["base_fare"] == str(_REQUEST_TRIP_PAYLOAD["suggested_base_fare"])
+        assert gcm_message["data"]["click_action"] == "FLUTTER_NOTIFICATION_CLICK"
+    finally:
+        for key, value in env_backup.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 @mock_aws

@@ -51,6 +51,10 @@ _AWS_REGION = os.environ.get("AWS_REGION", "af-south-1")
 # Absent in local/test contexts — dispatch is skipped gracefully when unset.
 _APIGW_ENDPOINT = os.environ.get("KWELLA_APIGW_ENDPOINT")
 
+# Optional SNS Platform Application ARN for push fallback delivery.
+# This is used to create or target device endpoints for FCM tokens.
+_SNS_PLATFORM_APPLICATION_ARN = os.environ.get("KWELLA_SNS_PLATFORM_APPLICATION_ARN")
+
 # Spatial matching radius (metres) for requestTrip proximity filtering.
 _TRIP_MATCH_RADIUS_M: float = 5000.0
 
@@ -66,6 +70,78 @@ _dynamodb_client = boto3.client("dynamodb", region_name=_AWS_REGION)
 def get_table():
     """Return the module-scoped DynamoDB Table resource reference."""
     return _table
+
+
+def _resolve_driver_fcm_token(table: Any, driver_pk: str, telemetry_record: dict[str, Any]) -> str | None:
+    """Resolve a driver's FCM token from telemetry or profile/device config records."""
+    token = telemetry_record.get("fcm_token")
+    if isinstance(token, str) and token:
+        return token
+
+    for sk in ("PROFILE", "DEVICE_CONFIG"):
+        profile_response = table.get_item(Key={"PK": driver_pk, "SK": sk})
+        profile_item = profile_response.get("Item")
+        if isinstance(profile_item, dict):
+            token = profile_item.get("fcm_token")
+            if isinstance(token, str) and token:
+                return token
+
+    return None
+
+
+def _send_fcm_push_via_sns(fcm_token: str, trip_id: str, base_fare: Any) -> None:
+    """Publish a high-priority FCM push payload through AWS SNS as a fallback."""
+    if not _SNS_PLATFORM_APPLICATION_ARN:
+        logger.debug("SNS fallback skipped because KWELLA_SNS_PLATFORM_APPLICATION_ARN is not configured.")
+        return
+
+    sns_client = boto3.client("sns", region_name=_AWS_REGION)
+    try:
+        endpoint_response = sns_client.create_platform_endpoint(
+            PlatformApplicationArn=_SNS_PLATFORM_APPLICATION_ARN,
+            Token=fcm_token,
+        )
+        endpoint_arn = endpoint_response.get("EndpointArn")
+        if not endpoint_arn:
+            raise RuntimeError("SNS create_platform_endpoint did not return an EndpointArn")
+
+        push_payload = {
+            "GCM": json.dumps({
+                "priority": "high",
+                "data": {
+                    "action": "rideOfferAvailable",
+                    "tripId": trip_id,
+                    "base_fare": str(base_fare) if base_fare is not None else "",
+                    "click_action": "FLUTTER_NOTIFICATION_CLICK",
+                },
+            })
+        }
+
+        sns_client.publish(
+            TargetArn=endpoint_arn,
+            MessageStructure="json",
+            Message=json.dumps(push_payload),
+        )
+        logger.info(
+            "SNS push fallback sent for tripId=%s endpointArn=%s",
+            trip_id,
+            endpoint_arn,
+        )
+    except botocore.exceptions.ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+        logger.warning(
+            "SNS fallback publish failed for tripId=%s token=%s: %s",
+            trip_id,
+            fcm_token,
+            error_code,
+        )
+    except Exception as exc:
+        logger.warning(
+            "SNS fallback publish unexpected failure for tripId=%s token=%s: %s",
+            trip_id,
+            fcm_token,
+            exc,
+        )
 
 
 def _extract_auth_params(event: dict[str, Any]) -> str | None:
@@ -673,9 +749,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     distance_m,
                 )
 
-                # Dispatch the offer to the driver's WebSocket connection.
-                # Resolve the driver's live connectionId from the TELEMETRY record
-                # (populated by updateLocation; absent before first location ping).
+                driver_offline_or_suspended = False
                 driver_conn_id: str | None = record.get("connection_id")
                 if apigw_client and driver_conn_id:
                     try:
@@ -689,19 +763,28 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                             driver_id,
                         )
                     except botocore.exceptions.ClientError as dispatch_exc:
-                        # Stale or expired connections must not abort the entire
-                        # dispatch loop; log and continue to remaining drivers.
                         error_code = dispatch_exc.response.get("Error", {}).get("Code", "Unknown")
                         logger.warning(
-                            "Failed to dispatch offer to connectionId=%s [%s]; continuing.",
+                            "Failed to dispatch offer to connectionId=%s [%s]; marking offline/suspended.",
                             driver_conn_id,
                             error_code,
                         )
+                        driver_offline_or_suspended = True
                 else:
                     logger.debug(
                         "WebSocket dispatch skipped for driverId=%s (no endpoint or connectionId).",
                         driver_id,
                     )
+                    driver_offline_or_suspended = True
+
+                if driver_offline_or_suspended:
+                    fcm_token = _resolve_driver_fcm_token(table, driver_pk, record)
+                    if fcm_token:
+                        _send_fcm_push_via_sns(
+                            fcm_token=fcm_token,
+                            trip_id=trip_id,
+                            base_fare=suggested_fare,
+                        )
 
             logger.info(
                 "requestTrip scan complete: %d driver(s) matched within %.0f m for riderId=%s",

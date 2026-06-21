@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:meta/meta.dart';
 
 /// A production-ready singleton service that encapsulates the full geolocator
 /// permission lifecycle and high-accuracy position stream for Kwella telematics.
@@ -136,7 +135,9 @@ class KwellaLocationService {
       return const Stream<Position>.empty();
     }
 
-    debugPrint('[KwellaLocationService] Starting high-accuracy position stream.');
+    debugPrint(
+      '[KwellaLocationService] Starting high-accuracy position stream.',
+    );
 
     final LocationSettings settings = buildLocationSettings();
     Stream<Position> raw;
@@ -158,20 +159,16 @@ class KwellaLocationService {
 
     // Wrap with handleError so that errors emitted during streaming are
     // also caught gracefully — Stream.error() defers the error to listeners.
-    return raw.handleError(
-      (Object error, StackTrace stack) {
-        if (error is LocationServiceDisabledException) {
-          debugPrint(
-            '[KwellaLocationService] Location service disabled while streaming.',
-          );
-        } else {
-          debugPrint(
-            '[KwellaLocationService] Unexpected stream error: $error',
-          );
-        }
-        // Returning from handleError swallows the error and ends the stream.
-      },
-    );
+    return raw.handleError((Object error, StackTrace stack) {
+      if (error is LocationServiceDisabledException) {
+        debugPrint(
+          '[KwellaLocationService] Location service disabled while streaming.',
+        );
+      } else {
+        debugPrint('[KwellaLocationService] Unexpected stream error: $error');
+      }
+      // Returning from handleError swallows the error and ends the stream.
+    });
   }
 
   // ---------------------------------------------------------------------------

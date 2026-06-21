@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../bidding/models/active_ride_offer.dart';
@@ -11,10 +10,12 @@ class BiddingMarketplaceScreen extends ConsumerStatefulWidget {
   const BiddingMarketplaceScreen({super.key});
 
   @override
-  ConsumerState<BiddingMarketplaceScreen> createState() => _BiddingMarketplaceScreenState();
+  ConsumerState<BiddingMarketplaceScreen> createState() =>
+      _BiddingMarketplaceScreenState();
 }
 
-class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScreen> {
+class _BiddingMarketplaceScreenState
+    extends ConsumerState<BiddingMarketplaceScreen> {
   String? _submittingBidType;
 
   @override
@@ -46,7 +47,11 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
           children: [
             Column(
               children: [
-                _buildTelemetryPanel(context, telemetryState, telemetryController),
+                _buildTelemetryPanel(
+                  context,
+                  telemetryState,
+                  telemetryController,
+                ),
                 Expanded(
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 300),
@@ -68,7 +73,11 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
             ),
             // Geofence overlay — rendered on top of everything else.
             if (telemetryState.isWithinGeofenceRadius)
-              _buildGeofenceOverlay(context, telemetryState, telemetryController),
+              _buildGeofenceOverlay(
+                context,
+                telemetryState,
+                telemetryController,
+              ),
           ],
         ),
       ),
@@ -130,7 +139,10 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
           elevation: 4,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
-            side: BorderSide(color: colorScheme.error.withOpacity(0.5), width: 1.5),
+            side: BorderSide(
+              color: colorScheme.error.withOpacity(0.5),
+              width: 1.5,
+            ),
           ),
           color: colorScheme.errorContainer,
           child: Padding(
@@ -169,7 +181,10 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
     );
   }
 
-  Widget _buildActiveBidsLayout(BuildContext context, List<Map<String, dynamic>> bids) {
+  Widget _buildActiveBidsLayout(
+    BuildContext context,
+    List<Map<String, dynamic>> bids,
+  ) {
     if (bids.isEmpty) {
       final colorScheme = Theme.of(context).colorScheme;
       return Center(
@@ -218,7 +233,8 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
         String amountText;
         if (amountValue is num) {
           amountText = '\$${amountValue.toStringAsFixed(2)}';
-        } else if (amountValue is String && double.tryParse(amountValue) != null) {
+        } else if (amountValue is String &&
+            double.tryParse(amountValue) != null) {
           amountText = '\$${double.parse(amountValue).toStringAsFixed(2)}';
         } else {
           amountText = '\$$amountValue';
@@ -232,7 +248,10 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
             borderRadius: BorderRadius.circular(12),
           ),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 12.0,
+            ),
             child: Row(
               children: [
                 Expanded(
@@ -241,7 +260,11 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.person_pin_circle_rounded, size: 20, color: Colors.grey),
+                          const Icon(
+                            Icons.person_pin_circle_rounded,
+                            size: 20,
+                            color: Colors.grey,
+                          ),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
@@ -258,13 +281,21 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                       const SizedBox(height: 6),
                       Row(
                         children: [
-                          const Icon(Icons.timer_outlined, size: 16, color: Colors.grey),
+                          const Icon(
+                            Icons.timer_outlined,
+                            size: 16,
+                            color: Colors.grey,
+                          ),
                           const SizedBox(width: 6),
                           Text(
-                            estimatedPickup.isNotEmpty ? estimatedPickup : 'N/A pickup time',
+                            estimatedPickup.isNotEmpty
+                                ? estimatedPickup
+                                : 'N/A pickup time',
                             style: TextStyle(
                               fontSize: 14,
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
                             ),
                           ),
                         ],
@@ -288,7 +319,9 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                   onPressed: () {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text('Accepted bid from $driverId for $amountText'),
+                        content: Text(
+                          'Accepted bid from $driverId for $amountText',
+                        ),
                         behavior: SnackBarBehavior.floating,
                       ),
                     );
@@ -319,16 +352,15 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
         gradient: LinearGradient(
           colors: isOnline
               ? [Colors.teal.shade700, Colors.green.shade900]
-              : [colorScheme.surfaceVariant, colorScheme.surfaceVariant.withOpacity(0.7)],
+              : [
+                  colorScheme.surfaceContainerHighest,
+                  colorScheme.surfaceContainerHighest.withOpacity(0.7),
+                ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         boxShadow: const [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 6,
-            offset: Offset(0, 3),
-          )
+          BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 3)),
         ],
       ),
       child: Padding(
@@ -346,13 +378,19 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                         height: 10,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: isOnline ? Colors.greenAccent : Colors.orangeAccent,
+                          color: isOnline
+                              ? Colors.greenAccent
+                              : Colors.orangeAccent,
                           boxShadow: [
                             BoxShadow(
-                              color: (isOnline ? Colors.greenAccent : Colors.orangeAccent).withOpacity(0.5),
+                              color:
+                                  (isOnline
+                                          ? Colors.greenAccent
+                                          : Colors.orangeAccent)
+                                      .withOpacity(0.5),
                               blurRadius: 4,
                               spreadRadius: 1,
-                            )
+                            ),
                           ],
                         ),
                       ),
@@ -363,14 +401,18 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
                           letterSpacing: 1.0,
-                          color: isOnline ? Colors.teal.shade100 : colorScheme.onSurfaceVariant,
+                          color: isOnline
+                              ? Colors.teal.shade100
+                              : colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    isOnline ? 'Online & Streaming Location' : 'Offline — Tracking Paused',
+                    isOnline
+                        ? 'Online & Streaming Location'
+                        : 'Offline — Tracking Paused',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -379,9 +421,14 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                   ),
                   const SizedBox(height: 10),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
-                      color: isOnline ? Colors.white.withOpacity(0.12) : colorScheme.outline.withOpacity(0.1),
+                      color: isOnline
+                          ? Colors.white.withOpacity(0.12)
+                          : colorScheme.outline.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
@@ -390,7 +437,9 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                         Icon(
                           Icons.account_balance_wallet_rounded,
                           size: 16,
-                          color: isOnline ? Colors.greenAccent : colorScheme.primary,
+                          color: isOnline
+                              ? Colors.greenAccent
+                              : colorScheme.primary,
                         ),
                         const SizedBox(width: 8),
                         Text(
@@ -398,7 +447,9 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                           style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w700,
-                            color: isOnline ? Colors.white : colorScheme.onSurfaceVariant,
+                            color: isOnline
+                                ? Colors.white
+                                : colorScheme.onSurfaceVariant,
                             letterSpacing: 0.2,
                           ),
                         ),
@@ -411,11 +462,16 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: isOnline ? Colors.white : colorScheme.primary,
-                foregroundColor: isOnline ? Colors.teal.shade900 : colorScheme.onPrimary,
+                foregroundColor: isOnline
+                    ? Colors.teal.shade900
+                    : colorScheme.onPrimary,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 elevation: 2,
               ),
               onPressed: () {
@@ -446,8 +502,7 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
     int secondsRemaining,
   ) {
     final progress = secondsRemaining / 15.0;
-    final fareText =
-        'R\${offer.baseFare.toStringAsFixed(2)}';
+    final fareText = 'R\${offer.baseFare.toStringAsFixed(2)}';
 
     return Align(
       alignment: Alignment.topCenter,
@@ -472,10 +527,7 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(20),
                 gradient: LinearGradient(
-                  colors: [
-                    const Color(0xFF0D1B2A),
-                    const Color(0xFF1A3A5C),
-                  ],
+                  colors: [const Color(0xFF0D1B2A), const Color(0xFF1A3A5C)],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -520,7 +572,9 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                       // ---- Countdown badge ----
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: secondsRemaining <= 5
                               ? Colors.redAccent.withOpacity(0.85)
@@ -666,17 +720,19 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
 
     return ElevatedButton(
       key: key,
-      onPressed: anySubmitting ? null : () => _submitBid(offer: offer, bidType: bidType, bidAmount: amount),
+      onPressed: anySubmitting
+          ? null
+          : () => _submitBid(offer: offer, bidType: bidType, bidAmount: amount),
       style: ElevatedButton.styleFrom(
-        backgroundColor: isThisSubmitting ? backgroundColor.withOpacity(0.6) : backgroundColor,
+        backgroundColor: isThisSubmitting
+            ? backgroundColor.withOpacity(0.6)
+            : backgroundColor,
         foregroundColor: Colors.white,
         disabledBackgroundColor: backgroundColor.withOpacity(0.4),
         disabledForegroundColor: Colors.white54,
         elevation: isThisSubmitting ? 0 : 4,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
       child: AnimatedSwitcher(
         duration: const Duration(milliseconds: 200),
@@ -743,14 +799,20 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
           SnackBar(
             content: Row(
               children: [
-                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
                 const SizedBox(width: 8),
                 Text('Bid submitted: R${bidAmount.toStringAsFixed(0)}'),
               ],
             ),
             backgroundColor: const Color(0xFF1B5E20),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
             duration: const Duration(seconds: 3),
           ),
         );
@@ -781,10 +843,7 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
           builder: (context, value, child) {
             return Transform.translate(
               offset: Offset(0, (1 - value) * 100),
-              child: Opacity(
-                opacity: value,
-                child: child,
-              ),
+              child: Opacity(opacity: value, child: child),
             );
           },
           child: Card(
@@ -856,9 +915,14 @@ class _BiddingMarketplaceScreenState extends ConsumerState<BiddingMarketplaceScr
                           SnackBar(
                             content: Row(
                               children: [
-                                Icon(Icons.check_circle, color: colorScheme.onPrimary),
+                                Icon(
+                                  Icons.check_circle,
+                                  color: colorScheme.onPrimary,
+                                ),
                                 const SizedBox(width: 8),
-                                const Text('Arrival confirmed & dispatched successfully!'),
+                                const Text(
+                                  'Arrival confirmed & dispatched successfully!',
+                                ),
                               ],
                             ),
                             backgroundColor: Colors.green.shade600,
@@ -885,7 +949,8 @@ class _PulsingGeofenceIndicator extends StatefulWidget {
   const _PulsingGeofenceIndicator();
 
   @override
-  State<_PulsingGeofenceIndicator> createState() => _PulsingGeofenceIndicatorState();
+  State<_PulsingGeofenceIndicator> createState() =>
+      _PulsingGeofenceIndicatorState();
 }
 
 class _PulsingGeofenceIndicatorState extends State<_PulsingGeofenceIndicator>
@@ -921,9 +986,13 @@ class _PulsingGeofenceIndicatorState extends State<_PulsingGeofenceIndicator>
               height: 48,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: colorScheme.error.withOpacity(0.2 * (1 - _pulseController.value)),
+                color: colorScheme.error.withOpacity(
+                  0.2 * (1 - _pulseController.value),
+                ),
                 border: Border.all(
-                  color: colorScheme.error.withOpacity(0.8 * (1 - _pulseController.value)),
+                  color: colorScheme.error.withOpacity(
+                    0.8 * (1 - _pulseController.value),
+                  ),
                   width: 3 * _pulseController.value,
                 ),
               ),
@@ -939,7 +1008,7 @@ class _PulsingGeofenceIndicatorState extends State<_PulsingGeofenceIndicator>
                     color: colorScheme.error.withOpacity(0.4),
                     blurRadius: 6,
                     spreadRadius: 2,
-                  )
+                  ),
                 ],
               ),
               child: Icon(
@@ -1004,10 +1073,7 @@ class _SlideToConfirmButtonState extends State<_SlideToConfirmButton>
       });
       widget.onConfirm();
     } else {
-      _springAnimation = Tween<double>(
-        begin: _dragOffset,
-        end: 0.0,
-      ).animate(
+      _springAnimation = Tween<double>(begin: _dragOffset, end: 0.0).animate(
         CurvedAnimation(parent: _springController, curve: Curves.easeOut),
       );
       _springController.forward(from: 0.0).then((_) {
@@ -1030,17 +1096,18 @@ class _SlideToConfirmButtonState extends State<_SlideToConfirmButton>
             ? _springAnimation.value
             : _dragOffset;
 
-        final opacityVal = (1.0 - (currentOffset / maxDistance)).clamp(0.0, 1.0);
+        final opacityVal = (1.0 - (currentOffset / maxDistance)).clamp(
+          0.0,
+          1.0,
+        );
 
         return Container(
           width: trackWidth,
           height: 56,
           decoration: BoxDecoration(
-            color: colorScheme.surfaceVariant.withOpacity(0.5),
+            color: colorScheme.surfaceContainerHighest.withOpacity(0.5),
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(
-              color: colorScheme.outline.withOpacity(0.2),
-            ),
+            border: Border.all(color: colorScheme.outline.withOpacity(0.2)),
           ),
           child: Stack(
             alignment: Alignment.centerLeft,
@@ -1062,18 +1129,17 @@ class _SlideToConfirmButtonState extends State<_SlideToConfirmButton>
               Positioned(
                 left: currentOffset + 4.0,
                 child: GestureDetector(
-                  onHorizontalDragUpdate: (details) => _onDragUpdate(details, maxDistance),
-                  onHorizontalDragEnd: (details) => _onDragEnd(details, maxDistance),
+                  onHorizontalDragUpdate: (details) =>
+                      _onDragUpdate(details, maxDistance),
+                  onHorizontalDragEnd: (details) =>
+                      _onDragEnd(details, maxDistance),
                   child: Container(
                     width: _knobSize,
                     height: _knobSize,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       gradient: LinearGradient(
-                        colors: [
-                          colorScheme.primary,
-                          colorScheme.secondary,
-                        ],
+                        colors: [colorScheme.primary, colorScheme.secondary],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
@@ -1082,7 +1148,7 @@ class _SlideToConfirmButtonState extends State<_SlideToConfirmButton>
                           color: colorScheme.primary.withOpacity(0.4),
                           blurRadius: 4,
                           offset: const Offset(0, 2),
-                        )
+                        ),
                       ],
                     ),
                     child: Icon(
@@ -1168,8 +1234,8 @@ class _RideOfferCountdownBar extends StatelessWidget {
     final Color barColor = progress > 0.5
         ? const Color(0xFF1E88E5)
         : progress > 0.25
-            ? Colors.amber.shade600
-            : Colors.redAccent;
+        ? Colors.amber.shade600
+        : Colors.redAccent;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1247,7 +1313,8 @@ class EarningsToast extends StatefulWidget {
   State<EarningsToast> createState() => _EarningsToastState();
 }
 
-class _EarningsToastState extends State<EarningsToast> with SingleTickerProviderStateMixin {
+class _EarningsToastState extends State<EarningsToast>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<Offset> _offsetAnimation;
   late Animation<double> _opacityAnimation;
@@ -1263,18 +1330,12 @@ class _EarningsToastState extends State<EarningsToast> with SingleTickerProvider
     _offsetAnimation = Tween<Offset>(
       begin: const Offset(0.0, -1.5),
       end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOutBack,
-    ));
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
 
     _opacityAnimation = Tween<double>(
       begin: 0.0,
       end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeIn,
-    ));
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeIn));
 
     _controller.forward();
 
@@ -1306,14 +1367,17 @@ class _EarningsToastState extends State<EarningsToast> with SingleTickerProvider
         child: Material(
           color: Colors.transparent,
           child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 24.0),
-            padding: const EdgeInsets.symmetric(horizontal: 18.0, vertical: 14.0),
+            margin: const EdgeInsets.symmetric(
+              horizontal: 20.0,
+              vertical: 24.0,
+            ),
+            padding: const EdgeInsets.symmetric(
+              horizontal: 18.0,
+              vertical: 14.0,
+            ),
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [
-                  const Color(0xFF0F2027),
-                  const Color(0xFF203A43),
-                ],
+                colors: [const Color(0xFF0F2027), const Color(0xFF203A43)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),

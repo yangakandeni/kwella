@@ -35,3 +35,26 @@
 
 ## 5. Engineering Governance
 * **Code Quality & Stability Constraints:** All code generation tasks must strictly adhere to the anti-deprecation and security guardrails outlined in `KWELLA_CODE_GOVERNANCE.md`.
+
+## 6. Current State of Implementation (Phases 12-15)
+
+The following core modules are fully implemented, thoroughly tested (144+ automated tests), and live in the workspace:
+
+### A. Telematics & Geofencing Ingestion Layer (Phases 12 & 13)
+- **Backend:** `geofence_utils.py` contains optimized Haversine formula logic using an explicit Earth radius constant of `6371000.0` meters. 
+- **WebSocket Loop:** The `bidding_engine` Lambda handler processes incoming `"updateLocation"` payload actions. It computes the distance between the vehicle coordinates and an active trip's destination. If the driver is within `50.0` meters, it injects a transient `"flags": {"geofence_status": "ARRIVED"}` into the synchronous gateway reply without mutating the database record.
+- **Mobile Client:** `KwellaTelemetryController` intercepts this arrived flag via Riverpod. It maps the state change to display an interactive, manual drag-gesture `_SlideToConfirmButton` component on the map screen, leaving final trip lifecycle confirmation under the driver's manual control (Sovereignty Rule).
+
+### B. Marketplace Matching & Live Bidding Tiers (Phase 14)
+- **Backend:** The `"requestTrip"` route executes a multi-page paginated DynamoDB table scan (`LastEvaluatedKey` tracking) to capture all active driver records containing `SK = "TELEMETRY"`. It filters and flags drivers inside a `5000.0`-meter radius, sending them a `"action": "rideOfferAvailable"` broadcast package over their API Gateway socket connections.
+- **Mobile Client:** Driver screens intercept this offer broadcast, spinning up a 15-second ticking decay timer overlay card. It contains an animated progress bar and a multi-tier quick counter-bidding button row:
+  - `bid_accept_base` (Accept Base Fare)
+  - `bid_counter_r15` (Base Fare + R15)
+  - `bid_counter_r30` (Base Fare + R30)
+- Tapping any tier immediately locks user input, stops the countdown timer, clears the active offer state context, and dispatches a `"action": "sendBid"` payload back up the socket.
+
+### C. Financial Payout & Wallet Ledger (Phase 15)
+- **Backend:** Tapping arrival triggers a `"confirmArrival"` action. The backend executes an atomic DynamoDB `TransactWriteItems` operation:
+  - Verifies the Trip status is `'ACCEPTED'` or `'ARRIVED'`, then sets it to `'COMPLETED'`.
+  - Increments the Driver's Wallet balance and `daily_total` record (`SK = "WALLET"`) by exactly 85% of the final agreed bid using strict Python `Decimal` precision currency calculations.
+- **Mobile Client:** Intercepts `"status": "WalletSettled"`, updates the top-header permanent shift earnings tally container, and renders a micro-animated floating success `EarningsToast` notification overlay built on Flutter's overlay framework with an elastic animation curve (`Curves.easeOutBack`).
