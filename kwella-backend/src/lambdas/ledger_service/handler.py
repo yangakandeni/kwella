@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 # Shared-layer imports
 from database.client import get_table
+from ledger_service.cancellation_handler import CancellationLedgerPayload, process_cancellation
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -54,32 +55,6 @@ _dynamodb_client = boto3.client(
 # ---------------------------------------------------------------------------
 # Pydantic v2 request models
 # ---------------------------------------------------------------------------
-
-class ProcessCancellationPayload(BaseModel):
-    """Payload validation model for PROCESS_CANCELLATION."""
-
-    model_config = ConfigDict(
-        extra="forbid",
-        strict=False,
-    )
-
-    rider_id: str = Field(..., min_length=1, description="Bare or USR# prefixed Rider ID.")
-    driver_id: str = Field(..., min_length=1, description="Bare or USR# prefixed Driver ID.")
-    penalty_amount: Decimal = Field(
-        ...,
-        gt=Decimal("0.00"),
-        le=Decimal("30.00"),
-        description="Cancellation penalty amount in ZAR (max R30).",
-    )
-
-    @field_validator("rider_id", "driver_id")
-    @classmethod
-    def strip_prefix(cls, value: str) -> str:
-        """Strip 'USR#' prefix if present to normalize user IDs."""
-        if value.startswith("USR#"):
-            return value[4:]
-        return value
-
 
 class ApplyTripFeePayload(BaseModel):
     """Payload validation model for APPLY_TRIP_FEE."""
@@ -149,76 +124,13 @@ def _server_error(message: str) -> dict[str, Any]:
 # Core logic actions
 # ---------------------------------------------------------------------------
 
-def _process_cancellation(payload: ProcessCancellationPayload) -> dict[str, Any]:
-    """Atomically upsert the Rider's cancellation debt and toggle suspension,
-    while appending the same penalty amount to the Driver's fee holiday balance.
-    Uses transact_write_items to guarantee database atomicity.
-    """
-    table = get_table()
-    table_name = table.name
-
-    rider_pk = f"USR#{payload.rider_id}"
-    driver_pk = f"USR#{payload.driver_id}"
-    profile_sk = "PROFILE"
-
+def _process_cancellation(payload: CancellationLedgerPayload) -> dict[str, Any]:
+    """Delegate the hybrid payment late-cancellation transaction to the dedicated module."""
     try:
-        # Atomically write updates across both profiles using clean client
-        _dynamodb_client.transact_write_items(
-            TransactItems=[
-                {
-                    "Update": {
-                        "TableName": table_name,
-                        "Key": {
-                            "PK": {"S": rider_pk},
-                            "SK": {"S": profile_sk},
-                        },
-                        "UpdateExpression": (
-                            "SET cancellation_debt = if_not_exists(cancellation_debt, :zero) + :penalty, "
-                            "is_suspended = :true"
-                        ),
-                        "ExpressionAttributeValues": {
-                            ":penalty": {"N": str(payload.penalty_amount)},
-                            ":zero": {"N": "0.00"},
-                            ":true": {"BOOL": True},
-                        },
-                    }
-                },
-                {
-                    "Update": {
-                        "TableName": table_name,
-                        "Key": {
-                            "PK": {"S": driver_pk},
-                            "SK": {"S": profile_sk},
-                        },
-                        "UpdateExpression": (
-                            "SET fee_holiday_balance = if_not_exists(fee_holiday_balance, :zero) + :penalty"
-                        ),
-                        "ExpressionAttributeValues": {
-                            ":penalty": {"N": str(payload.penalty_amount)},
-                            ":zero": {"N": "0.00"},
-                        },
-                    }
-                },
-            ]
-        )
-        logger.info(
-            "PROCESS_CANCELLATION completed: rider=%s (+%s ZAR debt, suspended), driver=%s (+%s ZAR fee holiday)",
-            rider_pk,
-            payload.penalty_amount,
-            driver_pk,
-            payload.penalty_amount,
-        )
+        return _ok(process_cancellation(payload))
     except botocore.exceptions.ClientError as exc:
         error_code = exc.response["Error"]["Code"]
-        logger.error("Transaction failed with ClientError [%s]: %s", error_code, exc)
-        return _server_error(f"DynamoDB transactional update failed: {exc.response['Error']['Message']}")
-
-    return _ok({
-        "message": "Cancellation debt and fee holiday applied successfully.",
-        "rider_id": payload.rider_id,
-        "driver_id": payload.driver_id,
-        "applied_penalty": payload.penalty_amount,
-    })
+        return _server_error(f"DynamoDB transactional update failed: {error_code}")
 
 
 def _apply_trip_fee(payload: ApplyTripFeePayload) -> dict[str, Any]:
@@ -299,7 +211,7 @@ def _apply_trip_fee(payload: ApplyTripFeePayload) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _ROUTER = {
-    "PROCESS_CANCELLATION": lambda payload: _process_cancellation(ProcessCancellationPayload(**payload)),
+    "PROCESS_CANCELLATION": lambda payload: _process_cancellation(CancellationLedgerPayload(**payload)),
     "APPLY_TRIP_FEE": lambda payload: _apply_trip_fee(ApplyTripFeePayload(**payload)),
 }
 
@@ -350,15 +262,29 @@ def _normalise_cancellation_payload(raw: dict[str, Any]) -> dict[str, Any]:
 
         riderId       → rider_id
         driverId      → driver_id
-        penaltyAmount → penalty_amount
+        tripId        → trip_id
+        penaltyAmount → amount
+        amount        → amount
+        timestamp     → timestamp
+        driverEnRouteAt → driver_en_route_at
+        cancelledAt   → cancelled_at
+        driverInTransitSeconds → driver_in_transit_seconds
     """
     out = dict(raw)
     if "riderId" in out and "rider_id" not in out:
         out["rider_id"] = out.pop("riderId")
     if "driverId" in out and "driver_id" not in out:
         out["driver_id"] = out.pop("driverId")
-    if "penaltyAmount" in out and "penalty_amount" not in out:
-        out["penalty_amount"] = out.pop("penaltyAmount")
+    if "tripId" in out and "trip_id" not in out:
+        out["trip_id"] = out.pop("tripId")
+    if "penaltyAmount" in out and "amount" not in out:
+        out["amount"] = out.pop("penaltyAmount")
+    if "driverEnRouteAt" in out and "driver_en_route_at" not in out:
+        out["driver_en_route_at"] = out.pop("driverEnRouteAt")
+    if "cancelledAt" in out and "cancelled_at" not in out:
+        out["cancelled_at"] = out.pop("cancelledAt")
+    if "driverInTransitSeconds" in out and "driver_in_transit_seconds" not in out:
+        out["driver_in_transit_seconds"] = out.pop("driverInTransitSeconds")
     return out
 
 

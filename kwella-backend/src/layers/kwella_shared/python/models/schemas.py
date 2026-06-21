@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -177,6 +177,78 @@ class DriverProfile(BaseProfile):
         if not value.strip():
             raise ValueError("assigned_cata_sticker must not be blank.")
         return value.strip().upper()
+
+
+# ---------------------------------------------------------------------------
+# Hybrid payment rails
+# ---------------------------------------------------------------------------
+
+class RiderDebtLedgerItem(BaseModel):
+    """Trip-scoped rider debt item for late cash-cancellation defaults.
+
+    DynamoDB key → PK: USER#<RiderId>, SK: DEBT#<TripId>
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=False,
+    )
+
+    amount: Decimal = Field(
+        ...,
+        gt=Decimal("0.00"),
+        description="Outstanding rider debt in ZAR for the cancelled trip.",
+    )
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(tz=timezone.utc),
+        description="UTC debt creation timestamp.",
+    )
+    status: Literal["PENDING_SETTLEMENT"] = Field(
+        default="PENDING_SETTLEMENT",
+        description="Debt remains open until the rider settles the balance.",
+    )
+    reason: Literal["LATE_CANCELLATION"] = Field(
+        default="LATE_CANCELLATION",
+        description="Business reason for the rider debt state.",
+    )
+
+
+class DriverCreditLedgerItem(BaseModel):
+    """Driver-facing compensating credit posted with zero platform commission.
+
+    DynamoDB key → PK: USER#<DriverId>, SK: LEDGER#<Timestamp>
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=False,
+    )
+
+    amount: Decimal = Field(
+        ...,
+        gt=Decimal("0.00"),
+        description="Flat cancellation payout fee credited to the driver.",
+    )
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(tz=timezone.utc),
+        description="UTC ledger credit timestamp.",
+    )
+    reason: Literal["LATE_CANCELLATION"] = Field(
+        default="LATE_CANCELLATION",
+        description="Business reason for the compensating credit.",
+    )
+    platform_commission_rate: Decimal = Field(
+        default=Decimal("0.00"),
+        description="Zero-percent platform commission rate for the holiday rail.",
+        ge=Decimal("0.00"),
+        le=Decimal("0.00"),
+    )
+    platform_commission_amount: Decimal = Field(
+        default=Decimal("0.00"),
+        description="Absolute commission deduction, fixed at 0.00 ZAR.",
+        ge=Decimal("0.00"),
+        le=Decimal("0.00"),
+    )
 
 
 # ---------------------------------------------------------------------------

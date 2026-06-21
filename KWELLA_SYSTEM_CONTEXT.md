@@ -88,3 +88,17 @@ The following core modules are fully implemented, thoroughly tested (144+ automa
 - **Smoke Test Fallback:** The smoke test wrapper exports a local default for `KWELLA_WS_URL` when it is not already set, so local verification can target `ws://localhost:3001` without requiring explicit setup.
 - **Lifecycle Coverage:** The orchestrator drives `requestTrip`, `rideOfferAvailable`, `sendBid`, `selectBid`, `updateLocation`, `confirmArrival`, `startTrip`, and `submitRating` actions, validating the backend's `WalletSettled` settlement event and rider driver-location sync.
 - **Timeout & State Assertions:** The script enforces 5-second per-step timeouts and aborts on invalid payload contracts, with color-coded console phase blocks for each major lifecycle stage.
+
+## 7. Phase 18: Hybrid Payment Rails & Debt Ledger
+
+### A. Transactional Late-Cancellation Ledger Keys
+- **Rider Debt State Entity:** Cash-trip late cancellations now write a dedicated debt item using `PK = USER#<rider_id>` and `SK = DEBT#<trip_id>`.
+- **Rider Debt Attributes:** Each debt record stores `amount` (`Decimal`), `timestamp` (UTC ISO-8601), `status = PENDING_SETTLEMENT`, and `reason = LATE_CANCELLATION`.
+- **Driver Compensation Ledger Entity:** The paired zero-commission driver credit writes to `PK = USER#<driver_id>` and `SK = LEDGER#<timestamp>`.
+- **Driver Credit Attributes:** Each compensating entry stores `amount`, `timestamp`, `trip_id`, `rider_id`, `reason = LATE_CANCELLATION`, `platform_commission_rate = 0.00`, and `platform_commission_amount = 0.00`.
+
+### B. Ledger Service Enforcement Rule
+- **Owning Module:** `kwella-backend/src/lambdas/ledger_service/cancellation_handler.py` now owns the hybrid payment late-cancellation transaction assembly.
+- **Eligibility Gate:** The transaction only executes when the rider cancels after the driver has been in transit for more than 180 seconds (3 minutes).
+- **Atomic Write Contract:** The backend issues a single DynamoDB `TransactWriteItems` call containing exactly two conditional `Put` operations: the rider debt item and the driver compensating credit item.
+- **Rollback Guarantee:** If either conditional write fails, DynamoDB cancels the entire transaction so no partial debt or credit record is persisted.

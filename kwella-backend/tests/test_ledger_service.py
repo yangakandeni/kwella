@@ -50,7 +50,7 @@ def _create_mock_table() -> Any:
 
 def _reload_ledger_handler():
     """Force re-import the ledger handler to refresh the database client."""
-    for mod_name in ("database.client", "ledger_service.handler"):
+    for mod_name in ("database.client", "ledger_service.cancellation_handler", "ledger_service.handler"):
         if mod_name in sys.modules:
             del sys.modules[mod_name]
     import ledger_service.handler as handler  # noqa: PLC0415
@@ -63,36 +63,38 @@ def _reload_ledger_handler():
 
 @mock_aws
 def test_process_cancellation_applies_debt_and_fee_holiday():
-    """PROCESS_CANCELLATION must atomically set debt on Rider, suspend Rider,
-    and increment fee holiday balance on Driver.
+    """PROCESS_CANCELLATION must atomically create the rider debt item and
+    the zero-commission driver credit entry for a late cancellation.
     """
     table = _create_mock_table()
     handler = _reload_ledger_handler()
-
-    # Pre-populate profiles in DynamoDB
-    table.put_item(Item={"PK": "USR#rider-1", "SK": "PROFILE", "cancellation_debt": Decimal("0.00"), "is_suspended": False})
-    table.put_item(Item={"PK": "USR#driver-1", "SK": "PROFILE", "fee_holiday_balance": Decimal("0.00")})
 
     event = {
         "action_type": "PROCESS_CANCELLATION",
         "payload": {
             "rider_id": "rider-1",
             "driver_id": "driver-1",
-            "penalty_amount": "25.50",
+            "trip_id": "trip-1",
+            "amount": "25.50",
+            "driver_in_transit_seconds": 181,
+            "timestamp": "2026-06-21T10:15:00Z",
         }
     }
 
     response = handler.lambda_handler(event, None)
     assert response["statusCode"] == 200
 
-    # Retrieve Rider record
-    rider_item = table.get_item(Key={"PK": "USR#rider-1", "SK": "PROFILE"})["Item"]
-    assert rider_item["cancellation_debt"] == Decimal("25.50")
-    assert rider_item["is_suspended"] is True
+    rider_item = table.get_item(Key={"PK": "USER#rider-1", "SK": "DEBT#trip-1"})["Item"]
+    assert rider_item["amount"] == Decimal("25.50")
+    assert rider_item["status"] == "PENDING_SETTLEMENT"
+    assert rider_item["reason"] == "LATE_CANCELLATION"
 
-    # Retrieve Driver record
-    driver_item = table.get_item(Key={"PK": "USR#driver-1", "SK": "PROFILE"})["Item"]
-    assert driver_item["fee_holiday_balance"] == Decimal("25.50")
+    driver_item = table.get_item(
+        Key={"PK": "USER#driver-1", "SK": "LEDGER#2026-06-21T10:15:00Z"}
+    )["Item"]
+    assert driver_item["amount"] == Decimal("25.50")
+    assert driver_item["platform_commission_rate"] == Decimal("0.00")
+    assert driver_item["platform_commission_amount"] == Decimal("0.00")
 
 
 @mock_aws
@@ -106,7 +108,9 @@ def test_process_cancellation_rejects_penalty_amount_exceeding_max_cap():
         "payload": {
             "rider_id": "rider-1",
             "driver_id": "driver-1",
-            "penalty_amount": "30.01",  # exceeds R30 cap
+            "trip_id": "trip-1",
+            "amount": "30.01",  # exceeds R30 cap
+            "driver_in_transit_seconds": 181,
         }
     }
 
