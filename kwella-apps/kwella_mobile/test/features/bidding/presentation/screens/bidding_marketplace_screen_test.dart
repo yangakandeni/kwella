@@ -6,6 +6,7 @@ import 'package:kwella_mobile/features/bidding/models/bidding_state.dart';
 import 'package:kwella_mobile/features/bidding/presentation/screens/bidding_marketplace_screen.dart';
 import 'package:kwella_mobile/features/bidding/providers/bidding_provider.dart';
 import 'package:kwella_mobile/features/bidding/services/kwella_websocket_service.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 class FakeKwellaWebSocketService implements KwellaWebSocketService {
   final StreamController<Map<String, dynamic>> _controller =
@@ -50,6 +51,9 @@ class FakeKwellaWebSocketService implements KwellaWebSocketService {
     disposeCalled = true;
     _controller.close();
   }
+
+  @override
+  WebSocketSink get sink => _NoOpSink();
 }
 
 class MockBiddingNotifier extends BiddingNotifier {
@@ -178,4 +182,24 @@ void main() {
     expect(find.text('Connection Failure'), findsOneWidget);
     expect(find.text('WebSocket connection dropped'), findsOneWidget);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Minimal no-op WebSocketSink for interface satisfaction.
+// ---------------------------------------------------------------------------
+class _NoOpSink implements WebSocketSink {
+  @override
+  void add(dynamic data) {}
+
+  @override
+  Future<void> close([int? closeCode, String? closeReason]) async {}
+
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) {}
+
+  @override
+  Future<void> get done async {}
+
+  @override
+  Future<void> addStream(Stream<dynamic> stream) => stream.drain<void>();
 }

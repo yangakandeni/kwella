@@ -68,6 +68,19 @@ resource "aws_apigatewayv2_route_response" "send_bid" {
   route_response_key = "$default"
 }
 
+resource "aws_apigatewayv2_route" "update_location" {
+  api_id                              = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_key                           = "updateLocation"
+  target                              = "integrations/${aws_apigatewayv2_integration.bidding_engine.id}"
+  route_response_selection_expression = "$default"
+}
+
+resource "aws_apigatewayv2_route_response" "update_location" {
+  api_id             = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_id           = aws_apigatewayv2_route.update_location.id
+  route_response_key = "$default"
+}
+
 # ── Lambda Permissions ─────────────────────────────────────────────────────
 resource "aws_lambda_permission" "apigw_invoke_websocket_bidding" {
   statement_id  = "AllowAPIGatewayInvokeWebsocketBidding"

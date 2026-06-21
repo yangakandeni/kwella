@@ -17,8 +17,27 @@ class KwellaWebSocketService {
   /// Public getter for the singleton instance
   static KwellaWebSocketService get instance => _instance;
 
+  /// Named constructor for test subclasses only. Do not use in production.
+  @visibleForTesting
+  KwellaWebSocketService.forTesting();
+
   /// Exposes the real-time bid stream (alias for `stream` to support UI/Riverpod layers)
   Stream<Map<String, dynamic>> get bidStream => stream;
+
+  /// Exposes the underlying WebSocket sink for raw payload dispatch.
+  ///
+  /// Throws a [StateError] if the channel is not currently connected.
+  /// Callers should ensure [isConnected] is `true` before using this getter,
+  /// or catch the [StateError] and reconnect as needed.
+  WebSocketSink get sink {
+    final channel = _channel;
+    if (channel == null) {
+      throw StateError(
+        '[KwellaWebSocketService] Cannot access sink: WebSocket is not connected.',
+      );
+    }
+    return channel.sink;
+  }
 
   /// Resets the singleton instance, primarily used for clean unit testing.
   @visibleForTesting

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kwella_mobile/features/bidding/models/bidding_state.dart';
 import 'package:kwella_mobile/features/bidding/providers/bidding_provider.dart';
 import 'package:kwella_mobile/features/bidding/services/kwella_websocket_service.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 class FakeKwellaWebSocketService implements KwellaWebSocketService {
   final StreamController<Map<String, dynamic>> _controller =
@@ -47,6 +48,11 @@ class FakeKwellaWebSocketService implements KwellaWebSocketService {
     disposeCalled = true;
     _controller.close();
   }
+
+  /// Stub sink — the bidding provider never calls sink.add(), so a no-op
+  /// implementation is sufficient to satisfy the interface.
+  @override
+  WebSocketSink get sink => _NoOpSink();
 
   void emit(Map<String, dynamic> data) {
     _controller.add(data);
@@ -164,4 +170,25 @@ void main() {
     notifier.dispose();
     expect(fakeWsService.hasListeners, isFalse);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Minimal no-op WebSocketSink — only used to satisfy the interface in tests
+// that never exercise sink.add().
+// ---------------------------------------------------------------------------
+class _NoOpSink implements WebSocketSink {
+  @override
+  void add(dynamic data) {}
+
+  @override
+  Future<void> close([int? closeCode, String? closeReason]) async {}
+
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) {}
+
+  @override
+  Future<void> get done async {}
+
+  @override
+  Future<void> addStream(Stream<dynamic> stream) => stream.drain<void>();
 }

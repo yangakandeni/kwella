@@ -7,6 +7,7 @@ Supported WebSocket route keys (dispatched by API Gateway WebSocket proxy):
   $connect          — Extract authorization, record connection telemetry, and save active connection session row.
   $disconnect       — Delete connection session metadata.
   sendBid           — Parse and extract particulars from Driver counter-offers.
+  updateLocation    — Ingest real-time driver telematics telemetry and persist to DynamoDB.
 
 Governance compliance (KWELLA_CODE_GOVERNANCE.md):
   - Python 3.12 native syntax and type hints; no legacy typing imports (e.g. List, Dict).
@@ -178,6 +179,132 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     "message": "Bid received successfully (placeholder)",
                     "bid_particulars": bid_particulars
                 })
+            }
+
+        elif route_key == "updateLocation":
+            # Parse the incoming telematics payload from the WebSocket body.
+            # API Gateway v2 WebSocket delivers the JSON message as the top-level
+            # event body string; fall back to the event root for direct invocations.
+            raw_body = event.get("body")
+            if raw_body:
+                try:
+                    payload = json.loads(raw_body)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Failed to parse JSON body for updateLocation route on connectionId=%s: %s",
+                        connection_id,
+                        exc,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Request body must be valid JSON.",
+                        }),
+                    }
+            else:
+                # Allow direct invocation with a flat event (e.g. from tests or
+                # internal callers that embed the fields at the top level).
+                payload = event
+
+            driver_id: str | None = payload.get("driverId")
+            latitude = payload.get("latitude")
+            longitude = payload.get("longitude")
+            heading = payload.get("heading")
+            speed = payload.get("speed")
+
+            # Validate required fields.
+            missing = [k for k, v in {
+                "driverId": driver_id,
+                "latitude": latitude,
+                "longitude": longitude,
+            }.items() if v is None]
+            if missing:
+                logger.warning(
+                    "updateLocation payload missing required fields %s on connectionId=%s",
+                    missing,
+                    connection_id,
+                )
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": f"Missing required telematics fields: {missing}",
+                    }),
+                }
+
+            # Validate that coordinate values are numeric.
+            for field_name, field_value in (
+                ("latitude", latitude),
+                ("longitude", longitude),
+                ("heading", heading),
+                ("speed", speed),
+            ):
+                if field_value is not None and not isinstance(field_value, (int, float)):
+                    logger.warning(
+                        "updateLocation received non-numeric value for field '%s' on connectionId=%s",
+                        field_name,
+                        connection_id,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": f"Field '{field_name}' must be a numeric value.",
+                        }),
+                    }
+
+            updated_at = datetime.now(UTC).isoformat()
+            pk = f"DRIVER#{driver_id}"
+
+            logger.info(
+                "Persisting telematics for driverId=%s lat=%.6f lon=%.6f",
+                driver_id,
+                latitude,
+                longitude,
+            )
+
+            # Use update_item so that concurrent writes to other SK-keyed
+            # attributes on the same PK are not clobbered.
+            # ExpressionAttributeNames guards against DynamoDB reserved words
+            # ('name', 'status', 'data', etc.); we alias all attribute names
+            # defensively for clarity and forward-compatibility.
+            update_expression_parts = [
+                "#lat = :lat",
+                "#lon = :lon",
+                "#ua = :ua",
+            ]
+            expression_attr_names: dict[str, str] = {
+                "#lat": "last_latitude",
+                "#lon": "last_longitude",
+                "#ua": "updated_at",
+            }
+            expression_attr_values: dict[str, Any] = {
+                ":lat": str(latitude),
+                ":lon": str(longitude),
+                ":ua": updated_at,
+            }
+
+            if heading is not None:
+                update_expression_parts.append("#hdg = :hdg")
+                expression_attr_names["#hdg"] = "heading"
+                expression_attr_values[":hdg"] = str(heading)
+
+            if speed is not None:
+                update_expression_parts.append("#spd = :spd")
+                expression_attr_names["#spd"] = "speed"
+                expression_attr_values[":spd"] = str(speed)
+
+            table.update_item(
+                Key={"PK": pk, "SK": "TELEMETRY"},
+                UpdateExpression="SET " + ", ".join(update_expression_parts),
+                ExpressionAttributeNames=expression_attr_names,
+                ExpressionAttributeValues=expression_attr_values,
+            )
+
+            return {
+                "statusCode": 200,
+                "body": json.dumps({"status": "Telemetry Latched"}),
             }
 
         else:

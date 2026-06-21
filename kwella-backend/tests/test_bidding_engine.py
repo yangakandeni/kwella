@@ -7,6 +7,7 @@ Covers:
   - $connect: Writes connection tracking session row to DynamoDB (with and without auth token).
   - $disconnect: Deletes connection tracking session row from DynamoDB.
   - sendBid: Parses body, extracts bid particulars, and returns placeholder success block.
+  - updateLocation: Persists driver telematics telemetry to DynamoDB and validates error paths.
   - Error conditions: malformed JSON, unsupported route key, and DynamoDB ClientError.
 """
 
@@ -316,3 +317,317 @@ def test_database_client_error_returns_500(monkeypatch):
     body = json.loads(response["body"])
     assert body["error"] == "InfrastructureError"
     assert "ProvisionedThroughputExceededException" in body["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Route: updateLocation Tests
+# ---------------------------------------------------------------------------
+
+_LOCATION_EVENT_BASE = {
+    "requestContext": {
+        "routeKey": "updateLocation",
+        "connectionId": "conn-driver-telemetry",
+    },
+}
+
+_VALID_TELEMETRY_PAYLOAD = {
+    "action": "updateLocation",
+    "driverId": "USR#drv-12345",
+    "latitude": -33.9249,
+    "longitude": 18.4241,
+    "heading": 180.0,
+    "speed": 11.5,
+}
+
+
+@mock_aws
+def test_update_location_persists_telemetry_to_dynamodb():
+    """Verify updateLocation route writes all telematics fields to DRIVER#<id>/TELEMETRY."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    event = {
+        **_LOCATION_EVENT_BASE,
+        "body": json.dumps(_VALID_TELEMETRY_PAYLOAD),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "Telemetry Latched"
+
+    # Verify DynamoDB record was written under the canonical key scheme
+    res = table.get_item(Key={"PK": "DRIVER#USR#drv-12345", "SK": "TELEMETRY"})
+    item = res.get("Item")
+    assert item is not None, "TELEMETRY row must exist after updateLocation"
+    assert item["PK"] == "DRIVER#USR#drv-12345"
+    assert item["SK"] == "TELEMETRY"
+    assert float(item["last_latitude"]) == pytest.approx(-33.9249)
+    assert float(item["last_longitude"]) == pytest.approx(18.4241)
+    assert float(item["heading"]) == pytest.approx(180.0)
+    assert float(item["speed"]) == pytest.approx(11.5)
+    assert "updated_at" in item
+
+
+@mock_aws
+def test_update_location_flat_event_payload():
+    """Verify updateLocation handles flat event invocation (no body wrapper)."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Flat event: telematics fields embedded directly at root level (no body key)
+    event = {
+        "requestContext": {
+            "routeKey": "updateLocation",
+            "connectionId": "conn-flat-event",
+        },
+        **_VALID_TELEMETRY_PAYLOAD,
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "Telemetry Latched"
+
+    res = table.get_item(Key={"PK": "DRIVER#USR#drv-12345", "SK": "TELEMETRY"})
+    assert res.get("Item") is not None
+
+
+@mock_aws
+def test_update_location_overwrites_stale_telemetry():
+    """Verify successive updateLocation calls overwrite the TELEMETRY record in place."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    first_payload = {**_VALID_TELEMETRY_PAYLOAD, "latitude": -33.9100, "longitude": 18.4000}
+    second_payload = {**_VALID_TELEMETRY_PAYLOAD, "latitude": -33.9249, "longitude": 18.4241}
+
+    handler.lambda_handler(
+        {**_LOCATION_EVENT_BASE, "body": json.dumps(first_payload)},
+        context=None,
+    )
+    handler.lambda_handler(
+        {**_LOCATION_EVENT_BASE, "body": json.dumps(second_payload)},
+        context=None,
+    )
+
+    res = table.get_item(Key={"PK": "DRIVER#USR#drv-12345", "SK": "TELEMETRY"})
+    item = res["Item"]
+    # Only the second write's coordinates should be stored
+    assert float(item["last_latitude"]) == pytest.approx(-33.9249)
+    assert float(item["last_longitude"]) == pytest.approx(18.4241)
+
+
+@mock_aws
+def test_update_location_without_optional_heading_and_speed():
+    """Verify updateLocation succeeds when optional heading and speed are omitted."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        "action": "updateLocation",
+        "driverId": "USR#drv-no-heading",
+        "latitude": -26.2041,
+        "longitude": 28.0473,
+    }
+
+    event = {**_LOCATION_EVENT_BASE, "body": json.dumps(payload)}
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    res = table.get_item(Key={"PK": "DRIVER#USR#drv-no-heading", "SK": "TELEMETRY"})
+    item = res.get("Item")
+    assert item is not None
+    assert float(item["last_latitude"]) == pytest.approx(-26.2041)
+    assert float(item["last_longitude"]) == pytest.approx(28.0473)
+    # Optional fields must not be present when not supplied
+    assert "heading" not in item
+    assert "speed" not in item
+
+
+@mock_aws
+def test_update_location_missing_driver_id_returns_400():
+    """Verify updateLocation returns 400 when driverId is absent."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        "action": "updateLocation",
+        "latitude": -33.9249,
+        "longitude": 18.4241,
+    }
+
+    event = {**_LOCATION_EVENT_BASE, "body": json.dumps(payload)}
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "driverId" in body["detail"]
+
+
+@mock_aws
+def test_update_location_missing_latitude_returns_400():
+    """Verify updateLocation returns 400 when latitude is absent."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        "action": "updateLocation",
+        "driverId": "USR#drv-12345",
+        "longitude": 18.4241,
+    }
+
+    event = {**_LOCATION_EVENT_BASE, "body": json.dumps(payload)}
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "latitude" in body["detail"]
+
+
+@mock_aws
+def test_update_location_missing_longitude_returns_400():
+    """Verify updateLocation returns 400 when longitude is absent."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        "action": "updateLocation",
+        "driverId": "USR#drv-12345",
+        "latitude": -33.9249,
+    }
+
+    event = {**_LOCATION_EVENT_BASE, "body": json.dumps(payload)}
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "longitude" in body["detail"]
+
+
+@mock_aws
+def test_update_location_malformed_json_body_returns_400():
+    """Verify updateLocation fails gracefully when body is not valid JSON."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    event = {**_LOCATION_EVENT_BASE, "body": "not-valid-json{{{"}
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "JSON" in body["detail"]
+
+
+@mock_aws
+def test_update_location_non_numeric_latitude_returns_400():
+    """Verify updateLocation returns 400 when latitude is a string instead of a float."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        "action": "updateLocation",
+        "driverId": "USR#drv-12345",
+        "latitude": "not-a-number",
+        "longitude": 18.4241,
+    }
+
+    event = {**_LOCATION_EVENT_BASE, "body": json.dumps(payload)}
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "latitude" in body["detail"]
+
+
+@mock_aws
+def test_update_location_non_numeric_longitude_returns_400():
+    """Verify updateLocation returns 400 when longitude is a string instead of a float."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        "action": "updateLocation",
+        "driverId": "USR#drv-12345",
+        "latitude": -33.9249,
+        "longitude": "cape-town",
+    }
+
+    event = {**_LOCATION_EVENT_BASE, "body": json.dumps(payload)}
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "longitude" in body["detail"]
+
+
+@mock_aws
+def test_update_location_non_numeric_heading_returns_400():
+    """Verify updateLocation returns 400 when heading is a non-numeric string."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        **_VALID_TELEMETRY_PAYLOAD,
+        "heading": "north",
+    }
+
+    event = {**_LOCATION_EVENT_BASE, "body": json.dumps(payload)}
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "heading" in body["detail"]
+
+
+@mock_aws
+def test_update_location_non_numeric_speed_returns_400():
+    """Verify updateLocation returns 400 when speed is a non-numeric string."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        **_VALID_TELEMETRY_PAYLOAD,
+        "speed": "fast",
+    }
+
+    event = {**_LOCATION_EVENT_BASE, "body": json.dumps(payload)}
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "speed" in body["detail"]
+
+
+@mock_aws
+def test_update_location_dynamodb_client_error_returns_500(monkeypatch):
+    """Verify a DynamoDB ClientError during telematics write returns a clean 500."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    def mock_update_item(*args, **kwargs):
+        raise ClientError(
+            {"Error": {"Code": "ServiceUnavailable", "Message": "Service is unavailable"}},
+            "UpdateItem",
+        )
+
+    table = handler.get_table()
+    monkeypatch.setattr(table, "update_item", mock_update_item)
+
+    event = {**_LOCATION_EVENT_BASE, "body": json.dumps(_VALID_TELEMETRY_PAYLOAD)}
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 500
+    body = json.loads(response["body"])
+    assert body["error"] == "InfrastructureError"
+    assert "ServiceUnavailable" in body["detail"]
