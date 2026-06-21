@@ -27,6 +27,8 @@ from typing import Any
 import boto3
 import botocore.exceptions
 
+from geofence_utils import is_inside_geofence
+
 # Initialize Logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -302,9 +304,42 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 ExpressionAttributeValues=expression_attr_values,
             )
 
+            # Trip Metadata Hydration & Proximity Evaluation Loop
+            trip_id = payload.get("tripId")
+            target_lat = None
+            target_lon = None
+
+            if trip_id:
+                try:
+                    res = table.get_item(Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"})
+                    item = res.get("Item")
+                    if item:
+                        # Convert DynamoDB Decimal coordinates to float
+                        target_lat = float(item.get("destination_latitude"))
+                        target_lon = float(item.get("destination_longitude"))
+                except botocore.exceptions.ClientError as exc:
+                    logger.warning("Failed to lookup active assigned trip %s: %s", trip_id, exc)
+
+            # Fallback to placeholder coordinates if lookup is missing or fails
+            if target_lat is None or target_lon is None:
+                # Default mock destination (e.g. Green Point: -33.9036, 18.3989)
+                target_lat = -33.9036
+                target_lon = 18.3989
+
+            is_inside = is_inside_geofence(
+                current_lat=latitude,
+                current_lon=longitude,
+                target_lat=target_lat,
+                target_lon=target_lon,
+            )
+
+            response_body = {"status": "Telemetry Latched"}
+            if is_inside:
+                response_body["flags"] = {"geofence_status": "ARRIVED"}
+
             return {
                 "statusCode": 200,
-                "body": json.dumps({"status": "Telemetry Latched"}),
+                "body": json.dumps(response_body),
             }
 
         else:

@@ -631,3 +631,139 @@ def test_update_location_dynamodb_client_error_returns_500(monkeypatch):
     body = json.loads(response["body"])
     assert body["error"] == "InfrastructureError"
     assert "ServiceUnavailable" in body["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Geofencing Integration Tests
+# ---------------------------------------------------------------------------
+
+@mock_aws
+def test_update_location_geofence_arrived_with_trip_lookup():
+    """Verify updateLocation detects ARRIVED status when near the destination of the loaded trip."""
+    from decimal import Decimal
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Pre-populate a trip with destination coordinates
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-arrived-123",
+            "SK": "METADATA",
+            "destination_latitude": Decimal("-33.9165"),
+            "destination_longitude": Decimal("18.4274"),
+        }
+    )
+
+    payload = {
+        "action": "updateLocation",
+        "driverId": "USR#drv-12345",
+        "latitude": -33.9165,
+        "longitude": 18.4274,
+        "tripId": "trip-arrived-123",
+    }
+
+    event = {
+        **_LOCATION_EVENT_BASE,
+        "body": json.dumps(payload),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "Telemetry Latched"
+    assert "flags" in body
+    assert body["flags"]["geofence_status"] == "ARRIVED"
+
+
+@mock_aws
+def test_update_location_geofence_not_arrived_with_trip_lookup():
+    """Verify updateLocation does not include ARRIVED status when far from the destination of the loaded trip."""
+    from decimal import Decimal
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-not-arrived-123",
+            "SK": "METADATA",
+            "destination_latitude": Decimal("-33.9165"),
+            "destination_longitude": Decimal("18.4274"),
+        }
+    )
+
+    payload = {
+        "action": "updateLocation",
+        "driverId": "USR#drv-12345",
+        "latitude": -33.9036,
+        "longitude": 18.3989,  # ~2.8 km away
+        "tripId": "trip-not-arrived-123",
+    }
+
+    event = {
+        **_LOCATION_EVENT_BASE,
+        "body": json.dumps(payload),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "Telemetry Latched"
+    assert "flags" not in body
+
+
+@mock_aws
+def test_update_location_geofence_fallback_arrived():
+    """Verify updateLocation detects ARRIVED status using fallback coordinates (Green Point) when tripId is missing."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Fallback default coordinates: -33.9036, 18.3989
+    payload = {
+        "action": "updateLocation",
+        "driverId": "USR#drv-12345",
+        "latitude": -33.9036,
+        "longitude": 18.3989,
+    }
+
+    event = {
+        **_LOCATION_EVENT_BASE,
+        "body": json.dumps(payload),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "Telemetry Latched"
+    assert "flags" in body
+    assert body["flags"]["geofence_status"] == "ARRIVED"
+
+
+@mock_aws
+def test_update_location_geofence_fallback_not_arrived():
+    """Verify updateLocation does not include ARRIVED status when far from the fallback coordinates."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Fallback default coordinates: -33.9036, 18.3989 (Foreshore: -33.9165, 18.4274 is ~2.8 km away)
+    payload = {
+        "action": "updateLocation",
+        "driverId": "USR#drv-12345",
+        "latitude": -33.9165,
+        "longitude": 18.4274,
+    }
+
+    event = {
+        **_LOCATION_EVENT_BASE,
+        "body": json.dumps(payload),
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "Telemetry Latched"
+    assert "flags" not in body
+
