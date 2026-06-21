@@ -37,6 +37,8 @@ dependencies:
   web_socket_channel: ^3.0.3
   flutter_dotenv: ^5.1.0
   flutter_riverpod: ^2.4.9
+  firebase_core: ^2.16.0
+  firebase_messaging: ^14.6.4
   # Phase 12 – Dynamic Location Tracking & Telematics
   geolocator: ^14.0.3
 

@@ -1,5 +1,10 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'features/location/presentation/controllers/kwella_telemetry_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -8,7 +13,32 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('Failed to load dotenv file: $e');
   }
-  runApp(const MyApp());
+
+  try {
+    await Firebase.initializeApp();
+    debugPrint('Firebase initialized successfully.');
+  } catch (e) {
+    debugPrint('Firebase initialization failed: $e');
+  }
+
+  final container = ProviderContainer();
+  _setupFirebaseNotificationListeners(container);
+
+  runApp(ProviderScope(parent: container, child: const MyApp()));
+}
+
+void _setupFirebaseNotificationListeners(ProviderContainer container) {
+  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    final data = message.data;
+    if (data['action'] == 'rideOfferAvailable') {
+      debugPrint(
+        '[Main] Push notification opened with rideOfferAvailable payload: $data',
+      );
+      container
+          .read(telemetryControllerProvider.notifier)
+          .handlePushNotificationClick(data);
+    }
+  });
 }
 
 class MyApp extends StatelessWidget {

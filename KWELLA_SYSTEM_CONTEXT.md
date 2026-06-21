@@ -58,3 +58,9 @@ The following core modules are fully implemented, thoroughly tested (144+ automa
   - Verifies the Trip status is `'ACCEPTED'` or `'ARRIVED'`, then sets it to `'COMPLETED'`.
   - Increments the Driver's Wallet balance and `daily_total` record (`SK = "WALLET"`) by exactly 85% of the final agreed bid using strict Python `Decimal` precision currency calculations.
 - **Mobile Client:** Intercepts `"status": "WalletSettled"`, updates the top-header permanent shift earnings tally container, and renders a micro-animated floating success `EarningsToast` notification overlay built on Flutter's overlay framework with an elastic animation curve (`Curves.easeOutBack`).
+
+### D. Asynchronous Push Notification Fallback Infrastructure (Phase 16)
+- **Mobile Client:** Added push notification deep-linking in `lib/main.dart` using `FirebaseMessaging.onMessageOpenedApp.listen`. When a driver taps a notification with `action: "rideOfferAvailable"`, the client reads `tripId`, `base_fare`, and coordinate payload fields, then forwards the data to `KwellaTelemetryController.handlePushNotificationClick`.
+- **State & Reconnaissance:** `KwellaTelemetryController` now forces a WebSocket reconnect via `KwellaWebSocketService.connect()` whenever the app resumes from a disconnected socket state before hydrating `TelemetryState.activeOffer`.
+- **Offer Hydration:** Push notification payloads are deserialized into `ActiveRideOffer` using a new `fromPushNotification()` factory, and the standard 15-second countdown timer is started exactly as with normal WebSocket offers.
+- **Test Coverage:** Added targeted unit test coverage in `test/features/location/presentation/controllers/kwella_telemetry_controller_test.dart` validating push-click offer hydration, countdown initialization, and WebSocket reconnection behavior.

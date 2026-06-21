@@ -78,16 +78,17 @@ class TelemetryState {
 
   @override
   int get hashCode => Object.hash(
-        isTracking,
-        isWithinGeofenceRadius,
-        activeOffer,
-        offerSecondsRemaining,
-        dailyEarningsTotal,
-        lastNetEarnings,
-      );
+    isTracking,
+    isWithinGeofenceRadius,
+    activeOffer,
+    offerSecondsRemaining,
+    dailyEarningsTotal,
+    lastNetEarnings,
+  );
 
   @override
-  String toString() => 'TelemetryState('
+  String toString() =>
+      'TelemetryState('
       'isTracking: $isTracking, '
       'isWithinGeofenceRadius: $isWithinGeofenceRadius, '
       'activeOffer: $activeOffer, '
@@ -153,12 +154,11 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
   KwellaTelemetryController({
     KwellaLocationService? locationService,
     KwellaWebSocketService? wsService,
-  })  : _locationService = locationService ?? KwellaLocationService.instance,
-        _wsService = wsService ?? KwellaWebSocketService.instance,
-        super(const TelemetryState(
-          isTracking: false,
-          isWithinGeofenceRadius: false,
-        ));
+  }) : _locationService = locationService ?? KwellaLocationService.instance,
+       _wsService = wsService ?? KwellaWebSocketService.instance,
+       super(
+         const TelemetryState(isTracking: false, isWithinGeofenceRadius: false),
+       );
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -192,8 +192,7 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
     );
 
     // Step 1 — Permission handshake.
-    final bool granted =
-        await _locationService.requestLocationPermissions();
+    final bool granted = await _locationService.requestLocationPermissions();
 
     if (!granted) {
       debugPrint(
@@ -206,42 +205,38 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
     state = state.copyWith(isTracking: true);
 
     // Step 2 — Subscribe to the hardware position stream.
-    _positionSubscription = _locationService
-        .startPositionStream()
-        .listen(
-          (position) {
-            // Step 3 — Dispatch telemetry frame through the WebSocket sink.
-            final payload = jsonEncode({
-              'action': 'updateLocation',
-              'driverId': driverId,
-              'latitude': position.latitude,
-              'longitude': position.longitude,
-              'heading': position.heading,
-              'speed': position.speed,
-            });
+    _positionSubscription = _locationService.startPositionStream().listen(
+      (position) {
+        // Step 3 — Dispatch telemetry frame through the WebSocket sink.
+        final payload = jsonEncode({
+          'action': 'updateLocation',
+          'driverId': driverId,
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'heading': position.heading,
+          'speed': position.speed,
+        });
 
-            debugPrint(
-              '[KwellaTelemetryController] Dispatching telemetry: $payload',
-            );
-
-            _wsService.sink.add(payload);
-          },
-          onError: (Object error, StackTrace stack) {
-            debugPrint(
-              '[KwellaTelemetryController] Position stream error: $error',
-            );
-          },
-          onDone: () {
-            debugPrint(
-              '[KwellaTelemetryController] Position stream closed for '
-              'driver: $driverId',
-            );
-            // Null the subscription reference so isTracking reflects reality.
-            _positionSubscription = null;
-            state = state.copyWith(isTracking: false);
-          },
-          cancelOnError: false,
+        debugPrint(
+          '[KwellaTelemetryController] Dispatching telemetry: $payload',
         );
+
+        _wsService.sink.add(payload);
+      },
+      onError: (Object error, StackTrace stack) {
+        debugPrint('[KwellaTelemetryController] Position stream error: $error');
+      },
+      onDone: () {
+        debugPrint(
+          '[KwellaTelemetryController] Position stream closed for '
+          'driver: $driverId',
+        );
+        // Null the subscription reference so isTracking reflects reality.
+        _positionSubscription = null;
+        state = state.copyWith(isTracking: false);
+      },
+      cancelOnError: false,
+    );
 
     // Step 4 — Intercept WebSocket events for geofencing & ride offers.
     _wsSubscription = _wsService.bidStream.listen(
@@ -251,9 +246,13 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
 
         // --- Wallet settlement --------------------------------------------------
         if (status == 'WalletSettled') {
-          debugPrint('[KwellaTelemetryController] WalletSettled status intercepted: $data');
-          final double updatedDailyTotal = (data['updated_daily_total'] as num?)?.toDouble() ?? 0.0;
-          final double netEarnings = (data['net_earnings'] as num?)?.toDouble() ?? 0.0;
+          debugPrint(
+            '[KwellaTelemetryController] WalletSettled status intercepted: $data',
+          );
+          final double updatedDailyTotal =
+              (data['updated_daily_total'] as num?)?.toDouble() ?? 0.0;
+          final double netEarnings =
+              (data['net_earnings'] as num?)?.toDouble() ?? 0.0;
           state = state.copyWith(
             dailyEarningsTotal: updatedDailyTotal,
             lastNetEarnings: netEarnings,
@@ -263,18 +262,24 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
         // --- Geofencing: ARRIVED flag ------------------------------------------
         final flags = data['flags'];
         if (flags is Map && flags['geofence_status'] == 'ARRIVED') {
-          debugPrint('[KwellaTelemetryController] Geofence ARRIVED status intercepted.');
+          debugPrint(
+            '[KwellaTelemetryController] Geofence ARRIVED status intercepted.',
+          );
           state = state.copyWith(isWithinGeofenceRadius: true);
         }
 
         // --- Ride offer: rideOfferAvailable broadcast --------------------------
         if (action == 'rideOfferAvailable') {
-          debugPrint('[KwellaTelemetryController] rideOfferAvailable received: $data');
+          debugPrint(
+            '[KwellaTelemetryController] rideOfferAvailable received: $data',
+          );
           _handleIncomingRideOffer(data);
         }
       },
       onError: (Object error) {
-        debugPrint('[KwellaTelemetryController] WebSocket telemetry subscription error: $error');
+        debugPrint(
+          '[KwellaTelemetryController] WebSocket telemetry subscription error: $error',
+        );
       },
     );
 
@@ -296,7 +301,9 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
       'timestamp': DateTime.now().toUtc().toIso8601String(),
     });
 
-    debugPrint('[KwellaTelemetryController] Dispatching confirmArrival: $payload');
+    debugPrint(
+      '[KwellaTelemetryController] Dispatching confirmArrival: $payload',
+    );
     _wsService.sink.add(payload);
 
     state = state.copyWith(isWithinGeofenceRadius: false);
@@ -320,10 +327,27 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
     _wsService.sink.add(payload);
 
     _cancelOfferCountdown();
-    state = state.copyWith(
-      activeOffer: null,
-      offerSecondsRemaining: 0,
-    );
+    state = state.copyWith(activeOffer: null, offerSecondsRemaining: 0);
+  }
+
+  /// Handles a user tap on the push notification banner by hydrating an active
+  /// ride offer and forcing the WebSocket service to reconnect if needed.
+  void handlePushNotificationClick(Map<String, dynamic> data) {
+    if (!_wsService.isConnected) {
+      debugPrint(
+        '[KwellaTelemetryController] WebSocket disconnected. Reconnecting due to push notification click.',
+      );
+      _wsService.connect();
+    }
+
+    try {
+      final offer = ActiveRideOffer.fromPushNotification(data);
+      _hydrateRideOffer(offer);
+    } catch (e) {
+      debugPrint(
+        '[KwellaTelemetryController] Failed to hydrate offer from push notification: $e',
+      );
+    }
   }
 
   /// Resets the last net earnings to null to prevent displaying the toast UI multiple times.
@@ -354,7 +378,9 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
       );
     }
 
-    debugPrint('[KwellaTelemetryController] Tracking stopped. Streams cancelled and geofence flags reset.');
+    debugPrint(
+      '[KwellaTelemetryController] Tracking stopped. Streams cancelled and geofence flags reset.',
+    );
   }
 
   @override
@@ -372,19 +398,23 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
   void _handleIncomingRideOffer(Map<String, dynamic> data) {
     try {
       final offer = ActiveRideOffer.fromJson(data);
-
-      // Cancel any previously running countdown before installing the new offer.
-      _cancelOfferCountdown();
-
-      state = state.copyWith(
-        activeOffer: offer,
-        offerSecondsRemaining: _kOfferCountdownSeconds,
-      );
-
-      _startOfferCountdown();
+      _hydrateRideOffer(offer);
     } catch (e) {
-      debugPrint('[KwellaTelemetryController] Failed to parse rideOfferAvailable payload: $e');
+      debugPrint(
+        '[KwellaTelemetryController] Failed to parse rideOfferAvailable payload: $e',
+      );
     }
+  }
+
+  void _hydrateRideOffer(ActiveRideOffer offer) {
+    _cancelOfferCountdown();
+
+    state = state.copyWith(
+      activeOffer: offer,
+      offerSecondsRemaining: _kOfferCountdownSeconds,
+    );
+
+    _startOfferCountdown();
   }
 
   /// Starts a periodic 1-second ticker that decrements [offerSecondsRemaining]
@@ -401,11 +431,10 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
       if (remaining <= 0) {
         // Offer has expired — dismiss it cleanly.
         _cancelOfferCountdown();
-        debugPrint('[KwellaTelemetryController] Ride offer expired. Dismissing.');
-        state = state.copyWith(
-          activeOffer: null,
-          offerSecondsRemaining: 0,
+        debugPrint(
+          '[KwellaTelemetryController] Ride offer expired. Dismissing.',
         );
+        state = state.copyWith(activeOffer: null, offerSecondsRemaining: 0);
       } else {
         state = state.copyWith(offerSecondsRemaining: remaining);
       }
@@ -433,5 +462,5 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
 /// ```
 final telemetryControllerProvider =
     StateNotifierProvider<KwellaTelemetryController, TelemetryState>((ref) {
-  return KwellaTelemetryController();
-});
+      return KwellaTelemetryController();
+    });

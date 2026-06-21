@@ -37,10 +37,10 @@ class _FakeLocationService extends KwellaLocationService {
 
   @override
   LocationSettings buildLocationSettings() => const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
-        timeLimit: Duration(seconds: 5),
-      );
+    accuracy: LocationAccuracy.high,
+    distanceFilter: 10,
+    timeLimit: Duration(seconds: 5),
+  );
 
   @override
   Stream<Position> getPositionStream(LocationSettings settings) => fakeStream;
@@ -77,6 +77,8 @@ class _FakeWebSocketService extends KwellaWebSocketService {
   final _CapturingSink _fakeSink = _CapturingSink();
   final StreamController<Map<String, dynamic>> _controller =
       StreamController<Map<String, dynamic>>.broadcast();
+  bool _connected = true;
+  bool connectCalled = false;
 
   List<String> get capturedPayloads => _fakeSink.captured;
 
@@ -94,7 +96,13 @@ class _FakeWebSocketService extends KwellaWebSocketService {
   WebSocketSink get sink => _fakeSink;
 
   @override
-  bool get isConnected => true;
+  bool get isConnected => _connected;
+
+  @override
+  void connect() {
+    connectCalled = true;
+    _connected = true;
+  }
 
   void close() {
     _controller.close();
@@ -134,7 +142,8 @@ Map<String, dynamic> _makeRideOfferPayload({
   double baseFare = 45.50,
   DateTime? expiresAt,
 }) {
-  final expiry = expiresAt ?? DateTime.now().toUtc().add(const Duration(seconds: 15));
+  final expiry =
+      expiresAt ?? DateTime.now().toUtc().add(const Duration(seconds: 15));
   return {
     'action': 'rideOfferAvailable',
     'tripId': tripId,
@@ -171,82 +180,76 @@ void main() {
   // ---- Core dispatch -------------------------------------------------------
 
   group('startDriverTracking — telemetry dispatch —', () {
-    test(
-      'pushes a correctly structured updateLocation JSON payload for each '
-      'position frame emitted by the hardware stream',
-      () async {
-        // Arrange: inject two mock GPS frames.
-        final frame1 = _makePosition(
-          latitude: -33.9249,
-          longitude: 18.4241,
-          heading: 180.0,
-          speed: 11.5,
-        );
-        final frame2 = _makePosition(
-          latitude: -33.9270,
-          longitude: 18.4255,
-          heading: 175.0,
-          speed: 13.0,
-        );
-        locationService.fakeStream = Stream.fromIterable([frame1, frame2]);
+    test('pushes a correctly structured updateLocation JSON payload for each '
+        'position frame emitted by the hardware stream', () async {
+      // Arrange: inject two mock GPS frames.
+      final frame1 = _makePosition(
+        latitude: -33.9249,
+        longitude: 18.4241,
+        heading: 180.0,
+        speed: 11.5,
+      );
+      final frame2 = _makePosition(
+        latitude: -33.9270,
+        longitude: 18.4255,
+        heading: 175.0,
+        speed: 13.0,
+      );
+      locationService.fakeStream = Stream.fromIterable([frame1, frame2]);
 
-        // Act.
-        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+      // Act.
+      await controller.startDriverTracking(driverId: 'USR#drv-12345');
 
-        // Allow the stream to drain fully.
-        await Future<void>.delayed(Duration.zero);
+      // Allow the stream to drain fully.
+      await Future<void>.delayed(Duration.zero);
 
-        // Assert: two payloads were captured on the sink.
-        final payloads = wsService.capturedPayloads;
-        expect(payloads.length, equals(2));
+      // Assert: two payloads were captured on the sink.
+      final payloads = wsService.capturedPayloads;
+      expect(payloads.length, equals(2));
 
-        // Decode and validate the first frame.
-        final decoded1 = jsonDecode(payloads[0]) as Map<String, dynamic>;
-        expect(decoded1['action'], equals('updateLocation'));
-        expect(decoded1['driverId'], equals('USR#drv-12345'));
-        expect(decoded1['latitude'], closeTo(-33.9249, 0.0001));
-        expect(decoded1['longitude'], closeTo(18.4241, 0.0001));
-        expect(decoded1['heading'], closeTo(180.0, 0.001));
-        expect(decoded1['speed'], closeTo(11.5, 0.001));
+      // Decode and validate the first frame.
+      final decoded1 = jsonDecode(payloads[0]) as Map<String, dynamic>;
+      expect(decoded1['action'], equals('updateLocation'));
+      expect(decoded1['driverId'], equals('USR#drv-12345'));
+      expect(decoded1['latitude'], closeTo(-33.9249, 0.0001));
+      expect(decoded1['longitude'], closeTo(18.4241, 0.0001));
+      expect(decoded1['heading'], closeTo(180.0, 0.001));
+      expect(decoded1['speed'], closeTo(11.5, 0.001));
 
-        // Decode and validate the second frame.
-        final decoded2 = jsonDecode(payloads[1]) as Map<String, dynamic>;
-        expect(decoded2['action'], equals('updateLocation'));
-        expect(decoded2['driverId'], equals('USR#drv-12345'));
-        expect(decoded2['latitude'], closeTo(-33.9270, 0.0001));
-        expect(decoded2['longitude'], closeTo(18.4255, 0.0001));
-        expect(decoded2['heading'], closeTo(175.0, 0.001));
-        expect(decoded2['speed'], closeTo(13.0, 0.001));
-      },
-    );
+      // Decode and validate the second frame.
+      final decoded2 = jsonDecode(payloads[1]) as Map<String, dynamic>;
+      expect(decoded2['action'], equals('updateLocation'));
+      expect(decoded2['driverId'], equals('USR#drv-12345'));
+      expect(decoded2['latitude'], closeTo(-33.9270, 0.0001));
+      expect(decoded2['longitude'], closeTo(18.4255, 0.0001));
+      expect(decoded2['heading'], closeTo(175.0, 0.001));
+      expect(decoded2['speed'], closeTo(13.0, 0.001));
+    });
 
-    test(
-      'dispatches payload with all required JSON keys present',
-      () async {
-        locationService.fakeStream = Stream.fromIterable([
-          _makePosition(
-            latitude: -26.2041,
-            longitude: 28.0473,
-            heading: 90.0,
-            speed: 8.3,
-          ),
-        ]);
+    test('dispatches payload with all required JSON keys present', () async {
+      locationService.fakeStream = Stream.fromIterable([
+        _makePosition(
+          latitude: -26.2041,
+          longitude: 28.0473,
+          heading: 90.0,
+          speed: 8.3,
+        ),
+      ]);
 
-        await controller.startDriverTracking(driverId: 'USR#drv-99999');
-        await Future<void>.delayed(Duration.zero);
+      await controller.startDriverTracking(driverId: 'USR#drv-99999');
+      await Future<void>.delayed(Duration.zero);
 
-        final decoded =
-            jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+      final decoded =
+          jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
 
-        // Every key mandated by the AWS route schema must be present.
-        expect(decoded.containsKey('action'), isTrue);
-        expect(decoded.containsKey('driverId'), isTrue);
-        expect(decoded.containsKey('latitude'), isTrue);
-        expect(decoded.containsKey('longitude'), isTrue);
-        expect(decoded.containsKey('heading'), isTrue);
-        expect(decoded.containsKey('speed'), isTrue);
-      },
-    );
+      // Every key mandated by the AWS route schema must be present.
+      expect(decoded.containsKey('action'), isTrue);
+      expect(decoded.containsKey('driverId'), isTrue);
+      expect(decoded.containsKey('latitude'), isTrue);
+      expect(decoded.containsKey('longitude'), isTrue);
+      expect(decoded.containsKey('heading'), isTrue);
+      expect(decoded.containsKey('speed'), isTrue);
+    });
   });
 
   // ---- Permission gate -----------------------------------------------------
@@ -278,23 +281,20 @@ void main() {
   // ---- Idempotent start ----------------------------------------------------
 
   group('startDriverTracking — idempotency —', () {
-    test(
-      'is a no-op when called while already tracking',
-      () async {
-        // Set up a stream that never completes so tracking stays active.
-        final controller1 = StreamController<Position>();
-        locationService.fakeStream = controller1.stream;
+    test('is a no-op when called while already tracking', () async {
+      // Set up a stream that never completes so tracking stays active.
+      final controller1 = StreamController<Position>();
+      locationService.fakeStream = controller1.stream;
 
-        await controller.startDriverTracking(driverId: 'USR#drv-12345');
-        expect(controller.isTracking, isTrue);
+      await controller.startDriverTracking(driverId: 'USR#drv-12345');
+      expect(controller.isTracking, isTrue);
 
-        // Second call should be silently ignored — no assertion error.
-        await controller.startDriverTracking(driverId: 'USR#drv-12345');
-        expect(controller.isTracking, isTrue);
+      // Second call should be silently ignored — no assertion error.
+      await controller.startDriverTracking(driverId: 'USR#drv-12345');
+      expect(controller.isTracking, isTrue);
 
-        controller1.close();
-      },
-    );
+      controller1.close();
+    });
   });
 
   // ---- Safe teardown -------------------------------------------------------
@@ -314,9 +314,7 @@ void main() {
         expect(controller.isTracking, isFalse);
 
         // No more frames should be dispatched after stop.
-        streamController.add(
-          _makePosition(latitude: -1.0, longitude: 2.0),
-        );
+        streamController.add(_makePosition(latitude: -1.0, longitude: 2.0));
         await Future<void>.delayed(Duration.zero);
 
         expect(wsService.capturedPayloads, isEmpty);
@@ -344,9 +342,7 @@ void main() {
         // Simulate websocket event
         wsService.feedMessage({
           'status': 'Telemetry Latched',
-          'flags': {
-            'geofence_status': 'ARRIVED',
-          }
+          'flags': {'geofence_status': 'ARRIVED'},
         });
 
         // Allow microtasks to complete
@@ -365,9 +361,7 @@ void main() {
 
         // Set arrived status
         wsService.feedMessage({
-          'flags': {
-            'geofence_status': 'ARRIVED',
-          }
+          'flags': {'geofence_status': 'ARRIVED'},
         });
         await Future<void>.delayed(Duration.zero);
         expect(controller.state.isWithinGeofenceRadius, isTrue);
@@ -383,7 +377,9 @@ void main() {
 
         // Assert network confirmation message dispatched
         expect(wsService.capturedPayloads.length, equals(1));
-        final decoded = jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+        final decoded =
+            jsonDecode(wsService.capturedPayloads.first)
+                as Map<String, dynamic>;
         expect(decoded['action'], equals('confirmArrival'));
         expect(decoded['driverId'], equals('USR#drv-12345'));
         expect(decoded['tripId'], equals('trip-abc-123'));
@@ -401,9 +397,7 @@ void main() {
         expect(controller.isTracking, isTrue);
 
         wsService.feedMessage({
-          'flags': {
-            'geofence_status': 'ARRIVED',
-          }
+          'flags': {'geofence_status': 'ARRIVED'},
         });
         await Future<void>.delayed(Duration.zero);
         expect(controller.state.isWithinGeofenceRadius, isTrue);
@@ -421,118 +415,142 @@ void main() {
   // ---- Ride Offer Hydration ------------------------------------------------
 
   group('Ride Offer — state hydration —', () {
+    test('receiving rideOfferAvailable event hydrates activeOffer and starts '
+        'the countdown at 15 seconds', () async {
+      locationService.fakeStream = const Stream<Position>.empty();
+      await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+      // Initially no offer is present.
+      expect(controller.state.activeOffer, isNull);
+      expect(controller.state.offerSecondsRemaining, equals(0));
+
+      // Feed the marketplace event.
+      final payload = _makeRideOfferPayload(
+        tripId: 'TRIP#hydrate-001',
+        pickupLocation: 'Cape Town CBD',
+        dropoffLocation: 'V&A Waterfront',
+        baseFare: 55.00,
+      );
+      wsService.feedMessage(payload);
+
+      // Wait for the stream event to be processed.
+      await Future<void>.delayed(Duration.zero);
+
+      final offer = controller.state.activeOffer;
+      expect(offer, isNotNull);
+      expect(offer!.tripId, equals('TRIP#hydrate-001'));
+      expect(offer.pickupLocation, equals('Cape Town CBD'));
+      expect(offer.dropoffLocation, equals('V&A Waterfront'));
+      expect(offer.baseFare, closeTo(55.00, 0.001));
+      expect(controller.state.offerSecondsRemaining, equals(15));
+    });
+
+    test('all required ActiveRideOffer fields are correctly parsed from the '
+        'WebSocket payload', () async {
+      locationService.fakeStream = const Stream<Position>.empty();
+      await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+      final expiresAt = DateTime.utc(
+        2024,
+        6,
+        21,
+        8,
+        0,
+        15,
+      ); // fixed for assertion
+
+      wsService.feedMessage({
+        'action': 'rideOfferAvailable',
+        'tripId': 'TRIP#field-check',
+        'pickupLocation': 'Sandton City',
+        'dropoffLocation': 'OR Tambo International',
+        'baseFare': 320.75,
+        'expiresAt': expiresAt.toIso8601String(),
+      });
+
+      await Future<void>.delayed(Duration.zero);
+
+      final offer = controller.state.activeOffer!;
+      expect(offer.tripId, equals('TRIP#field-check'));
+      expect(offer.pickupLocation, equals('Sandton City'));
+      expect(offer.dropoffLocation, equals('OR Tambo International'));
+      expect(offer.baseFare, closeTo(320.75, 0.001));
+      expect(offer.expiresAt, equals(expiresAt));
+    });
+
+    test('a second rideOfferAvailable event replaces the previous offer and '
+        'resets the countdown to 15', () async {
+      locationService.fakeStream = const Stream<Position>.empty();
+      await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+      // Feed first offer.
+      wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#first'));
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.state.activeOffer?.tripId, equals('TRIP#first'));
+
+      // Feed a replacement offer immediately.
+      wsService.feedMessage(
+        _makeRideOfferPayload(tripId: 'TRIP#second', baseFare: 99.00),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.state.activeOffer?.tripId, equals('TRIP#second'));
+      expect(controller.state.activeOffer?.baseFare, closeTo(99.00, 0.001));
+      // Countdown must have been reset to 15.
+      expect(controller.state.offerSecondsRemaining, equals(15));
+    });
+
+    test('a malformed rideOfferAvailable payload is gracefully ignored without '
+        'throwing or corrupting existing state', () async {
+      locationService.fakeStream = const Stream<Position>.empty();
+      await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+      // Feed a valid offer first so we can assert state is unchanged.
+      wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#valid'));
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.state.activeOffer?.tripId, equals('TRIP#valid'));
+
+      // Feed a malformed offer (missing required fields).
+      wsService.feedMessage({
+        'action': 'rideOfferAvailable',
+        // Missing tripId, pickupLocation, etc.
+        'baseFare': 'not-a-number',
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      // The previous valid offer must remain unchanged.
+      expect(controller.state.activeOffer?.tripId, equals('TRIP#valid'));
+    });
+
     test(
-      'receiving rideOfferAvailable event hydrates activeOffer and starts '
-      'the countdown at 15 seconds',
+      'handlePushNotificationClick hydrates the active offer and starts the countdown',
       () async {
         locationService.fakeStream = const Stream<Position>.empty();
-        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+        wsService._connected = false;
 
-        // Initially no offer is present.
-        expect(controller.state.activeOffer, isNull);
-        expect(controller.state.offerSecondsRemaining, equals(0));
+        final payload = {
+          'action': 'rideOfferAvailable',
+          'tripId': 'TRIP#push-001',
+          'pickupLocation': 'Woodstock',
+          'dropoffLocation': 'Sea Point',
+          'base_fare': 128.50,
+          'expiresAt': DateTime.now()
+              .toUtc()
+              .add(const Duration(seconds: 15))
+              .toIso8601String(),
+        };
 
-        // Feed the marketplace event.
-        final payload = _makeRideOfferPayload(
-          tripId: 'TRIP#hydrate-001',
-          pickupLocation: 'Cape Town CBD',
-          dropoffLocation: 'V&A Waterfront',
-          baseFare: 55.00,
+        controller.handlePushNotificationClick(payload);
+
+        expect(
+          wsService.connectCalled,
+          isTrue,
+          reason: 'The WebSocket service must reconnect when disconnected.',
         );
-        wsService.feedMessage(payload);
 
-        // Wait for the stream event to be processed.
-        await Future<void>.delayed(Duration.zero);
-
-        final offer = controller.state.activeOffer;
-        expect(offer, isNotNull);
-        expect(offer!.tripId, equals('TRIP#hydrate-001'));
-        expect(offer.pickupLocation, equals('Cape Town CBD'));
-        expect(offer.dropoffLocation, equals('V&A Waterfront'));
-        expect(offer.baseFare, closeTo(55.00, 0.001));
+        expect(controller.state.activeOffer, isNotNull);
+        expect(controller.state.activeOffer?.tripId, equals('TRIP#push-001'));
         expect(controller.state.offerSecondsRemaining, equals(15));
-      },
-    );
-
-    test(
-      'all required ActiveRideOffer fields are correctly parsed from the '
-      'WebSocket payload',
-      () async {
-        locationService.fakeStream = const Stream<Position>.empty();
-        await controller.startDriverTracking(driverId: 'USR#drv-12345');
-
-        final expiresAt =
-            DateTime.utc(2024, 6, 21, 8, 0, 15); // fixed for assertion
-
-        wsService.feedMessage({
-          'action': 'rideOfferAvailable',
-          'tripId': 'TRIP#field-check',
-          'pickupLocation': 'Sandton City',
-          'dropoffLocation': 'OR Tambo International',
-          'baseFare': 320.75,
-          'expiresAt': expiresAt.toIso8601String(),
-        });
-
-        await Future<void>.delayed(Duration.zero);
-
-        final offer = controller.state.activeOffer!;
-        expect(offer.tripId, equals('TRIP#field-check'));
-        expect(offer.pickupLocation, equals('Sandton City'));
-        expect(offer.dropoffLocation, equals('OR Tambo International'));
-        expect(offer.baseFare, closeTo(320.75, 0.001));
-        expect(offer.expiresAt, equals(expiresAt));
-      },
-    );
-
-    test(
-      'a second rideOfferAvailable event replaces the previous offer and '
-      'resets the countdown to 15',
-      () async {
-        locationService.fakeStream = const Stream<Position>.empty();
-        await controller.startDriverTracking(driverId: 'USR#drv-12345');
-
-        // Feed first offer.
-        wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#first'));
-        await Future<void>.delayed(Duration.zero);
-        expect(controller.state.activeOffer?.tripId, equals('TRIP#first'));
-
-        // Feed a replacement offer immediately.
-        wsService.feedMessage(_makeRideOfferPayload(
-          tripId: 'TRIP#second',
-          baseFare: 99.00,
-        ));
-        await Future<void>.delayed(Duration.zero);
-
-        expect(controller.state.activeOffer?.tripId, equals('TRIP#second'));
-        expect(controller.state.activeOffer?.baseFare, closeTo(99.00, 0.001));
-        // Countdown must have been reset to 15.
-        expect(controller.state.offerSecondsRemaining, equals(15));
-      },
-    );
-
-    test(
-      'a malformed rideOfferAvailable payload is gracefully ignored without '
-      'throwing or corrupting existing state',
-      () async {
-        locationService.fakeStream = const Stream<Position>.empty();
-        await controller.startDriverTracking(driverId: 'USR#drv-12345');
-
-        // Feed a valid offer first so we can assert state is unchanged.
-        wsService.feedMessage(
-            _makeRideOfferPayload(tripId: 'TRIP#valid'));
-        await Future<void>.delayed(Duration.zero);
-        expect(controller.state.activeOffer?.tripId, equals('TRIP#valid'));
-
-        // Feed a malformed offer (missing required fields).
-        wsService.feedMessage({
-          'action': 'rideOfferAvailable',
-          // Missing tripId, pickupLocation, etc.
-          'baseFare': 'not-a-number',
-        });
-        await Future<void>.delayed(Duration.zero);
-
-        // The previous valid offer must remain unchanged.
-        expect(controller.state.activeOffer?.tripId, equals('TRIP#valid'));
       },
     );
 
@@ -578,8 +596,11 @@ void main() {
         await Future<void>.delayed(const Duration(seconds: 16));
 
         // The offer must have been purged.
-        expect(controller.state.activeOffer, isNull,
-            reason: 'Offer should be null after the 15-second countdown expires');
+        expect(
+          controller.state.activeOffer,
+          isNull,
+          reason: 'Offer should be null after the 15-second countdown expires',
+        );
         expect(controller.state.offerSecondsRemaining, equals(0));
       },
       // This test relies on a real Timer, so set a generous timeout.
@@ -592,17 +613,25 @@ void main() {
         locationService.fakeStream = const Stream<Position>.empty();
         await controller.startDriverTracking(driverId: 'USR#drv-12345');
 
-        wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#expire-partial'));
+        wsService.feedMessage(
+          _makeRideOfferPayload(tripId: 'TRIP#expire-partial'),
+        );
         await Future<void>.delayed(Duration.zero);
         expect(controller.state.offerSecondsRemaining, equals(15));
 
         // Advance 14 seconds — offer should still be active.
         await Future<void>.delayed(const Duration(seconds: 14));
 
-        expect(controller.state.activeOffer, isNotNull,
-            reason: 'Offer should still be present at t+14s');
-        expect(controller.state.offerSecondsRemaining, inInclusiveRange(0, 2),
-            reason: 'Remaining seconds should be between 0 and 2 at t+14s');
+        expect(
+          controller.state.activeOffer,
+          isNotNull,
+          reason: 'Offer should still be present at t+14s',
+        );
+        expect(
+          controller.state.offerSecondsRemaining,
+          inInclusiveRange(0, 2),
+          reason: 'Remaining seconds should be between 0 and 2 at t+14s',
+        );
       },
       timeout: const Timeout(Duration(seconds: 25)),
     );
@@ -662,39 +691,35 @@ void main() {
   // ---- submitBid — counter-proposal / acceptance ----
 
   group('Ride Offer — submitBid (counter-proposal/acceptance) —', () {
-    test(
-      'submitBid dispatches a correctly structured sendBid payload with the '
-      'targeted bid_amount to the WebSocket sink',
-      () async {
-        locationService.fakeStream = const Stream<Position>.empty();
-        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+    test('submitBid dispatches a correctly structured sendBid payload with the '
+        'targeted bid_amount to the WebSocket sink', () async {
+      locationService.fakeStream = const Stream<Position>.empty();
+      await controller.startDriverTracking(driverId: 'USR#drv-12345');
 
-        // Hydrate an active offer first so the context is realistic.
-        wsService.feedMessage(_makeRideOfferPayload(
-          tripId: 'TRIP#bid-001',
-          baseFare: 120.0,
-        ));
-        await Future<void>.delayed(Duration.zero);
-        expect(controller.state.activeOffer, isNotNull);
+      // Hydrate an active offer first so the context is realistic.
+      wsService.feedMessage(
+        _makeRideOfferPayload(tripId: 'TRIP#bid-001', baseFare: 120.0),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.state.activeOffer, isNotNull);
 
-        // Act — driver taps "+R15" counter-bid.
-        await controller.submitBid(
-          driverId: 'USR#drv-12345',
-          tripId: 'TRIP#bid-001',
-          bidAmount: 135.0,
-        );
+      // Act — driver taps "+R15" counter-bid.
+      await controller.submitBid(
+        driverId: 'USR#drv-12345',
+        tripId: 'TRIP#bid-001',
+        bidAmount: 135.0,
+      );
 
-        // Assert: exactly one payload was captured (location stream is empty,
-        // so the only sink.add() comes from submitBid).
-        expect(wsService.capturedPayloads.length, equals(1));
-        final decoded =
-            jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
-        expect(decoded['action'], equals('sendBid'));
-        expect(decoded['driverId'], equals('USR#drv-12345'));
-        expect(decoded['tripId'], equals('TRIP#bid-001'));
-        expect(decoded['bid_amount'], closeTo(135.0, 0.001));
-      },
-    );
+      // Assert: exactly one payload was captured (location stream is empty,
+      // so the only sink.add() comes from submitBid).
+      expect(wsService.capturedPayloads.length, equals(1));
+      final decoded =
+          jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+      expect(decoded['action'], equals('sendBid'));
+      expect(decoded['driverId'], equals('USR#drv-12345'));
+      expect(decoded['tripId'], equals('TRIP#bid-001'));
+      expect(decoded['bid_amount'], closeTo(135.0, 0.001));
+    });
 
     test(
       'submitBid with base fare amount dispatches bid_amount equal to baseFare',
@@ -702,10 +727,9 @@ void main() {
         locationService.fakeStream = const Stream<Position>.empty();
         await controller.startDriverTracking(driverId: 'USR#drv-12345');
 
-        wsService.feedMessage(_makeRideOfferPayload(
-          tripId: 'TRIP#bid-base',
-          baseFare: 90.0,
-        ));
+        wsService.feedMessage(
+          _makeRideOfferPayload(tripId: 'TRIP#bid-base', baseFare: 90.0),
+        );
         await Future<void>.delayed(Duration.zero);
 
         await controller.submitBid(
@@ -715,7 +739,8 @@ void main() {
         );
 
         final decoded =
-            jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+            jsonDecode(wsService.capturedPayloads.first)
+                as Map<String, dynamic>;
         expect(decoded['bid_amount'], closeTo(90.0, 0.001));
       },
     );
@@ -726,10 +751,9 @@ void main() {
         locationService.fakeStream = const Stream<Position>.empty();
         await controller.startDriverTracking(driverId: 'USR#drv-12345');
 
-        wsService.feedMessage(_makeRideOfferPayload(
-          tripId: 'TRIP#bid-r30',
-          baseFare: 200.0,
-        ));
+        wsService.feedMessage(
+          _makeRideOfferPayload(tripId: 'TRIP#bid-r30', baseFare: 200.0),
+        );
         await Future<void>.delayed(Duration.zero);
 
         await controller.submitBid(
@@ -739,60 +763,55 @@ void main() {
         );
 
         final decoded =
-            jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+            jsonDecode(wsService.capturedPayloads.first)
+                as Map<String, dynamic>;
         expect(decoded['bid_amount'], closeTo(230.0, 0.001));
       },
     );
 
-    test(
-      'submitBid cancels the countdown timer and clears activeOffer state '
-      'to prevent double-submitting',
-      () async {
-        locationService.fakeStream = const Stream<Position>.empty();
-        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+    test('submitBid cancels the countdown timer and clears activeOffer state '
+        'to prevent double-submitting', () async {
+      locationService.fakeStream = const Stream<Position>.empty();
+      await controller.startDriverTracking(driverId: 'USR#drv-12345');
 
-        wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#bid-reset'));
-        await Future<void>.delayed(Duration.zero);
+      wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#bid-reset'));
+      await Future<void>.delayed(Duration.zero);
 
-        // Offer and countdown must be live before the bid.
-        expect(controller.state.activeOffer, isNotNull);
-        expect(controller.state.offerSecondsRemaining, equals(15));
+      // Offer and countdown must be live before the bid.
+      expect(controller.state.activeOffer, isNotNull);
+      expect(controller.state.offerSecondsRemaining, equals(15));
 
-        await controller.submitBid(
-          driverId: 'USR#drv-12345',
-          tripId: 'TRIP#bid-reset',
-          bidAmount: 60.0,
-        );
+      await controller.submitBid(
+        driverId: 'USR#drv-12345',
+        tripId: 'TRIP#bid-reset',
+        bidAmount: 60.0,
+      );
 
-        // Both offer and countdown must be reset after submission.
-        expect(controller.state.activeOffer, isNull);
-        expect(controller.state.offerSecondsRemaining, equals(0));
-      },
-    );
+      // Both offer and countdown must be reset after submission.
+      expect(controller.state.activeOffer, isNull);
+      expect(controller.state.offerSecondsRemaining, equals(0));
+    });
 
-    test(
-      'submitBid payload contains all required JSON keys',
-      () async {
-        locationService.fakeStream = const Stream<Position>.empty();
-        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+    test('submitBid payload contains all required JSON keys', () async {
+      locationService.fakeStream = const Stream<Position>.empty();
+      await controller.startDriverTracking(driverId: 'USR#drv-12345');
 
-        wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#bid-keys'));
-        await Future<void>.delayed(Duration.zero);
+      wsService.feedMessage(_makeRideOfferPayload(tripId: 'TRIP#bid-keys'));
+      await Future<void>.delayed(Duration.zero);
 
-        await controller.submitBid(
-          driverId: 'USR#drv-12345',
-          tripId: 'TRIP#bid-keys',
-          bidAmount: 75.0,
-        );
+      await controller.submitBid(
+        driverId: 'USR#drv-12345',
+        tripId: 'TRIP#bid-keys',
+        bidAmount: 75.0,
+      );
 
-        final decoded =
-            jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
-        expect(decoded.containsKey('action'), isTrue);
-        expect(decoded.containsKey('driverId'), isTrue);
-        expect(decoded.containsKey('tripId'), isTrue);
-        expect(decoded.containsKey('bid_amount'), isTrue);
-      },
-    );
+      final decoded =
+          jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
+      expect(decoded.containsKey('action'), isTrue);
+      expect(decoded.containsKey('driverId'), isTrue);
+      expect(decoded.containsKey('tripId'), isTrue);
+      expect(decoded.containsKey('bid_amount'), isTrue);
+    });
   });
 }
 
