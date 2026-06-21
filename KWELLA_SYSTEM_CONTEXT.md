@@ -64,3 +64,9 @@ The following core modules are fully implemented, thoroughly tested (144+ automa
 - **State & Reconnaissance:** `KwellaTelemetryController` now forces a WebSocket reconnect via `KwellaWebSocketService.connect()` whenever the app resumes from a disconnected socket state before hydrating `TelemetryState.activeOffer`.
 - **Offer Hydration:** Push notification payloads are deserialized into `ActiveRideOffer` using a new `fromPushNotification()` factory, and the standard 15-second countdown timer is started exactly as with normal WebSocket offers.
 - **Test Coverage:** Added targeted unit test coverage in `test/features/location/presentation/controllers/kwella_telemetry_controller_test.dart` validating push-click offer hydration, countdown initialization, and WebSocket reconnection behavior.
+
+### E. Mobile App Split & Rider Companion State Machine (Phase 17)
+- **Monorepo Refactor:** The mobile application workspace has been split into two separate Flutter clients under `kwella-apps/`: `kwella_driver` (existing driver app) and `kwella_rider` (new rider companion app).
+- **Rider State Machine:** `kwella_rider` now includes an incoming WebSocket event multiplexer in `lib/features/booking/presentation/controllers/kwella_rider_controller.dart` with a `RiderTripStatus` lifecycle of `idle`, `searching`, `biddingOpen`, `accepted`, `arrived`, and `completed`.
+- **Event Transitions:** The rider controller maps `driverBidReceived` to `biddingOpen`, `tripMatchConfirmed` to `accepted`, `geofenceTrigger` to `arrived`, and a `status` field of `WalletSettled` to `completed`.
+- **Controller Validation:** The new suite includes `test/kwella_rider_controller_test.dart`, which asserts that an incoming driver bid event transitions the status to `biddingOpen`.

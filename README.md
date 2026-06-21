@@ -64,7 +64,16 @@ Autonomous agents must strictly respect this workspace tree when generating infr
 │   │   ├── app/                    # Dashboard core views and routing layouts
 │   │   ├── node_modules/           # Local web dependencies
 │   │   └── public/                 # Static web assets and brand logos
-│   └── kwella_mobile/              # Flutter Cross-Platform Mobile Client
+│   ├── kwella_driver/              # Flutter Driver Mobile Client
+│   │   ├── android/                # Native Android application configuration
+│   │   ├── ios/                    # Native iOS application configuration
+│   │   ├── lib/                    # Dart source (Riverpod providers & WebSocket architecture)
+│   │   ├── linux/                  # Linux desktop platform wrapper
+│   │   ├── macos/                  # macOS desktop platform wrapper
+│   │   ├── test/                   # Flutter widget and unit test suites
+│   │   ├── web/                    # Web-app mobile container configuration
+│   │   └── windows/                # Windows desktop platform wrapper
+│   └── kwella_rider/               # Flutter Rider Companion Client
 │       ├── android/                # Native Android application configuration
 │       ├── ios/                    # Native iOS application configuration
 │       ├── lib/                    # Dart source (Riverpod providers & WebSocket architecture)
