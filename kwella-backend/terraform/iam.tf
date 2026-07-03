@@ -61,6 +61,7 @@ data "aws_iam_policy_document" "dynamodb_single_table" {
       "dynamodb:UpdateItem",
       "dynamodb:DeleteItem",
       "dynamodb:Query",
+      "dynamodb:Scan",
       "dynamodb:BatchWriteItem",
     ]
 
@@ -70,6 +71,20 @@ data "aws_iam_policy_document" "dynamodb_single_table" {
       # GSI1 — required for Query operations that target the index
       "${aws_dynamodb_table.kwella_core.arn}/index/GSI1",
     ]
+  }
+
+  statement {
+    sid    = "KwellaBiddingEngineMessaging"
+    effect = "Allow"
+
+    actions = [
+      "execute-api:ManageConnections",
+      "execute-api:Invoke",
+      "sns:Publish",
+      "sns:CreatePlatformEndpoint"
+    ]
+    
+    resources = ["*"]
   }
 }
 

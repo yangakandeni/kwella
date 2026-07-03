@@ -40,7 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 # Shared-layer imports
 from database.client import get_table
-from ledger_service.cancellation_handler import CancellationLedgerPayload, process_cancellation
+from cancellation_handler import CancellationLedgerPayload, process_cancellation
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

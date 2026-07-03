@@ -16,7 +16,11 @@ resource "aws_lambda_function" "bidding_engine" {
 
   environment {
     variables = {
-      KWELLA_TABLE_NAME = aws_dynamodb_table.kwella_core.name
+      KWELLA_TABLE_NAME     = aws_dynamodb_table.kwella_core.name
+      # Management API endpoint used by requestTrip to post rideOfferAvailable
+      # back to connected driver WebSocket sessions.
+      KWELLA_APIGW_ENDPOINT = "https://${aws_apigatewayv2_api.kwella_websocket_api.id}.execute-api.${var.aws_region}.amazonaws.com/${var.environment}"
+      KWELLA_AWS_REGION     = var.aws_region
     }
   }
 }

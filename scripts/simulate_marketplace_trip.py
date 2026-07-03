@@ -34,6 +34,13 @@ try:
 except ImportError:
     certifi = None
 
+try:
+    import boto3  # type: ignore[import]
+    import botocore.exceptions  # type: ignore[import]
+except ImportError:  # pragma: no cover
+    boto3 = None  # type: ignore[assignment]
+    botocore = None  # type: ignore[assignment]
+
 GREEN = "\033[0;32m"
 YELLOW = "\033[0;33m"
 RED = "\033[0;31m"
@@ -332,7 +339,9 @@ async def wait_for_action(client: SimpleWebSocketClient, expected_actions: set[s
 async def mock_driver_client(endpoint: str, auth_token: str | None, shared: dict[str, object]) -> None:
     driver_id = shared["driver_id"]
     log_phase("2 - Driver Discovery & Bid")
-    driver_endpoint = build_mock_ws_uri(endpoint, "MOCK_DRIVER_TOKEN_8765", "DRIVER", "sim-88")
+    # Pass the actual driver_id as userId so $connect can pre-seed DRIVER#<id>/TELEMETRY
+    # with the live connection_id before the first updateLocation write.
+    driver_endpoint = build_mock_ws_uri(endpoint, "MOCK_DRIVER_TOKEN_8765", driver_id, "sim-88")
     client = SimpleWebSocketClient(driver_endpoint, auth_token, insecure=shared["insecure"])
     await client.connect()
     log_success("Driver WebSocket connected")
@@ -350,6 +359,7 @@ async def mock_driver_client(endpoint: str, auth_token: str | None, shared: dict
     response = await client.recv_json(timeout=DEFAULT_TIMEOUT)
     assert_state(response is not None and response.get("status") == "Telemetry Latched", "Driver telemetry update failed")
     log_success("Driver initial telemetry latched")
+    shared["driver_ready_event"].set()
 
     offer_payload = await wait_for_action(client, {"rideOfferAvailable"}, timeout=15.0)
     shared["offer_payload"] = offer_payload
@@ -448,10 +458,13 @@ async def mock_driver_client(endpoint: str, auth_token: str | None, shared: dict
 async def mock_rider_client(endpoint: str, auth_token: str | None, shared: dict[str, object]) -> None:
     rider_id = shared["rider_id"]
     log_phase("1 - Rider Request")
-    rider_endpoint = build_mock_ws_uri(endpoint, "MOCK_RIDER_TOKEN_4321", "RIDER", "sim-99")
+    rider_endpoint = build_mock_ws_uri(endpoint, "MOCK_RIDER_TOKEN_4321", rider_id, "sim-99")
     client = SimpleWebSocketClient(rider_endpoint, auth_token, insecure=shared["insecure"])
     await client.connect()
     log_success("Rider WebSocket connected")
+
+    await shared["driver_ready_event"].wait()
+    log_phase("1 - Rider Request")
 
     pickup = {"latitude": -33.9249, "longitude": 18.4241}
     dropoff = {"latitude": -33.9258, "longitude": 18.4231}
@@ -466,6 +479,8 @@ async def mock_rider_client(endpoint: str, auth_token: str | None, shared: dict[
         "suggested_base_fare": 120.0,
     })
     broadcast_response = await client.recv_json(timeout=DEFAULT_TIMEOUT)
+    if broadcast_response is None or broadcast_response.get("status") != "TripBroadcast":
+        log_error(f"Received unexpected response to requestTrip: {broadcast_response}")
     assert_state(broadcast_response is not None and broadcast_response.get("status") == "TripBroadcast", "Rider requestTrip did not receive TripBroadcast")
     trip_id = broadcast_response.get("tripId")
     shared["trip_id"] = trip_id
@@ -523,6 +538,124 @@ async def mock_rider_client(endpoint: str, auth_token: str | None, shared: dict[
     log_success("Rider connection returned to idle state")
 
 
+# ---------------------------------------------------------------------------
+# Phase 19 — Fleet Clearing Rail: Mock DynamoDB Seeder
+# ---------------------------------------------------------------------------
+
+MOCK_VEHICLE_CATA = "MOCK-SIM-CT-001"
+MOCK_FLEET_OWNER_ID = "FLEET#mock_owner_123"
+
+
+def seed_mock_vehicle_ownership(vehicle_id: str = MOCK_VEHICLE_CATA) -> None:
+    """Pre-populate the local/live DynamoDB table with the VEHICLE#<vehicle_id>/OWNERSHIP
+    record required by the Phase 19 Fleet Operational Clearing Rail.
+
+    This seeds:
+        PK = VEHICLE#<vehicle_id>
+        SK = OWNERSHIP
+        owner_id = FLEET#mock_owner_123
+        status   = ACTIVE
+
+    so that get_settlement_recipient() in clearing_house.py resolves to the
+    fleet owner instead of falling back to DRIVER#UNKNOWN during simulation.
+
+    Governance: KWELLA_CODE_GOVERNANCE.md §6 — Simulator/Emulator Realignment.
+    Degrades gracefully (warning only) if boto3 is unavailable or DynamoDB
+    cannot be reached (e.g. no LocalStack running).
+    """
+    if boto3 is None:
+        print(f"{YELLOW}[fleet-clearing] boto3 not available — skipping mock VEHICLE ownership seed.{NC}")
+        return
+
+    table_name = os.environ.get("KWELLA_TABLE_NAME", "kwella-core-production")
+    region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "af-south-1"))
+    endpoint_url = os.environ.get("KWELLA_DYNAMODB_ENDPOINT_URL")  # e.g. http://localhost:4566 for LocalStack
+
+    try:
+        kwargs: dict[str, object] = {"region_name": region}
+        if endpoint_url:
+            kwargs["endpoint_url"] = endpoint_url
+        # Explicitly pass credentials from environment when available, bypassing
+        # the botocore credential chain that may require botocore[crt] on macOS.
+        aws_key = os.environ.get("AWS_ACCESS_KEY_ID")
+        aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
+        aws_session_token = os.environ.get("AWS_SESSION_TOKEN")
+        if aws_key and aws_secret:
+            kwargs["aws_access_key_id"] = aws_key
+            kwargs["aws_secret_access_key"] = aws_secret
+            if aws_session_token:
+                kwargs["aws_session_token"] = aws_session_token
+        dynamodb = boto3.resource("dynamodb", **kwargs)
+        table = dynamodb.Table(table_name)
+        table.put_item(
+            Item={
+                "PK": f"VEHICLE#{vehicle_id}",
+                "SK": "OWNERSHIP",
+                "owner_id": MOCK_FLEET_OWNER_ID,
+                "status": "ACTIVE",
+            }
+        )
+        print(
+            f"{GREEN}✓ [fleet-clearing] Seeded VEHICLE#{vehicle_id}/OWNERSHIP → owner_id={MOCK_FLEET_OWNER_ID}{NC}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"{YELLOW}[fleet-clearing] WARNING: Could not seed VEHICLE#{vehicle_id}/OWNERSHIP record: {exc}{NC}\n"
+            f"  Clearing rail fallback will route to DRIVER#UNKNOWN — not a hard failure for WebSocket flow."
+        )
+
+
+def assert_clearing_flow_contract(wallet_payload: dict[str, object], bid_amount: float) -> None:
+    """Assert the WalletSettled payload satisfies the Phase 19 clearing flow contract.
+
+    Validates the following fields from the confirmArrival → WalletSettled response:
+      - status  == "WalletSettled"
+      - tripId  is a non-empty string
+      - net_earnings is a positive numeric value
+      - currency == "ZAR"
+
+    Raises RuntimeError (via assert_state) if any field is absent or malformed,
+    consistent with the §6 TDD mandate and simulator synchronization requirement.
+    """
+    log_phase("6 - Payout Settlement: Clearing Flow Contract Validation")
+
+    status = wallet_payload.get("status")
+    assert_state(
+        status == "WalletSettled",
+        f"Clearing contract: expected status='WalletSettled', got '{status}'",
+    )
+
+    trip_id = wallet_payload.get("tripId")
+    assert_state(
+        isinstance(trip_id, str) and len(trip_id) > 0,
+        "Clearing contract: WalletSettled payload missing non-empty 'tripId' field",
+    )
+
+    net_earnings = wallet_payload.get("net_earnings")
+    assert_state(
+        isinstance(net_earnings, (int, float)) and net_earnings > 0,
+        f"Clearing contract: 'net_earnings' must be a positive numeric value, got '{net_earnings}'",
+    )
+
+    currency = wallet_payload.get("currency")
+    assert_state(
+        currency == "ZAR",
+        f"Clearing contract: expected currency='ZAR', got '{currency}'",
+    )
+
+    # Verify net_earnings = bid_amount * 0.85 (85% payout rail, within R0.10 float tolerance)
+    expected_net = round(bid_amount * 0.85, 2)
+    actual_net = round(float(net_earnings), 2)
+    assert_state(
+        abs(actual_net - expected_net) <= 0.10,
+        f"Clearing contract: net_earnings={actual_net} does not match expected 85% payout of {expected_net}",
+    )
+
+    log_success(
+        f"Phase 6 clearing contract validated: tripId={trip_id}, net_earnings=R{actual_net:.2f}, currency={currency}"
+    )
+
+
 async def run_simulation(endpoint: str, auth_token: str | None, insecure: bool) -> None:
     shared: dict[str, object] = {
         "driver_id": f"driver-{uuid.uuid4().hex[:8]}",
@@ -530,12 +663,20 @@ async def run_simulation(endpoint: str, auth_token: str | None, insecure: bool) 
         "insecure": insecure,
         "rider_selected_event": asyncio.Event(),
         "wallet_settled_event": asyncio.Event(),
+        "driver_ready_event": asyncio.Event(),
+        "vehicle_id": MOCK_VEHICLE_CATA,
     }
 
     log_phase("0 - Marketplace Integration Simulation Startup")
     log_success(f"Target WebSocket endpoint: {endpoint}")
     if insecure:
         log_success("TLS certificate verification is disabled for local testing")
+
+    # Phase 19 — Fleet Clearing Rail: seed VEHICLE#/OWNERSHIP record into DynamoDB
+    # before WebSocket clients connect, so clearing_house.get_settlement_recipient()
+    # resolves to FLEET#mock_owner_123 instead of falling back to DRIVER#UNKNOWN.
+    seed_mock_vehicle_ownership(MOCK_VEHICLE_CATA)
+    shared["mock_fleet_owner_id"] = MOCK_FLEET_OWNER_ID
 
     rider_task = asyncio.create_task(mock_rider_client(endpoint, auth_token, shared))
     driver_task = asyncio.create_task(mock_driver_client(endpoint, auth_token, shared))
@@ -549,6 +690,13 @@ async def run_simulation(endpoint: str, auth_token: str | None, insecure: bool) 
         raise
 
     assert_state(shared.get("rider_idle") is True and shared.get("driver_idle") is True, "One or both clients did not return to idle")
+
+    # Final clearing contract assertion — validate the settled wallet payload against Phase 19 schema.
+    wallet_payload = shared.get("wallet_settled_payload") or {}
+    bid_amount = float(shared.get("bid_amount") or 0)
+    if wallet_payload and bid_amount > 0:
+        assert_clearing_flow_contract(dict(wallet_payload), bid_amount)  # type: ignore[arg-type]
+
     log_phase("7 - Final Validation")
     log_success("Marketplace trip simulation completed successfully")
 

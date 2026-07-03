@@ -223,8 +223,47 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             if auth_param:
                 item["auth_token"] = auth_param
 
+            # Extract userId from query string to pre-seed the TELEMETRY record
+            # with the current connection_id. This ensures requestTrip can dispatch
+            # a rideOfferAvailable even before the first updateLocation call.
+            qsp = (event.get("queryStringParameters") or {})
+            user_id_param: str | None = qsp.get("userId") or qsp.get("userid")
+
+            if user_id_param:
+                item["user_id"] = user_id_param
+                # If it's a rider, store a GSI1_PK so sendBid can query it efficiently
+                if user_id_param.startswith("rider-") or user_id_param.upper().startswith("RIDER"):
+                    item["GSI1_PK"] = f"RIDER#{user_id_param}"
+                    item["GSI1_SK"] = timestamp
+
             logger.info("Writing connection metadata item to DynamoDB for connectionId=%s", connection_id)
             table.put_item(Item=item)
+
+            if user_id_param and user_id_param.upper() == "DRIVER":
+                # userId=DRIVER is the mock sim token; skip seeding (no real driverId).
+                pass
+            elif user_id_param and not user_id_param.upper().startswith(("RIDER", "USR#")):
+                # Seed TELEMETRY with the fresh connection_id so spatial scans
+                # from requestTrip can post to this WebSocket immediately.
+                driver_telemetry_pk = f"DRIVER#{user_id_param}"
+                try:
+                    table.update_item(
+                        Key={"PK": driver_telemetry_pk, "SK": "TELEMETRY"},
+                        UpdateExpression="SET #cid = :cid, #ua = :ua",
+                        ExpressionAttributeNames={"#cid": "connection_id", "#ua": "updated_at"},
+                        ExpressionAttributeValues={":cid": connection_id, ":ua": timestamp},
+                    )
+                    logger.info(
+                        "Pre-seeded connection_id on TELEMETRY for driverId=%s connectionId=%s",
+                        user_id_param,
+                        connection_id,
+                    )
+                except Exception as seed_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Could not pre-seed TELEMETRY connection_id for userId=%s: %s",
+                        user_id_param,
+                        seed_exc,
+                    )
 
             return {
                 "statusCode": 200,
@@ -255,25 +294,111 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     "body": json.dumps({"error": "ValidationError", "detail": "Request body must be valid JSON."})
                 }
 
-            # Extract the bid particulars
-            bid_particulars = {
-                "driver_id": body.get("driver_id") or body.get("driverId"),
-                "rider_id": body.get("rider_id") or body.get("riderId"),
-                "amount": body.get("amount") or body.get("counter_fare") or body.get("baseline_fare"),
-                "estimated_pickup": body.get("estimated_pickup") or body.get("estimatedPickup"),
-                "broadcast_pk": body.get("broadcast_pk") or body.get("broadcastPk"),
-                "connection_id": connection_id,
-            }
+            driver_id: str | None = body.get("driver_id") or body.get("driverId")
+            rider_id: str | None = body.get("rider_id") or body.get("riderId")
+            trip_id: str | None = body.get("tripId") or body.get("trip_id")
+            bid_amount = body.get("amount") or body.get("counter_fare") or body.get("baseline_fare")
 
-            logger.info("Received bid particulars on route sendBid: %s", bid_particulars)
+            logger.info(
+                "sendBid received: driverId=%s riderId=%s tripId=%s amount=%s",
+                driver_id, rider_id, trip_id, bid_amount,
+            )
 
-            # Return a placeholder success block
+            # Persist the bid record so selectBid can look it up later.
+            if driver_id and trip_id:
+                table.put_item(Item={
+                    "PK": f"BID#{trip_id}",
+                    "SK": f"DRIVER#{driver_id}",
+                    "driver_id": driver_id,
+                    "rider_id": rider_id,
+                    "trip_id": trip_id,
+                    "amount": str(bid_amount) if bid_amount is not None else "0",
+                    "driver_connection_id": connection_id,
+                    "status": "PENDING",
+                    "created_at": datetime.now(UTC).isoformat(),
+                })
+
+            # Initialize API Gateway client for WebSocket pushes.
+            apigw_client: Any = None
+            if _APIGW_ENDPOINT:
+                apigw_client = boto3.client(
+                    "apigatewaymanagementapi",
+                    endpoint_url=_APIGW_ENDPOINT,
+                    region_name=_AWS_REGION,
+                )
+
+            # Push driverBidReceived to the rider's active WebSocket connection.
+            # Look up the rider's connection_id via their TELEMETRY record.
+            rider_conn_id: str | None = None
+            if rider_id and apigw_client:
+                # Rider connection is stored in CONN#<connectionId>/METADATA with
+                # the userId query param. Scan active connections for the rider.
+                try:
+                    rider_conn_resp = table.query(
+                        IndexName="GSI1",
+                        KeyConditionExpression="GSI1_PK = :rpk",
+                        ExpressionAttributeValues={":rpk": f"RIDER#{rider_id}"},
+                    )
+                    rider_items = rider_conn_resp.get("Items", [])
+                    if rider_items:
+                        rider_conn_id = rider_items[0].get("connection_id")
+                except Exception as lookup_exc:  # noqa: BLE001
+                    logger.warning("Could not look up rider connection for riderId=%s: %s", rider_id, lookup_exc)
+
+            # If GSI1 lookup failed, fall back to scanning CONN# records for this rider.
+            if not rider_conn_id and rider_id and apigw_client:
+                try:
+                    conn_scan = table.scan(
+                        FilterExpression="SK = :sk AND #uid = :uid",
+                        ExpressionAttributeNames={"#uid": "user_id"},
+                        ExpressionAttributeValues={":sk": "METADATA", ":uid": rider_id},
+                        ConsistentRead=True,
+                    )
+                    conn_items = conn_scan.get("Items", [])
+                    for ci in conn_items:
+                        pk = ci.get("PK", "")
+                        if pk.startswith("CONN#"):
+                            rider_conn_id = pk.removeprefix("CONN#")
+                            break
+                except Exception as scan_exc:  # noqa: BLE001
+                    logger.warning("CONN scan for riderId=%s failed: %s", rider_id, scan_exc)
+
+            if rider_conn_id and apigw_client:
+                bid_notification = json.dumps({
+                    "action": "driverBidReceived",
+                    "tripId": trip_id,
+                    "driverId": driver_id,
+                    "amount": bid_amount,
+                    "driver_connection_id": connection_id,
+                }).encode("utf-8")
+                try:
+                    apigw_client.post_to_connection(
+                        ConnectionId=rider_conn_id,
+                        Data=bid_notification,
+                    )
+                    logger.info(
+                        "Dispatched driverBidReceived to rider connectionId=%s for tripId=%s",
+                        rider_conn_id, trip_id,
+                    )
+                except botocore.exceptions.ClientError as notify_exc:
+                    logger.warning(
+                        "Failed to push driverBidReceived to riderConnectionId=%s: %s",
+                        rider_conn_id, notify_exc,
+                    )
+            else:
+                logger.warning(
+                    "Could not resolve rider WebSocket connection for riderId=%s tripId=%s — skipping push",
+                    rider_id, trip_id,
+                )
+
+            # Return success response
             return {
                 "statusCode": 200,
                 "body": json.dumps({
                     "status": "Success",
-                    "message": "Bid received successfully (placeholder)",
-                    "bid_particulars": bid_particulars
+                    "message": "Bid received and dispatched to rider.",
+                    "tripId": trip_id,
+                    "driverId": driver_id,
                 })
             }
 
@@ -390,6 +515,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 update_expression_parts.append("#spd = :spd")
                 expression_attr_names["#spd"] = "speed"
                 expression_attr_values[":spd"] = str(speed)
+
+            update_expression_parts.append("#cid = :cid")
+            expression_attr_names["#cid"] = "connection_id"
+            expression_attr_values[":cid"] = connection_id
 
             table.update_item(
                 Key={"PK": pk, "SK": "TELEMETRY"},
@@ -667,6 +796,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             scan_response = table.scan(
                 FilterExpression="SK = :sk",
                 ExpressionAttributeValues={":sk": "TELEMETRY"},
+                ConsistentRead=True,
             )
             driver_records: list[dict[str, Any]] = scan_response.get("Items", [])
 
@@ -676,6 +806,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     FilterExpression="SK = :sk",
                     ExpressionAttributeValues={":sk": "TELEMETRY"},
                     ExclusiveStartKey=scan_response["LastEvaluatedKey"],
+                    ConsistentRead=True,
                 )
                 driver_records.extend(scan_response.get("Items", []))
 

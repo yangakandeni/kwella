@@ -219,15 +219,24 @@ if [[ ! -f "${SIMULATOR_SCRIPT}" ]]; then
   exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
+# Prefer the project venv python (carries boto3 for Phase 19 fleet-clearing seed).
+# Fall back to system python3 for portability in CI environments without a venv.
+VENV_PYTHON="${PROJECT_ROOT}/.venv/bin/python3"
+if [[ -x "${VENV_PYTHON}" ]]; then
+  PYTHON_BIN="${VENV_PYTHON}"
+  echo -e "${YELLOW}[simulator] Using venv python: ${PYTHON_BIN}${NC}"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+  echo -e "${YELLOW}[simulator] venv python not found; falling back to system python3.${NC}"
+else
   echo -e "${RED}[simulator] FATAL: python3 is not available in PATH.${NC}"
   echo "  Install Python 3 and ensure 'python3' resolves to the runtime used for local orchestration."
   exit 1
 fi
 
 echo ""
-echo -e "${YELLOW}[simulator] Launching local marketplace simulation via python3 scripts/simulate_marketplace_trip.py${NC}"
-if ! python3 "${SIMULATOR_SCRIPT}"; then
+echo -e "${YELLOW}[simulator] Launching local marketplace simulation via ${PYTHON_BIN} scripts/simulate_marketplace_trip.py${NC}"
+if ! "${PYTHON_BIN}" "${SIMULATOR_SCRIPT}"; then
   EXIT_CODE=$?
   echo ""
   echo -e "${RED}========================================================${NC}"
