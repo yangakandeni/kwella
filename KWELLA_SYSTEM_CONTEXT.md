@@ -106,3 +106,22 @@ The following core modules are fully implemented, thoroughly tested (144+ automa
 - **Eligibility Gate:** The transaction only executes when the rider cancels after the driver has been in transit for more than 180 seconds (3 minutes).
 - **Atomic Write Contract:** The backend issues a single DynamoDB `TransactWriteItems` call containing exactly two conditional `Put` operations: the rider debt item and the driver compensating credit item.
 - **Rollback Guarantee:** If either conditional write fails, DynamoDB cancels the entire transaction so no partial debt or credit record is persisted.
+
+## 8. Phase 19: Fleet Operational Clearing Layout
+
+### A. Data Layer Schema Mapping
+- **Vehicle Ownership Association Record:** Fleet ownership maps explicitly via:
+  - `PK = VEHICLE#<vehicle_id>`
+  - `SK = OWNERSHIP`
+- **Ownership Attributes:**
+  - `owner_id` (Formatted as `DRIVER#<driver_id>` or `FLEET#<owner_id>`)
+  - `status = ACTIVE`
+
+### B. Route Clearing House Logic
+- **Module:** `kwella-backend/src/lambdas/ledger_service/clearing_house.py`
+- **Method:** `get_settlement_recipient(vehicle_id)`
+- **Behavior:**
+  1. Queries DynamoDB for the vehicle's `VEHICLE#<vehicle_id>` ownership association record under the `OWNERSHIP` sort key.
+  2. If an active record is found, extracts and returns the configured `owner_id` (routing 100% of gross weekly earnings to that target).
+  3. If no active ownership record exists, defaults the routing target to the active driver assigned to the vehicle by querying the GSI1 index (`GSI1_PK = VEH#<vehicle_id>`, `GSI1_SK = DRIVER`) and formatting the result as `DRIVER#<driver_id>`.
+  4. If no driver profile is found, defaults to `DRIVER#UNKNOWN` as a safe fallback.
