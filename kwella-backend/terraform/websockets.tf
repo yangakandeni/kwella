@@ -98,6 +98,58 @@ resource "aws_apigatewayv2_route_response" "request_trip" {
   route_response_key = "$default"
 }
 
+resource "aws_apigatewayv2_route" "confirm_arrival" {
+  api_id                              = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_key                           = "confirmArrival"
+  target                              = "integrations/${aws_apigatewayv2_integration.bidding_engine.id}"
+  route_response_selection_expression = "$default"
+}
+
+resource "aws_apigatewayv2_route_response" "confirm_arrival" {
+  api_id             = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_id           = aws_apigatewayv2_route.confirm_arrival.id
+  route_response_key = "$default"
+}
+
+resource "aws_apigatewayv2_route" "start_trip" {
+  api_id                              = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_key                           = "startTrip"
+  target                              = "integrations/${aws_apigatewayv2_integration.bidding_engine.id}"
+  route_response_selection_expression = "$default"
+}
+
+resource "aws_apigatewayv2_route_response" "start_trip" {
+  api_id             = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_id           = aws_apigatewayv2_route.start_trip.id
+  route_response_key = "$default"
+}
+
+resource "aws_apigatewayv2_route" "submit_rating" {
+  api_id                              = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_key                           = "submitRating"
+  target                              = "integrations/${aws_apigatewayv2_integration.bidding_engine.id}"
+  route_response_selection_expression = "$default"
+}
+
+resource "aws_apigatewayv2_route_response" "submit_rating" {
+  api_id             = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_id           = aws_apigatewayv2_route.submit_rating.id
+  route_response_key = "$default"
+}
+
+resource "aws_apigatewayv2_route" "default" {
+  api_id                              = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_key                           = "$default"
+  target                              = "integrations/${aws_apigatewayv2_integration.bidding_engine.id}"
+  route_response_selection_expression = "$default"
+}
+
+resource "aws_apigatewayv2_route_response" "default" {
+  api_id             = aws_apigatewayv2_api.kwella_websocket_api.id
+  route_id           = aws_apigatewayv2_route.default.id
+  route_response_key = "$default"
+}
+
 # ── Lambda Permissions ─────────────────────────────────────────────────────
 resource "aws_lambda_permission" "apigw_invoke_websocket_bidding" {
   statement_id  = "AllowAPIGatewayInvokeWebsocketBidding"

@@ -268,8 +268,11 @@ class SimpleWebSocketClient:
             await self.writer.drain()
         except Exception:
             pass
-        self.writer.close()
-        await self.writer.wait_closed()
+        try:
+            self.writer.close()
+            await self.writer.wait_closed()
+        except Exception:
+            pass
         self.connected = False
 
 
@@ -478,15 +481,32 @@ async def mock_rider_client(endpoint: str, auth_token: str | None, shared: dict[
         "passenger_count": 4,
         "suggested_base_fare": 120.0,
     })
-    broadcast_response = await client.recv_json(timeout=DEFAULT_TIMEOUT)
-    if broadcast_response is None or broadcast_response.get("status") != "TripBroadcast":
-        log_error(f"Received unexpected response to requestTrip: {broadcast_response}")
-    assert_state(broadcast_response is not None and broadcast_response.get("status") == "TripBroadcast", "Rider requestTrip did not receive TripBroadcast")
+    # Collect incoming messages until we have both TripBroadcast (sync response)
+    # and the first driverBidReceived/tripMatchConfirmed (async push).  Either can
+    # arrive first because the driver task may send sendBid before the rider's
+    # requestTrip sync response returns, so we must not discard either one.
+    broadcast_response: dict[str, object] | None = None
+    bid_payload: dict[str, object] | None = None
+    deadline = asyncio.get_running_loop().time() + 15.0
+    while broadcast_response is None or bid_payload is None:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError("Timed out waiting for TripBroadcast and driverBidReceived")
+        msg = await client.recv_json(timeout=remaining)
+        if msg is None:
+            continue
+        action = msg.get("action")
+        status = msg.get("status")
+        if status == "TripBroadcast":
+            broadcast_response = msg
+        elif action in ("driverBidReceived", "tripMatchConfirmed"):
+            bid_payload = msg
+        # Discard any other messages (stale offers from previous sim runs, etc.)
+
     trip_id = broadcast_response.get("tripId")
     shared["trip_id"] = trip_id
     log_success(f"Rider requested trip ID {trip_id}")
 
-    bid_payload = await wait_for_action(client, {"driverBidReceived", "tripMatchConfirmed"}, timeout=15.0)
     log_success(f"Rider received bid lifecycle event: {bid_payload.get('action') or bid_payload.get('status')}")
 
     if bid_payload.get("action") == "driverBidReceived":
@@ -505,6 +525,7 @@ async def mock_rider_client(endpoint: str, auth_token: str | None, shared: dict[
     await client.send_json(select_payload)
     shared["rider_selected_event"].set()
     log_success("Rider selected driver bid")
+
 
     live_updates = []
     while len(live_updates) < 3:

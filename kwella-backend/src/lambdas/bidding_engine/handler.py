@@ -560,6 +560,36 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             if is_inside:
                 response_body["flags"] = {"geofence_status": "ARRIVED"}
 
+            # Push liveDriverLocation to the rider's WebSocket so the rider client
+            # can render real-time driver position during an active trip.
+            if trip_id and _APIGW_ENDPOINT:
+                try:
+                    trip_meta_res = table.get_item(Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"})
+                    trip_meta = trip_meta_res.get("Item") or {}
+                    rider_conn_id: str | None = trip_meta.get("rider_connection_id")
+                    if rider_conn_id:
+                        apigw_push = boto3.client(
+                            "apigatewaymanagementapi",
+                            endpoint_url=_APIGW_ENDPOINT,
+                            region_name=_AWS_REGION,
+                        )
+                        location_push = json.dumps({
+                            "action": "liveDriverLocation",
+                            "tripId": trip_id,
+                            "driverId": driver_id,
+                            "latitude": latitude,
+                            "longitude": longitude,
+                        }).encode("utf-8")
+                        try:
+                            apigw_push.post_to_connection(ConnectionId=rider_conn_id, Data=location_push)
+                        except botocore.exceptions.ClientError as push_exc:
+                            logger.warning(
+                                "Failed to push liveDriverLocation to rider connectionId=%s: %s",
+                                rider_conn_id, push_exc,
+                            )
+                except botocore.exceptions.ClientError as meta_exc:
+                    logger.warning("Failed to fetch TRIP METADATA for liveDriverLocation push: %s", meta_exc)
+
             return {
                 "statusCode": 200,
                 "body": json.dumps(response_body),
@@ -699,15 +729,47 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             else:
                 updated_daily_total = float(net_earnings)
 
+            settled_payload = {
+                "status": "WalletSettled",
+                "tripId": trip_id,
+                "net_earnings": float(net_earnings),
+                "currency": "ZAR",
+                "updated_daily_total": updated_daily_total,
+            }
+
+            # Push WalletSettled to the rider's WebSocket so the rider client
+            # knows the trip has been settled and can display a receipt.
+            if _APIGW_ENDPOINT:
+                try:
+                    trip_meta_res = table.get_item(Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"})
+                    trip_meta = trip_meta_res.get("Item") or {}
+                    rider_conn_id: str | None = trip_meta.get("rider_connection_id")
+                    if rider_conn_id:
+                        apigw_push = boto3.client(
+                            "apigatewaymanagementapi",
+                            endpoint_url=_APIGW_ENDPOINT,
+                            region_name=_AWS_REGION,
+                        )
+                        try:
+                            apigw_push.post_to_connection(
+                                ConnectionId=rider_conn_id,
+                                Data=json.dumps(settled_payload).encode("utf-8"),
+                            )
+                            logger.info(
+                                "Pushed WalletSettled to rider connectionId=%s for tripId=%s",
+                                rider_conn_id, trip_id,
+                            )
+                        except botocore.exceptions.ClientError as push_exc:
+                            logger.warning(
+                                "Failed to push WalletSettled to rider connectionId=%s: %s",
+                                rider_conn_id, push_exc,
+                            )
+                except botocore.exceptions.ClientError as meta_exc:
+                    logger.warning("Failed to fetch TRIP METADATA for WalletSettled push: %s", meta_exc)
+
             return {
                 "statusCode": 200,
-                "body": json.dumps({
-                    "status": "WalletSettled",
-                    "tripId": trip_id,
-                    "net_earnings": float(net_earnings),
-                    "currency": "ZAR",
-                    "updated_daily_total": updated_daily_total,
-                }),
+                "body": json.dumps(settled_payload),
             }
 
         elif route_key == "requestTrip":
@@ -814,6 +876,24 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
             # Generate a stable trip identifier for this dispatch cycle.
             trip_id = f"TRP#{uuid.uuid4()}"
+
+            # Persist TRIP METADATA: stores destination coords for geofence evaluation
+            # and rider identity/connection so handlers can push back to them.
+            table.put_item(
+                Item={
+                    "PK": f"TRIP#{trip_id}",
+                    "SK": "METADATA",
+                    "pickup_latitude": str(pickup_lat),
+                    "pickup_longitude": str(pickup_lon),
+                    "destination_latitude": str(dropoff_lat),
+                    "destination_longitude": str(dropoff_lon),
+                    "suggested_fare": str(suggested_fare),
+                    "status": "ACCEPTED",
+                    "rider_id": rider_id or "",
+                    "rider_connection_id": connection_id,
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            )
 
             # Construct the offer payload template (mutated per-driver only for
             # connection-id routing; the offer content itself is broadcast-identical).
