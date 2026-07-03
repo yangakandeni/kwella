@@ -29,3 +29,8 @@ This document defines strict technical constraints for code generation. Agents m
 ## 5. Workspace Hygiene & Version Control
 * **Git Maintenance Engine:** Before completing any implementation task that introduces new languages, packages, dependencies, or runtime environments, the agent MUST review the root `.gitignore` file.
 * **Auto-Appends:** If the new task creates files that should not be tracked globally (e.g., `.env` files, build caches, or temporary runtime configs), the agent must autonomously append the relevant rule to the `.gitignore` under the correct category before declaring the task finished.
+
+## 6. Strict TDD Mandate & Simulator Synchronization
+* **Test-First Execution:** Agents must write or modify test suites *prior* to implementing or extending application features. Every new feature must achieve 100% test coverage alignment.
+* **Test Integrity Overrides:** If a test suite fails, the application code must be refactored until the tests pass. Modifying existing test criteria to bypass a code error is strictly prohibited unless there is an explicitly documented, architecturally sound justification.
+* **Simulator/Emulator Realignment:** Any changes altering backend schemas, payload contracts, or state machine transitions must be instantly mirrored in the local Python marketplace simulator (`scripts/simulate_marketplace_trip.py`) and companion simulation hooks to ensure the 7-phase execution path remains completely green.
