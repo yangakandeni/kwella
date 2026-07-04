@@ -9,6 +9,7 @@ export 'src/auth/token_vault.dart';
 export 'src/auth/auth_notifier.dart';
 export 'src/network/network_placeholder.dart';
 export 'src/models/models_placeholder.dart';
+export 'src/models/driver_bid.dart';
 
 // ── Theme ─────────────────────────────────────────────────────────────────
 export 'src/theme/kwella_colors.dart';

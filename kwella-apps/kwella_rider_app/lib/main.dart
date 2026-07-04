@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kwella_core/kwella_core.dart';
+import 'package:kwella_rider_app/src/features/bidding/bidding_provider.dart';
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -407,55 +408,87 @@ class RiderHomeScreen extends ConsumerStatefulWidget {
 
 class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
   int _passengerCount = 1;
-  bool _showBids = false;
   String? _selectedBidId;
-
-  // Mock list of 3 driver bids inside the widget state
-  final List<DriverBid> _mockBids = const [
-    DriverBid(
-      id: 'bid_1',
-      driverName: 'Sipho Dlamini',
-      rating: '4.9',
-      arrivalTime: '3 min away',
-      fare: 'R 75.00',
-    ),
-    DriverBid(
-      id: 'bid_2',
-      driverName: 'Lwazi Ndlovu',
-      rating: '4.8',
-      arrivalTime: '5 min away',
-      fare: 'R 82.00',
-    ),
-    DriverBid(
-      id: 'bid_3',
-      driverName: 'Thabo Mbeki',
-      rating: '4.7',
-      arrivalTime: '2 min away',
-      fare: 'R 69.00',
-    ),
-  ];
 
   @override
   Widget build(BuildContext context) {
+    final biddingState = ref.watch(riderBiddingProvider);
+    final bids = biddingState.bids;
+    final biddingStatus = biddingState.status;
+
+    // Listen reactively to accepted bid and display success Snackbar.
+    ref.listen<RiderBiddingState>(riderBiddingProvider, (previous, next) {
+      if (next.status == BiddingStatus.accepted && next.acceptedBid != null) {
+        final driverName = next.acceptedBid!.driverName;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Ride accepted! Driver $driverName is on their way.',
+              style: const TextStyle(
+                color: KwellaColors.deepSlate,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            backgroundColor: KwellaColors.cataTransitGreen,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        setState(() {
+          _selectedBidId = null;
+        });
+        ref.read(riderBiddingProvider.notifier).reset();
+      }
+    });
+
+    final showBids = biddingStatus == BiddingStatus.searching ||
+        biddingStatus == BiddingStatus.activeBids;
+
     return Scaffold(
       backgroundColor: KwellaColors.communityCream,
       body: _BookingShellLayout(
-        showBids: _showBids,
+        showBids: showBids,
+        biddingStatus: biddingStatus,
         onCancelBids: () {
+          ref.read(riderBiddingProvider.notifier).cancelBroadcast();
           setState(() {
-            _showBids = false;
             _selectedBidId = null;
           });
         },
-        bidsCarousel: DriverBidCarousel(
-          bids: _mockBids,
-          selectedBidId: _selectedBidId,
-          onSelected: (bidId) {
-            setState(() {
-              _selectedBidId = bidId;
-            });
-          },
-        ),
+        bidsCarousel: biddingStatus == BiddingStatus.searching
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          KwellaColors.cataTransitGreen,
+                        ),
+                        strokeWidth: 2.5,
+                      ),
+                      SizedBox(height: 12),
+                      Text(
+                        'Searching for nearby drivers...',
+                        style: TextStyle(
+                          color: KwellaColors.textOnLightMuted,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : DriverBidCarousel(
+                bids: bids,
+                selectedBidId: _selectedBidId,
+                onSelected: (bidId) {
+                  setState(() {
+                    _selectedBidId = bidId;
+                  });
+                },
+              ),
         acceptButton: SizedBox(
           width: double.infinity,
           height: 52,
@@ -464,8 +497,10 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
             style: ElevatedButton.styleFrom(
               backgroundColor: KwellaColors.cataTransitGreen,
               foregroundColor: KwellaColors.deepSlate,
-              disabledBackgroundColor: KwellaColors.cataTransitGreen.withValues(alpha: 0.4),
-              disabledForegroundColor: KwellaColors.deepSlate.withValues(alpha: 0.5),
+              disabledBackgroundColor:
+                  KwellaColors.cataTransitGreen.withValues(alpha: 0.4),
+              disabledForegroundColor:
+                  KwellaColors.deepSlate.withValues(alpha: 0.5),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -473,20 +508,9 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
             ),
             onPressed: _selectedBidId != null
                 ? () {
-                    final selectedBidName = _mockBids.firstWhere((b) => b.id == _selectedBidId).driverName;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Ride accepted! Driver $selectedBidName is on their way.',
-                          style: const TextStyle(
-                            color: KwellaColors.deepSlate,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        backgroundColor: KwellaColors.cataTransitGreen,
-                        duration: const Duration(seconds: 3),
-                      ),
-                    );
+                    final selectedBid =
+                        bids.firstWhere((b) => b.id == _selectedBidId);
+                    ref.read(riderBiddingProvider.notifier).acceptBid(selectedBid);
                   }
                 : null,
             child: const Text('Accept Ride'),
@@ -498,12 +522,12 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
         ),
         sheetContent: _BookingSheetContent(
           passengerCount: _passengerCount,
-          onPassengerCountChanged: (v) =>
-              setState(() => _passengerCount = v),
+          onPassengerCountChanged: (v) => setState(() => _passengerCount = v),
           onDestinationTapped: () {
             setState(() {
-              _showBids = true;
+              _selectedBidId = null;
             });
+            ref.read(riderBiddingProvider.notifier).startBroadcast();
           },
         ),
       ),
@@ -520,6 +544,7 @@ class _BookingShellLayout extends StatelessWidget {
     required this.bidsCarousel,
     required this.acceptButton,
     required this.onCancelBids,
+    required this.biddingStatus,
   });
 
   final Widget mapSection;
@@ -528,6 +553,7 @@ class _BookingShellLayout extends StatelessWidget {
   final Widget bidsCarousel;
   final Widget acceptButton;
   final VoidCallback onCancelBids;
+  final BiddingStatus biddingStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -568,17 +594,21 @@ class _BookingShellLayout extends StatelessWidget {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Row(
+                        Row(
                           children: [
                             Icon(
-                              Icons.bolt_rounded,
+                              biddingStatus == BiddingStatus.searching
+                                  ? Icons.sensors_rounded
+                                  : Icons.bolt_rounded,
                               color: KwellaColors.cataTransitGreen,
                               size: 20,
                             ),
-                            SizedBox(width: 6),
+                            const SizedBox(width: 6),
                             Text(
-                              'Live Driver Bids',
-                              style: TextStyle(
+                              biddingStatus == BiddingStatus.searching
+                                  ? 'Broadcasting Request...'
+                                  : 'Live Driver Bids',
+                              style: const TextStyle(
                                 color: KwellaColors.textOnLight,
                                 fontSize: 16,
                                 fontWeight: FontWeight.w800,
@@ -986,24 +1016,8 @@ class _MapGridPainter extends CustomPainter {
 }
 
 // ---------------------------------------------------------------------------
-// Driver Bid Data & Components
+// Driver Bid Components
 // ---------------------------------------------------------------------------
-
-class DriverBid {
-  final String id;
-  final String driverName;
-  final String rating;
-  final String arrivalTime;
-  final String fare;
-
-  const DriverBid({
-    required this.id,
-    required this.driverName,
-    required this.rating,
-    required this.arrivalTime,
-    required this.fare,
-  });
-}
 
 class DriverBidCard extends StatelessWidget {
   final DriverBid bid;
@@ -1105,7 +1119,7 @@ class DriverBidCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          bid.arrivalTime,
+                          bid.eta,
                           style: const TextStyle(
                             color: KwellaColors.textOnLightMuted,
                             fontSize: 11,
@@ -1125,7 +1139,7 @@ class DriverBidCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  bid.fare,
+                  bid.price,
                   style: const TextStyle(
                     color: KwellaColors.communityCream,
                     fontWeight: FontWeight.w800,
