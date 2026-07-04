@@ -16,6 +16,12 @@ subprojects {
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
 subprojects {
+    // Pin the NDK for every module (including plugin subprojects that read
+    // flutter.ndkVersion themselves), since the version Flutter recommends
+    // isn't fully installed in this environment.
+    afterEvaluate {
+        extensions.findByType<com.android.build.gradle.BaseExtension>()?.ndkVersion = "27.0.12077973"
+    }
     project.evaluationDependsOn(":app")
 }
 

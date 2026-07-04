@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:kwella_core/kwella_core.dart';
 
 import 'src/features/bidding/driver_bidding_provider.dart';
+import 'src/features/telematics/native_location_service.dart';
 import 'src/features/telematics/telematics_buffer.dart';
 
 // ---------------------------------------------------------------------------
@@ -909,27 +911,36 @@ class DriverHomeScreen extends ConsumerStatefulWidget {
 class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
   bool _arrived = false;
 
-  /// Mock GPS walker – simulates a vehicle in motion.
-  final _walker = MockCoordinateWalker();
+  final _locationService = const NativeLocationService();
 
-  /// Pushes a new simulated coordinate sample into the buffer every 800 ms.
-  /// The buffer manager batches and flushes these to the WebSocket every 3 s.
-  Timer? _gpsLoop;
+  /// Subscription to the native position stream, forwarding every sample
+  /// straight into the telematics buffer for batched WebSocket flushing.
+  StreamSubscription<Position>? _positionSubscription;
 
   @override
   void initState() {
     super.initState();
-    _gpsLoop = Timer.periodic(const Duration(milliseconds: 800), (_) {
-      final coord = _walker.next();
-      ref
-          .read(telematicsBufferProvider.notifier)
-          .pushCoordinate(coord.lat, coord.lng, coord.speed);
-    });
+    _startLocationTracking();
+  }
+
+  Future<void> _startLocationTracking() async {
+    final granted = await _locationService.ensurePermissionGranted();
+    if (!granted || !mounted) return;
+
+    _positionSubscription = _locationService.positionStream().listen(
+      (position) {
+        ref.read(telematicsBufferProvider.notifier).pushCoordinate(
+              position.latitude,
+              position.longitude,
+              position.speed,
+            );
+      },
+    );
   }
 
   @override
   void dispose() {
-    _gpsLoop?.cancel();
+    _positionSubscription?.cancel();
     super.dispose();
   }
 

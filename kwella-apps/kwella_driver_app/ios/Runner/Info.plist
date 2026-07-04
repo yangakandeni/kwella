@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Kwella Driver uses your location to track your route and share your live position with riders during a trip.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Kwella Driver uses your location to track your route and share your live position with riders during a trip.</string>
 </dict>
 </plist>

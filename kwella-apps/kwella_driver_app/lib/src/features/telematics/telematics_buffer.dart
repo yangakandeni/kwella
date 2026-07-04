@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kwella_core/kwella_core.dart';
@@ -235,35 +234,3 @@ final telematicsBufferProvider =
     StateNotifierProvider<TelematicsBufferManager, TelematicsState>(
   (ref) => TelematicsBufferManager(ref),
 );
-
-// ---------------------------------------------------------------------------
-// Coordinate simulation helpers (used by the mock loop in DriverHomeScreen)
-// ---------------------------------------------------------------------------
-
-/// Simple Gaussian-style random-walk generator for mock GPS coordinates.
-///
-/// Starts near Cape Town (Kwella's home region) and drifts slightly each tick
-/// to simulate a vehicle in motion.
-class MockCoordinateWalker {
-  MockCoordinateWalker({
-    double startLat = -33.9249,  // Cape Town, South Africa
-    double startLng = 18.4241,
-    double startSpeed = 42.0,
-  })  : _lat = startLat,
-        _lng = startLng,
-        _speed = startSpeed;
-
-  double _lat;
-  double _lng;
-  double _speed;
-
-  final math.Random _rng = math.Random();
-
-  /// Returns the next simulated coordinate, applying a small random-walk delta.
-  ({double lat, double lng, double speed}) next() {
-    _lat += (_rng.nextDouble() - 0.5) * 0.0002;
-    _lng += (_rng.nextDouble() - 0.5) * 0.0002;
-    _speed = (_speed + (_rng.nextDouble() - 0.5) * 4.0).clamp(5.0, 120.0);
-    return (lat: _lat, lng: _lng, speed: _speed);
-  }
-}
