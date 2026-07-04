@@ -63,6 +63,18 @@ abstract class KwellaBiddingEvent {
           ),
         );
 
+      /// The Driver app's `TelematicsBufferManager` flushes a batch of GPS
+      /// samples every 3 seconds under this action. We surface it as a
+      /// [DriverLocationUpdateEvent] so the Rider's live tracking notifier
+      /// can project the driver's position onto the map.
+      case 'TelemetryBatch':
+        final pointsRaw = (payload['points'] as List?) ?? const [];
+        final points = pointsRaw
+            .whereType<Map>()
+            .map((p) => TelemetryPoint.fromJson(p.cast<String, dynamic>()))
+            .toList();
+        return DriverLocationUpdateEvent(points);
+
       default:
         throw FormatException('Unknown KwellaBiddingEvent action: $action');
     }
@@ -174,4 +186,70 @@ class RideCancelledEvent extends KwellaBiddingEvent {
 
   @override
   int get hashCode => rideId.hashCode ^ (reason?.hashCode ?? 0);
+}
+
+/// A single GPS sample as broadcast by the Driver app's telematics buffer.
+///
+/// Mirrors the wire shape `{lat, lng, spd, ts}` sent by
+/// `TelematicsBufferManager`. The buffer batches several of these together
+/// and flushes them under the `TelemetryBatch` action every 3 seconds.
+class TelemetryPoint {
+  final double latitude;
+  final double longitude;
+  final double speed;
+  final DateTime timestamp;
+
+  const TelemetryPoint({
+    required this.latitude,
+    required this.longitude,
+    required this.speed,
+    required this.timestamp,
+  });
+
+  factory TelemetryPoint.fromJson(Map<String, dynamic> json) {
+    return TelemetryPoint(
+      latitude: (json['lat'] as num).toDouble(),
+      longitude: (json['lng'] as num).toDouble(),
+      speed: (json['spd'] as num?)?.toDouble() ?? 0.0,
+      timestamp: DateTime.fromMillisecondsSinceEpoch(
+        (json['ts'] as num).toInt(),
+        isUtc: true,
+      ),
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TelemetryPoint &&
+          runtimeType == other.runtimeType &&
+          latitude == other.latitude &&
+          longitude == other.longitude &&
+          speed == other.speed &&
+          timestamp == other.timestamp;
+
+  @override
+  int get hashCode =>
+      latitude.hashCode ^
+      longitude.hashCode ^
+      speed.hashCode ^
+      timestamp.hashCode;
+}
+
+/// A batch of [TelemetryPoint]s relayed from a driver's device, decoded from
+/// a `TelemetryBatch` frame.
+class DriverLocationUpdateEvent extends KwellaBiddingEvent {
+  final List<TelemetryPoint> points;
+
+  const DriverLocationUpdateEvent(this.points);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DriverLocationUpdateEvent &&
+          runtimeType == other.runtimeType &&
+          points == other.points;
+
+  @override
+  int get hashCode => points.hashCode;
 }
