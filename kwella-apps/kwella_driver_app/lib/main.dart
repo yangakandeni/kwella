@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kwella_core/kwella_core.dart';
 
+import 'src/features/bidding/driver_bidding_provider.dart';
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -890,6 +892,12 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final biddingState = ref.watch(driverBiddingProvider);
+
+    // If we just received an offer, show the bottom sheet over the map.
+    // Ensure we only show it once by checking if a route is active or something,
+    // but for now we'll just rely on the UI overlay. We can just render it as a positioned widget instead of a modal to match the Phase 3 requirement "display a floating incoming request bottom sheet over the map".
+
     return Scaffold(
       backgroundColor: KwellaColors.deepSlate,
       // No AppBar – full bleed immersive map layout.
@@ -976,16 +984,108 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
               ),
             ),
 
-          // ── Layer 4 : Slide-to-Confirm at the bottom ──────────────────────
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: SlideToConfirmButton(
-              label: _arrived ? 'Trip Complete' : 'Slide to Confirm Arrival',
-              onConfirmed: _arrived ? () {} : _handleArrival,
+          // ── Layer 4 : Bottom UI Area ──────────────────────────────────────
+          if (biddingState.status == DriverJobStatus.offerReceived || biddingState.status == DriverJobStatus.bidSubmitted)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 32,
+              child: _buildFloatingRequestSheet(biddingState),
+            )
+          else
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: SlideToConfirmButton(
+                label: _arrived ? 'Trip Complete' : 'Slide to Confirm Arrival',
+                onConfirmed: _arrived ? () {} : _handleArrival,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFloatingRequestSheet(DriverBiddingState state) {
+    final isSubmitted = state.status == DriverJobStatus.bidSubmitted;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
+      decoration: BoxDecoration(
+        color: KwellaColors.deepSlateCard,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: KwellaColors.deepSlateBorder),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black54,
+            blurRadius: 20,
+            offset: Offset(0, 10),
+          )
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            isSubmitted ? 'Bid Submitted' : 'Incoming Ride Request',
+            style: const TextStyle(
+              color: KwellaColors.textOnDark,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
             ),
           ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Rider', style: TextStyle(color: KwellaColors.textOnDarkMuted)),
+              Text(state.riderName ?? 'Unknown', style: const TextStyle(color: KwellaColors.textOnDark, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Destination', style: TextStyle(color: KwellaColors.textOnDarkMuted)),
+              Text(state.destination ?? 'Unknown', style: const TextStyle(color: KwellaColors.textOnDark, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Est. Payout', style: TextStyle(color: KwellaColors.textOnDarkMuted)),
+              Text('\$${state.estimatedPayout?.toStringAsFixed(2) ?? '0.00'}', style: const TextStyle(color: KwellaColors.cataTransitGreen, fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          const SizedBox(height: 24),
+          if (isSubmitted)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: KwellaColors.cataTransitGreen.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: KwellaColors.cataTransitGreen.withValues(alpha: 0.4)),
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.check_circle_rounded, color: KwellaColors.cataTransitGreen),
+                  SizedBox(width: 8),
+                  Text('Waiting for Rider...', style: TextStyle(color: KwellaColors.cataTransitGreen, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            )
+          else
+            SizedBox(
+              height: 68,
+              child: SlideToConfirmButton(
+                label: 'Slide to Bid \$${state.estimatedPayout?.toStringAsFixed(2) ?? '0.00'}',
+                onConfirmed: () {
+                  ref.read(driverBiddingProvider.notifier).submitBid(state.estimatedPayout ?? 0.0);
+                },
+              ),
+            ),
         ],
       ),
     );

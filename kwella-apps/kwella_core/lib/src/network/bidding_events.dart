@@ -8,6 +8,12 @@ abstract class KwellaBiddingEvent {
     final payload = (json['payload'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
 
     switch (action) {
+      case 'RideRequestReceived':
+        return RideRequestReceivedEvent(
+          riderName: payload['riderName'] as String,
+          destination: payload['destination'] as String,
+          estimatedPayout: (payload['estimatedPayout'] as num).toDouble(),
+        );
       case 'BidReceived':
         return BidReceivedEvent(DriverBid.fromJson(payload));
       case 'RideAccepted':
@@ -25,6 +31,31 @@ abstract class KwellaBiddingEvent {
         throw FormatException('Unknown KwellaBiddingEvent action: $action');
     }
   }
+}
+
+class RideRequestReceivedEvent extends KwellaBiddingEvent {
+  final String riderName;
+  final String destination;
+  final double estimatedPayout;
+
+  const RideRequestReceivedEvent({
+    required this.riderName,
+    required this.destination,
+    required this.estimatedPayout,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RideRequestReceivedEvent &&
+          runtimeType == other.runtimeType &&
+          riderName == other.riderName &&
+          destination == other.destination &&
+          estimatedPayout == other.estimatedPayout;
+
+  @override
+  int get hashCode =>
+      riderName.hashCode ^ destination.hashCode ^ estimatedPayout.hashCode;
 }
 
 class BidReceivedEvent extends KwellaBiddingEvent {
