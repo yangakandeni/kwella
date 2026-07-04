@@ -407,12 +407,91 @@ class RiderHomeScreen extends ConsumerStatefulWidget {
 
 class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
   int _passengerCount = 1;
+  bool _showBids = false;
+  String? _selectedBidId;
+
+  // Mock list of 3 driver bids inside the widget state
+  final List<DriverBid> _mockBids = const [
+    DriverBid(
+      id: 'bid_1',
+      driverName: 'Sipho Dlamini',
+      rating: '4.9',
+      arrivalTime: '3 min away',
+      fare: 'R 75.00',
+    ),
+    DriverBid(
+      id: 'bid_2',
+      driverName: 'Lwazi Ndlovu',
+      rating: '4.8',
+      arrivalTime: '5 min away',
+      fare: 'R 82.00',
+    ),
+    DriverBid(
+      id: 'bid_3',
+      driverName: 'Thabo Mbeki',
+      rating: '4.7',
+      arrivalTime: '2 min away',
+      fare: 'R 69.00',
+    ),
+  ];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: KwellaColors.communityCream,
       body: _BookingShellLayout(
+        showBids: _showBids,
+        onCancelBids: () {
+          setState(() {
+            _showBids = false;
+            _selectedBidId = null;
+          });
+        },
+        bidsCarousel: DriverBidCarousel(
+          bids: _mockBids,
+          selectedBidId: _selectedBidId,
+          onSelected: (bidId) {
+            setState(() {
+              _selectedBidId = bidId;
+            });
+          },
+        ),
+        acceptButton: SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: ElevatedButton(
+            key: const Key('rider_accept_ride_button'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: KwellaColors.cataTransitGreen,
+              foregroundColor: KwellaColors.deepSlate,
+              disabledBackgroundColor: KwellaColors.cataTransitGreen.withValues(alpha: 0.4),
+              disabledForegroundColor: KwellaColors.deepSlate.withValues(alpha: 0.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              elevation: 0,
+            ),
+            onPressed: _selectedBidId != null
+                ? () {
+                    final selectedBidName = _mockBids.firstWhere((b) => b.id == _selectedBidId).driverName;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Ride accepted! Driver $selectedBidName is on their way.',
+                          style: const TextStyle(
+                            color: KwellaColors.deepSlate,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        backgroundColor: KwellaColors.cataTransitGreen,
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                : null,
+            child: const Text('Accept Ride'),
+          ),
+        ),
         mapSection: _MapPlaceholder(
           onSignOut: () =>
               ref.read(kwellaAuthNotifierProvider.notifier).signOut(),
@@ -421,6 +500,11 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
           passengerCount: _passengerCount,
           onPassengerCountChanged: (v) =>
               setState(() => _passengerCount = v),
+          onDestinationTapped: () {
+            setState(() {
+              _showBids = true;
+            });
+          },
         ),
       ),
     );
@@ -432,10 +516,18 @@ class _BookingShellLayout extends StatelessWidget {
   const _BookingShellLayout({
     required this.mapSection,
     required this.sheetContent,
+    required this.showBids,
+    required this.bidsCarousel,
+    required this.acceptButton,
+    required this.onCancelBids,
   });
 
   final Widget mapSection;
   final Widget sheetContent;
+  final bool showBids;
+  final Widget bidsCarousel;
+  final Widget acceptButton;
+  final VoidCallback onCancelBids;
 
   @override
   Widget build(BuildContext context) {
@@ -452,6 +544,74 @@ class _BookingShellLayout extends StatelessWidget {
             ],
           ),
         ),
+
+        // ── Floating overlay right above the sheet ─────────────────────
+        if (showBids)
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: MediaQuery.of(context).size.height * 0.42 + 12,
+            child: Card(
+              color: KwellaColors.communityCream,
+              elevation: 10,
+              shadowColor: Colors.black.withValues(alpha: 0.12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: const BorderSide(color: KwellaColors.creamBorder, width: 1),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(
+                              Icons.bolt_rounded,
+                              color: KwellaColors.cataTransitGreen,
+                              size: 20,
+                            ),
+                            SizedBox(width: 6),
+                            Text(
+                              'Live Driver Bids',
+                              style: TextStyle(
+                                color: KwellaColors.textOnLight,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(100),
+                            onTap: onCancelBids,
+                            child: const Padding(
+                              padding: EdgeInsets.all(4),
+                              child: Icon(
+                                Icons.close_rounded,
+                                size: 20,
+                                color: KwellaColors.textOnLightMuted,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    bidsCarousel,
+                    const SizedBox(height: 16),
+                    acceptButton,
+                  ],
+                ),
+              ),
+            ),
+          ),
 
         // ── Persistent bottom sheet (40 % of screen) ──────────────────
         Align(
@@ -575,10 +735,12 @@ class _BookingSheetContent extends StatelessWidget {
   const _BookingSheetContent({
     required this.passengerCount,
     required this.onPassengerCountChanged,
+    required this.onDestinationTapped,
   });
 
   final int passengerCount;
   final ValueChanged<int> onPassengerCountChanged;
+  final VoidCallback onDestinationTapped;
 
   @override
   Widget build(BuildContext context) {
@@ -616,7 +778,7 @@ class _BookingSheetContent extends StatelessWidget {
             const SizedBox(height: 16),
 
             // ── Destination input placeholder ────────────────────────────
-            _DestinationInputPlaceholder(),
+            _DestinationInputPlaceholder(onTap: onDestinationTapped),
             const SizedBox(height: 16),
 
             // ── Divider ──────────────────────────────────────────────────
@@ -640,6 +802,10 @@ class _BookingSheetContent extends StatelessWidget {
 
 /// Tappable destination input placeholder.
 class _DestinationInputPlaceholder extends StatelessWidget {
+  const _DestinationInputPlaceholder({required this.onTap});
+
+  final VoidCallback onTap;
+
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -648,9 +814,7 @@ class _DestinationInputPlaceholder extends StatelessWidget {
       child: InkWell(
         key: const Key('rider_destination_field'),
         borderRadius: BorderRadius.circular(14),
-        onTap: () {
-          // TODO: open destination search overlay
-        },
+        onTap: onTap,
         child: Container(
           padding:
               const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -819,4 +983,206 @@ class _MapGridPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_MapGridPainter oldDelegate) => false;
+}
+
+// ---------------------------------------------------------------------------
+// Driver Bid Data & Components
+// ---------------------------------------------------------------------------
+
+class DriverBid {
+  final String id;
+  final String driverName;
+  final String rating;
+  final String arrivalTime;
+  final String fare;
+
+  const DriverBid({
+    required this.id,
+    required this.driverName,
+    required this.rating,
+    required this.arrivalTime,
+    required this.fare,
+  });
+}
+
+class DriverBidCard extends StatelessWidget {
+  final DriverBid bid;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const DriverBidCard({
+    super.key,
+    required this.bid,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedScale(
+        scale: isSelected ? 1.02 : 1.0,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutBack,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          width: 250,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: KwellaColors.creamCard,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected
+                  ? KwellaColors.cataTransitGreen
+                  : KwellaColors.creamBorder,
+              width: isSelected ? 2.0 : 1.0,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: KwellaColors.cataTransitGreen.withValues(alpha: 0.15),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    )
+                  ]
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.02),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    )
+                  ],
+          ),
+          child: Row(
+            children: [
+              // Avatar placeholder circle
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: KwellaColors.creamBorder,
+                child: Text(
+                  _getInitials(bid.driverName),
+                  style: const TextStyle(
+                    color: KwellaColors.deepSlate,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Info column
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      bid.driverName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: KwellaColors.textOnLight,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.star_rounded,
+                          color: KwellaColors.warningAmber,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          bid.rating,
+                          style: const TextStyle(
+                            color: KwellaColors.textOnLight,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          bid.arrivalTime,
+                          style: const TextStyle(
+                            color: KwellaColors.textOnLightMuted,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Pricing pill
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: KwellaColors.deepSlate,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  bid.fare,
+                  style: const TextStyle(
+                    color: KwellaColors.communityCream,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _getInitials(String name) {
+    final parts = name.split(' ');
+    if (parts.isEmpty) return '';
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1)).toUpperCase();
+  }
+}
+
+class DriverBidCarousel extends StatelessWidget {
+  final List<DriverBid> bids;
+  final String? selectedBidId;
+  final ValueChanged<String> onSelected;
+
+  const DriverBidCarousel({
+    super.key,
+    required this.bids,
+    required this.selectedBidId,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 90,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: bids.length,
+        clipBehavior: Clip.none,
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        itemBuilder: (context, index) {
+          final bid = bids[index];
+          return Padding(
+            padding: EdgeInsets.only(
+              right: index == bids.length - 1 ? 0 : 12,
+            ),
+            child: DriverBidCard(
+              bid: bid,
+              isSelected: bid.id == selectedBidId,
+              onTap: () => onSelected(bid.id),
+            ),
+          );
+        },
+      ),
+    );
+  }
 }
