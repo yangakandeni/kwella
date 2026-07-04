@@ -25,66 +25,9 @@ class KwellaDriverApp extends StatelessWidget {
     return MaterialApp(
       title: 'Kwella Driver',
       debugShowCheckedModeBanner: false,
-      theme: _buildTheme(),
+      // ── Consume the global dark theme from kwella_core ────────────────
+      theme: KwellaTheme.darkTheme,
       home: const DriverAuthGate(),
-    );
-  }
-
-  ThemeData _buildTheme() {
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: KwellaTheme.brandAmber,
-        brightness: Brightness.dark,
-      ),
-      scaffoldBackgroundColor: KwellaTheme.surfaceDark,
-      fontFamily: 'Outfit',
-      textTheme: const TextTheme(
-        displayMedium: TextStyle(
-          color: KwellaTheme.textPrimary,
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.5,
-        ),
-        bodyMedium: TextStyle(color: KwellaTheme.textSecondary),
-        labelLarge: TextStyle(
-          color: KwellaTheme.textPrimary,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.5,
-        ),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: KwellaTheme.surfaceCard,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: KwellaTheme.borderSubtle),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: KwellaTheme.borderSubtle),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide:
-              const BorderSide(color: KwellaTheme.brandAmber, width: 2),
-        ),
-        labelStyle: const TextStyle(color: KwellaTheme.textSecondary),
-        prefixIconColor: KwellaTheme.textSecondary,
-      ),
-      elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: KwellaTheme.brandAmber,
-          foregroundColor: Colors.black87,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          minimumSize: const Size.fromHeight(52),
-          textStyle: const TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
-            letterSpacing: 0.5,
-          ),
-        ),
-      ),
     );
   }
 }
@@ -155,7 +98,7 @@ class _SplashScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: KwellaTheme.surfaceDark,
+      backgroundColor: KwellaColors.deepSlate,
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -165,21 +108,20 @@ class _SplashScreen extends StatelessWidget {
               width: 72,
               height: 72,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [KwellaTheme.brandAmber, KwellaTheme.brandAmberLight],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+                color: KwellaColors.cataTransitGreen,
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: const Icon(Icons.local_shipping_rounded,
-                  color: Colors.black87, size: 36),
+              child: const Icon(
+                Icons.local_shipping_rounded,
+                color: KwellaColors.deepSlate,
+                size: 36,
+              ),
             ),
             const SizedBox(height: 24),
             const Text(
               'KWELLA',
               style: TextStyle(
-                color: KwellaTheme.textPrimary,
+                color: KwellaColors.textOnDark,
                 fontSize: 28,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 6,
@@ -189,7 +131,7 @@ class _SplashScreen extends StatelessWidget {
             const Text(
               'Driver',
               style: TextStyle(
-                color: KwellaTheme.brandAmber,
+                color: KwellaColors.cataTransitGreen,
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
                 letterSpacing: 2,
@@ -197,8 +139,8 @@ class _SplashScreen extends StatelessWidget {
             ),
             const SizedBox(height: 40),
             const CircularProgressIndicator(
-              valueColor:
-                  AlwaysStoppedAnimation<Color>(KwellaTheme.brandAmber),
+              valueColor: AlwaysStoppedAnimation<Color>(
+                  KwellaColors.cataTransitGreen),
               strokeWidth: 2.5,
             ),
           ],
@@ -262,7 +204,7 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
         authState.status == KwellaAuthStatus.authenticating;
 
     return Scaffold(
-      backgroundColor: KwellaTheme.surfaceDark,
+      backgroundColor: KwellaColors.deepSlate,
       body: SafeArea(
         child: FadeTransition(
           opacity: _fadeAnim,
@@ -287,7 +229,7 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
                     key: const Key('driver_email_field'),
                     controller: _emailCtrl,
                     keyboardType: TextInputType.emailAddress,
-                    style: const TextStyle(color: KwellaTheme.textPrimary),
+                    style: const TextStyle(color: KwellaColors.textOnDark),
                     decoration: const InputDecoration(
                       labelText: 'Email address',
                       prefixIcon: Icon(Icons.mail_outline_rounded),
@@ -307,7 +249,7 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
                     key: const Key('driver_password_field'),
                     controller: _passwordCtrl,
                     obscureText: _obscurePassword,
-                    style: const TextStyle(color: KwellaTheme.textPrimary),
+                    style: const TextStyle(color: KwellaColors.textOnDark),
                     decoration: InputDecoration(
                       labelText: 'Password',
                       prefixIcon: const Icon(Icons.lock_outline_rounded),
@@ -316,7 +258,7 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
                           _obscurePassword
                               ? Icons.visibility_off_outlined
                               : Icons.visibility_outlined,
-                          color: KwellaTheme.textSecondary,
+                          color: KwellaColors.textOnDarkMuted,
                         ),
                         onPressed: () => setState(
                             () => _obscurePassword = !_obscurePassword),
@@ -341,7 +283,7 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
                             height: 22,
                             width: 22,
                             child: CircularProgressIndicator(
-                              color: Colors.black87,
+                              color: KwellaColors.deepSlate,
                               strokeWidth: 2.5,
                             ),
                           )
@@ -354,7 +296,7 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
                     child: Text(
                       'Kwella Driver · v1.0',
                       style: TextStyle(
-                        color: KwellaTheme.textSecondary
+                        color: KwellaColors.textOnDarkMuted
                             .withValues(alpha: 0.5),
                         fontSize: 12,
                       ),
@@ -377,21 +319,20 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
           width: 56,
           height: 56,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [KwellaTheme.brandAmber, KwellaTheme.brandAmberLight],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+            color: KwellaColors.cataTransitGreen,
             borderRadius: BorderRadius.circular(16),
           ),
-          child: const Icon(Icons.local_shipping_rounded,
-              color: Colors.black87, size: 28),
+          child: const Icon(
+            Icons.local_shipping_rounded,
+            color: KwellaColors.deepSlate,
+            size: 28,
+          ),
         ),
         const SizedBox(height: 24),
         const Text(
           'Welcome back,\nDriver',
           style: TextStyle(
-            color: KwellaTheme.textPrimary,
+            color: KwellaColors.textOnDark,
             fontSize: 32,
             fontWeight: FontWeight.w800,
             height: 1.2,
@@ -400,7 +341,8 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
         const SizedBox(height: 8),
         const Text(
           'Sign in to access your Kwella Driver account',
-          style: TextStyle(color: KwellaTheme.textSecondary, fontSize: 15),
+          style:
+              TextStyle(color: KwellaColors.textOnDarkMuted, fontSize: 15),
         ),
       ],
     );
@@ -411,20 +353,21 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
       margin: const EdgeInsets.only(bottom: 20),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: KwellaTheme.errorRed.withValues(alpha: 0.12),
-        border: Border.all(color: KwellaTheme.errorRed.withValues(alpha: 0.4)),
+        color: KwellaColors.errorRed.withValues(alpha: 0.12),
+        border: Border.all(
+            color: KwellaColors.errorRed.withValues(alpha: 0.4)),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
           const Icon(Icons.error_outline_rounded,
-              color: KwellaTheme.errorRed, size: 18),
+              color: KwellaColors.errorRed, size: 18),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               error,
               style: const TextStyle(
-                  color: KwellaTheme.errorRed, fontSize: 13),
+                  color: KwellaColors.errorRed, fontSize: 13),
             ),
           ),
         ],
@@ -444,21 +387,21 @@ class DriverHomeScreen extends ConsumerWidget {
     final authState = ref.watch(kwellaAuthNotifierProvider);
 
     return Scaffold(
-      backgroundColor: KwellaTheme.surfaceDark,
+      backgroundColor: KwellaColors.deepSlate,
       appBar: AppBar(
-        backgroundColor: KwellaTheme.surfaceCard,
-        elevation: 0,
         title: const Text(
           'Driver Dashboard',
           style: TextStyle(
-            color: KwellaTheme.textPrimary,
+            color: KwellaColors.textOnDark,
             fontWeight: FontWeight.w700,
           ),
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout_rounded,
-                color: KwellaTheme.textSecondary),
+            icon: const Icon(
+              Icons.logout_rounded,
+              color: KwellaColors.textOnDarkMuted,
+            ),
             tooltip: 'Sign out',
             onPressed: () =>
                 ref.read(kwellaAuthNotifierProvider.notifier).signOut(),
@@ -473,21 +416,20 @@ class DriverHomeScreen extends ConsumerWidget {
               width: 80,
               height: 80,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [KwellaTheme.brandAmber, KwellaTheme.brandAmberLight],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+                color: KwellaColors.cataTransitGreen,
                 borderRadius: BorderRadius.circular(24),
               ),
-              child: const Icon(Icons.check_circle_outline_rounded,
-                  color: Colors.black87, size: 40),
+              child: const Icon(
+                Icons.check_circle_outline_rounded,
+                color: KwellaColors.deepSlate,
+                size: 40,
+              ),
             ),
             const SizedBox(height: 24),
             const Text(
               'Driver Dashboard Active',
               style: TextStyle(
-                color: KwellaTheme.textPrimary,
+                color: KwellaColors.textOnDark,
                 fontSize: 22,
                 fontWeight: FontWeight.w700,
               ),
@@ -496,7 +438,7 @@ class DriverHomeScreen extends ConsumerWidget {
             Text(
               authState.email ?? '',
               style: const TextStyle(
-                  color: KwellaTheme.textSecondary, fontSize: 14),
+                  color: KwellaColors.textOnDarkMuted, fontSize: 14),
             ),
           ],
         ),
@@ -505,23 +447,5 @@ class DriverHomeScreen extends ConsumerWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// KwellaTheme – shared design tokens (driver variant: amber palette)
-// ---------------------------------------------------------------------------
-abstract final class KwellaTheme {
-  // Brand
-  static const Color brandAmber = Color(0xFFF5A623);
-  static const Color brandAmberLight = Color(0xFFFFBF47);
-
-  // Surface
-  static const Color surfaceDark = Color(0xFF0A0F1E);
-  static const Color surfaceCard = Color(0xFF121826);
-
-  // Text
-  static const Color textPrimary = Color(0xFFF0F4FF);
-  static const Color textSecondary = Color(0xFF8B97B8);
-
-  // Utility
-  static const Color borderSubtle = Color(0xFF1E2A42);
-  static const Color errorRed = Color(0xFFFF5370);
-}
+// Local KwellaTheme stub removed – all tokens are now sourced from
+// kwella_core via KwellaColors and KwellaTheme.
