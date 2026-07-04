@@ -45,5 +45,10 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- TODO: Replace with the real Google Maps API key before release. -->
+	<key>GMSApiKey</key>
+	<string>YOUR_IOS_GOOGLE_MAPS_API_KEY</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Kwella uses your location to show nearby drivers and track your ride on the map.</string>
 </dict>
 </plist>

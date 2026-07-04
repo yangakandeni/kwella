@@ -1,7 +1,6 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:kwella_core/kwella_core.dart';
 
 import '../bidding/bidding_provider.dart';
@@ -144,7 +143,7 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
             child: const Text('Accept Ride'),
           ),
         ),
-        mapSection: _MapPlaceholder(
+        mapSection: _RiderMap(
           onSignOut: () =>
               ref.read(kwellaAuthNotifierProvider.notifier).signOut(),
         ),
@@ -285,178 +284,101 @@ class _BookingShellLayout extends StatelessWidget {
   }
 }
 
-/// Greyed-out map placeholder with a live vehicle marker layer and a
-/// sign-out FAB in the top-right corner.
+/// Live Google Map with a driver marker layer and a sign-out FAB in the
+/// top-right corner.
 ///
-/// Watches [driverTrackingProvider] and renders a rotated vehicle marker
-/// once a live telematics fix arrives. Position is projected relative to
-/// the first fix received this session (the "anchor"), since this canvas is
-/// not backed by a real map projection yet. The marker layer hides itself
-/// gracefully whenever there is no active driver stream.
-class _MapPlaceholder extends ConsumerWidget {
-  const _MapPlaceholder({required this.onSignOut});
+/// Watches [driverTrackingProvider] and renders a rotated driver marker
+/// once a live telematics fix arrives. The initial camera centres on the
+/// session's anchor fix (the first position received this session); once
+/// that anchor arrives, the camera animates to it.
+class _RiderMap extends ConsumerStatefulWidget {
+  const _RiderMap({required this.onSignOut});
 
   final VoidCallback onSignOut;
 
-  // Roughly how many metres of real-world driver movement map to a single
-  // canvas pixel.
-  static const double _metersPerPixel = 4.0;
-  static const double _metersPerDegreeLatitude = 111320.0;
-  static const double _markerRadius = 18.0;
-  static const double _canvasMargin = 24.0;
-
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final tracking = ref.watch(driverTrackingProvider);
-    final showVehicleMarker = tracking.isActive &&
-        tracking.anchorLatitude != null &&
-        tracking.anchorLongitude != null;
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final vehicleOffset = showVehicleMarker
-            ? _vehicleOffsetPixels(constraints.biggest, tracking)
-            : null;
-
-        return Stack(
-          children: [
-            // ── Textured map background ───────────────────────────────
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Color(0xFFD4E8D0), Color(0xFFBFD8C0)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-              child: CustomPaint(
-                painter: _MapGridPainter(),
-                child: const SizedBox.expand(),
-              ),
-            ),
-
-            // ── Centre pin (hidden once a live driver fix arrives) ──────
-            if (!showVehicleMarker)
-              const Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.location_on_rounded,
-                      color: KwellaColors.cataTransitGreen,
-                      size: 48,
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Live map coming soon',
-                      style: TextStyle(
-                        color: KwellaColors.deepSlate,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 0.4,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-            // ── Live vehicle marker ──────────────────────────────────────
-            if (vehicleOffset != null)
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 400),
-                curve: Curves.easeOut,
-                left: vehicleOffset.dx - _markerRadius,
-                top: vehicleOffset.dy - _markerRadius,
-                child: _VehicleMarkerIcon(bearing: tracking.bearing),
-              ),
-
-            // ── Sign-out button (top-right) ───────────────────────────────
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 12,
-              right: 16,
-              child: Material(
-                color: KwellaColors.communityCream,
-                borderRadius: BorderRadius.circular(12),
-                elevation: 3,
-                shadowColor: Colors.black12,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: onSignOut,
-                  child: const Padding(
-                    padding: EdgeInsets.all(10),
-                    child: Icon(
-                      Icons.logout_rounded,
-                      size: 20,
-                      color: KwellaColors.textOnLight,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  /// Projects the driver's current fix into a pixel offset relative to the
-  /// canvas centre, using the session's anchor fix as the local origin and
-  /// a flat equirectangular approximation (fine at city-block scale).
-  /// Clamped so the marker never renders outside the canvas bounds.
-  static Offset _vehicleOffsetPixels(Size canvasSize, DriverTrackingState tracking) {
-    final anchorLat = tracking.anchorLatitude!;
-    final anchorLng = tracking.anchorLongitude!;
-    final metersPerDegreeLongitude =
-        _metersPerDegreeLatitude * math.cos(anchorLat * math.pi / 180);
-
-    final dxMeters = (tracking.longitude - anchorLng) * metersPerDegreeLongitude;
-    final dyMeters = (tracking.latitude - anchorLat) * _metersPerDegreeLatitude;
-
-    final maxDx = math.max(0.0, canvasSize.width / 2 - _canvasMargin);
-    final maxDy = math.max(0.0, canvasSize.height / 2 - _canvasMargin);
-
-    final clampedDx = (dxMeters / _metersPerPixel).clamp(-maxDx, maxDx).toDouble();
-    // Screen y grows downward; north (increasing latitude) should move up.
-    final clampedDy = (-dyMeters / _metersPerPixel).clamp(-maxDy, maxDy).toDouble();
-
-    return Offset(
-      canvasSize.width / 2 + clampedDx,
-      canvasSize.height / 2 + clampedDy,
-    );
-  }
+  ConsumerState<_RiderMap> createState() => _RiderMapState();
 }
 
-/// Rotated vehicle glyph used by the live tracking marker layer.
-class _VehicleMarkerIcon extends StatelessWidget {
-  const _VehicleMarkerIcon({required this.bearing});
+class _RiderMapState extends ConsumerState<_RiderMap> {
+  // Fallback centre used until a live driver fix anchors the session.
+  static const LatLng _fallbackCenter = LatLng(-33.9249, 18.4241);
+  static const String _driverMarkerId = 'driver';
 
-  final double bearing;
+  GoogleMapController? _mapController;
 
   @override
   Widget build(BuildContext context) {
-    return Transform.rotate(
-      angle: bearing * math.pi / 180,
-      child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: KwellaColors.deepSlate,
-          shape: BoxShape.circle,
-          border: Border.all(color: KwellaColors.cataTransitGreen, width: 2),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              blurRadius: 8,
-              offset: const Offset(0, 3),
+    final tracking = ref.watch(driverTrackingProvider);
+
+    ref.listen<DriverTrackingState>(driverTrackingProvider, (previous, next) {
+      final justAnchored = previous?.anchorLatitude == null &&
+          next.anchorLatitude != null &&
+          next.anchorLongitude != null;
+      if (justAnchored) {
+        _mapController?.animateCamera(
+          CameraUpdate.newLatLng(
+            LatLng(next.anchorLatitude!, next.anchorLongitude!),
+          ),
+        );
+      }
+    });
+
+    final initialCenter =
+        tracking.anchorLatitude != null && tracking.anchorLongitude != null
+            ? LatLng(tracking.anchorLatitude!, tracking.anchorLongitude!)
+            : _fallbackCenter;
+
+    final markers = <Marker>{
+      if (tracking.isActive)
+        Marker(
+          markerId: const MarkerId(_driverMarkerId),
+          position: LatLng(tracking.latitude, tracking.longitude),
+          rotation: tracking.bearing,
+          anchor: const Offset(0.5, 0.5),
+          flat: true,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueGreen,
+          ),
+        ),
+    };
+
+    return Stack(
+      children: [
+        GoogleMap(
+          initialCameraPosition: CameraPosition(
+            target: initialCenter,
+            zoom: 15,
+          ),
+          markers: markers,
+          myLocationButtonEnabled: false,
+          onMapCreated: (controller) => _mapController = controller,
+        ),
+
+        // ── Sign-out button (top-right) ───────────────────────────────
+        Positioned(
+          top: MediaQuery.of(context).padding.top + 12,
+          right: 16,
+          child: Material(
+            color: KwellaColors.communityCream,
+            borderRadius: BorderRadius.circular(12),
+            elevation: 3,
+            shadowColor: Colors.black12,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: widget.onSignOut,
+              child: const Padding(
+                padding: EdgeInsets.all(10),
+                child: Icon(
+                  Icons.logout_rounded,
+                  size: 20,
+                  color: KwellaColors.textOnLight,
+                ),
+              ),
             ),
-          ],
+          ),
         ),
-        child: const Icon(
-          Icons.navigation_rounded,
-          color: KwellaColors.cataTransitGreen,
-          size: 20,
-        ),
-      ),
+      ],
     );
   }
 }
@@ -716,30 +638,6 @@ class _StepperButton extends StatelessWidget {
       ),
     );
   }
-}
-
-// ---------------------------------------------------------------------------
-// Map grid painter – lightweight grid lines to simulate a map backdrop
-// ---------------------------------------------------------------------------
-class _MapGridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0x33FFFFFF)
-      ..strokeWidth = 1;
-
-    const step = 40.0;
-
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_MapGridPainter oldDelegate) => false;
 }
 
 // ---------------------------------------------------------------------------

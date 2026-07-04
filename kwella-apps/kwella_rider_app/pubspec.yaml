@@ -38,6 +38,7 @@ dependencies:
   kwella_core:
     path: ../kwella_core
   flutter_riverpod: ^2.5.0
+  google_maps_flutter: ^2.9.0
 
 dev_dependencies:
   flutter_test:
