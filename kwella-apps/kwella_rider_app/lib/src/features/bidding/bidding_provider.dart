@@ -1,3 +1,4 @@
+import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kwella_core/kwella_core.dart';
@@ -7,8 +8,17 @@ enum BiddingStatus {
   idle,
   searching,
   activeBids,
-  accepted,
+  tripConfirmed,
   cancelled,
+}
+
+/// Extracts the numeric amount from a [DriverBid.price] string such as
+/// `'R 75.00'` so bids can be ranked cheapest-first. Unparseable prices sort
+/// to the end rather than crashing the aggregator.
+double _parseBidPrice(String price) {
+  final match = RegExp(r'[\d.]+').firstMatch(price);
+  if (match == null) return double.infinity;
+  return double.tryParse(match.group(0)!) ?? double.infinity;
 }
 
 /// Immutable state containing the status, incoming offers, and the accepted offer if any.
@@ -85,6 +95,9 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
 
     if (event is BidReceivedEvent) {
       final updatedBids = List<DriverBid>.from(state.bids)..add(event.bid);
+      updatedBids.sort(
+        (a, b) => _parseBidPrice(a.price).compareTo(_parseBidPrice(b.price)),
+      );
       state = state.copyWith(
         status: BiddingStatus.activeBids,
         bids: updatedBids,
@@ -101,9 +114,9 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
           price: event.finalPrice,
         ),
       );
-      
+
       state = state.copyWith(
-        status: BiddingStatus.accepted,
+        status: BiddingStatus.tripConfirmed,
         acceptedBid: bid,
       );
     } else if (event is RideCancelledEvent) {
@@ -114,11 +127,32 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
     }
   }
 
-  /// Transitions status to `.accepted` and preserves the selected bid.
-  void acceptBid(DriverBid bid) {
+  /// Dispatches an `acceptBid` payload for [bidId] over the WebSocket
+  /// gateway and transitions the local state into `.tripConfirmed`,
+  /// preserving the accepted bid's details for the confirmation UI.
+  void acceptBid(String bidId) {
+    final bid = state.bids.firstWhere(
+      (b) => b.id == bidId,
+      orElse: () => DriverBid(
+        id: bidId,
+        driverName: 'Driver',
+        rating: 'N/A',
+        eta: 'N/A',
+        price: 'N/A',
+      ),
+    );
+
+    final gateway = _ref.read(kwellaWebSocketGatewayProvider);
+    if (gateway.isConnected) {
+      gateway.send(jsonEncode({
+        'action': 'acceptBid',
+        'payload': {'bidId': bidId},
+      }));
+    }
+
     _cancelSubscription();
     state = RiderBiddingState(
-      status: BiddingStatus.accepted,
+      status: BiddingStatus.tripConfirmed,
       bids: state.bids,
       acceptedBid: bid,
     );

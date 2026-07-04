@@ -46,7 +46,7 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
 
     // Listen reactively to accepted bid and display success Snackbar.
     ref.listen<RiderBiddingState>(riderBiddingProvider, (previous, next) {
-      if (next.status == BiddingStatus.accepted && next.acceptedBid != null) {
+      if (next.status == BiddingStatus.tripConfirmed && next.acceptedBid != null) {
         final driverName = next.acceptedBid!.driverName;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -136,9 +136,9 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
             ),
             onPressed: _selectedBidId != null
                 ? () {
-                    final selectedBid =
-                        bids.firstWhere((b) => b.id == _selectedBidId);
-                    ref.read(riderBiddingProvider.notifier).acceptBid(selectedBid);
+                    ref
+                        .read(riderBiddingProvider.notifier)
+                        .acceptBid(_selectedBidId!);
                   }
                 : null,
             child: const Text('Accept Ride'),
