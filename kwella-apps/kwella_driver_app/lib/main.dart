@@ -377,71 +377,613 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
 }
 
 // ---------------------------------------------------------------------------
-// Driver Home screen (placeholder)
+// Driver Home screen  –  Phase 3 high-fidelity layout
 // ---------------------------------------------------------------------------
-class DriverHomeScreen extends ConsumerWidget {
-  const DriverHomeScreen({super.key});
+
+/// Transit-route background painter.
+///
+/// Draws a simulated multi-stop route on the dark map canvas using
+/// [KwellaColors.cataTransitGreen] as the primary route colour.
+class _TransitRoutePainter extends CustomPainter {
+  const _TransitRoutePainter();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final authState = ref.watch(kwellaAuthNotifierProvider);
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
 
-    return Scaffold(
-      backgroundColor: KwellaColors.deepSlate,
-      appBar: AppBar(
-        title: const Text(
-          'Driver Dashboard',
-          style: TextStyle(
-            color: KwellaColors.textOnDark,
-            fontWeight: FontWeight.w700,
+    // ── Background grid (street-map effect) ──────────────────────────────
+    final gridPaint = Paint()
+      ..color = const Color(0xFF272D36)
+      ..strokeWidth = 1.0;
+
+    // Horizontal grid lines
+    for (double y = 0; y < h; y += 48) {
+      canvas.drawLine(Offset(0, y), Offset(w, y), gridPaint);
+    }
+    // Vertical grid lines
+    for (double x = 0; x < w; x += 48) {
+      canvas.drawLine(Offset(x, 0), Offset(x, h), gridPaint);
+    }
+
+    // ── Off-route secondary roads ─────────────────────────────────────────
+    final secondaryPaint = Paint()
+      ..color = const Color(0xFF323A47)
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawLine(
+        Offset(w * 0.1, 0), Offset(w * 0.3, h * 0.5), secondaryPaint);
+    canvas.drawLine(
+        Offset(w * 0.3, h * 0.5), Offset(w * 0.6, h * 0.9), secondaryPaint);
+    canvas.drawLine(
+        Offset(w * 0.85, 0), Offset(w * 0.7, h * 0.45), secondaryPaint);
+    canvas.drawLine(
+        Offset(w * 0.7, h * 0.45), Offset(w * 0.55, h), secondaryPaint);
+
+    // ── Primary CATA transit route ────────────────────────────────────────
+    final routePath = Path()
+      ..moveTo(w * 0.15, h * 0.85)
+      ..cubicTo(w * 0.25, h * 0.65, w * 0.35, h * 0.60, w * 0.45, h * 0.48)
+      ..cubicTo(w * 0.55, h * 0.36, w * 0.60, h * 0.28, w * 0.72, h * 0.20)
+      ..lineTo(w * 0.85, h * 0.12);
+
+    // Glow/halo layer
+    canvas.drawPath(
+      routePath,
+      Paint()
+        ..color = KwellaColors.cataTransitGreen.withValues(alpha: 0.15)
+        ..strokeWidth = 18
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round,
+    );
+    // Main route line
+    canvas.drawPath(
+      routePath,
+      Paint()
+        ..color = KwellaColors.cataTransitGreen.withValues(alpha: 0.85)
+        ..strokeWidth = 4
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round,
+    );
+
+    // ── Route stop markers ────────────────────────────────────────────────
+    final stopPositions = <Offset>[
+      Offset(w * 0.15, h * 0.85),
+      Offset(w * 0.45, h * 0.48),
+      Offset(w * 0.72, h * 0.20),
+      Offset(w * 0.85, h * 0.12),
+    ];
+    final stopRingPaint = Paint()
+      ..color = KwellaColors.cataTransitGreen
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+    final stopFillPaint = Paint()
+      ..color = KwellaColors.deepSlate
+      ..style = PaintingStyle.fill;
+
+    for (final pos in stopPositions) {
+      canvas.drawCircle(pos, 8, stopFillPaint);
+      canvas.drawCircle(pos, 8, stopRingPaint);
+    }
+
+    // ── Current driver position marker ────────────────────────────────────
+    final driverPos = Offset(w * 0.45, h * 0.48);
+    canvas.drawCircle(
+      driverPos,
+      16,
+      Paint()..color = KwellaColors.cataTransitGreen.withValues(alpha: 0.18),
+    );
+    canvas.drawCircle(
+      driverPos,
+      9,
+      Paint()..color = KwellaColors.cataTransitGreen,
+    );
+    canvas.drawCircle(
+      driverPos,
+      5,
+      Paint()..color = KwellaColors.deepSlate,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ---------------------------------------------------------------------------
+// Pulsing streaming-status dot
+// ---------------------------------------------------------------------------
+class _PulsingDot extends StatefulWidget {
+  const _PulsingDot();
+
+  @override
+  State<_PulsingDot> createState() => _PulsingDotState();
+}
+
+class _PulsingDotState extends State<_PulsingDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+  late final Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+    _scale = Tween<double>(begin: 0.7, end: 1.3).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
+    );
+    _opacity = Tween<double>(begin: 0.5, end: 1.0).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, _) => Opacity(
+        opacity: _opacity.value,
+        child: Transform.scale(
+          scale: _scale.value,
+          child: Container(
+            width: 10,
+            height: 10,
+            decoration: const BoxDecoration(
+              color: KwellaColors.cataTransitGreen,
+              shape: BoxShape.circle,
+            ),
           ),
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(
-              Icons.logout_rounded,
-              color: KwellaColors.textOnDarkMuted,
-            ),
-            tooltip: 'Sign out',
-            onPressed: () =>
-                ref.read(kwellaAuthNotifierProvider.notifier).signOut(),
-          ),
-        ],
       ),
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Telematics header overlay
+// ---------------------------------------------------------------------------
+class _TelematicsHeader extends StatelessWidget {
+  const _TelematicsHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        child: Row(
           children: [
+            // ── Speed badge ───────────────────────────────────────────────
             Container(
-              width: 80,
-              height: 80,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
-                color: KwellaColors.cataTransitGreen,
-                borderRadius: BorderRadius.circular(24),
+                color: KwellaColors.deepSlateCard.withValues(alpha: 0.92),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                    color: KwellaColors.deepSlateBorder, width: 1.0),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x33000000),
+                    blurRadius: 12,
+                    offset: Offset(0, 4),
+                  ),
+                ],
               ),
-              child: const Icon(
-                Icons.check_circle_outline_rounded,
-                color: KwellaColors.deepSlate,
-                size: 40,
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.speed_rounded,
+                      color: KwellaColors.cataTransitGreen, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    '45 km/h',
+                    style: TextStyle(
+                      color: KwellaColors.textOnDark,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 24),
-            const Text(
-              'Driver Dashboard Active',
-              style: TextStyle(
-                color: KwellaColors.textOnDark,
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
+            const SizedBox(width: 10),
+
+            // ── GPS streaming status pill ──────────────────────────────────
+            Expanded(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: KwellaColors.deepSlateCard.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                      color: KwellaColors.deepSlateBorder, width: 1.0),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x33000000),
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: const Row(
+                  children: [
+                    _PulsingDot(),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Streaming GPS Deltas to AWS...',
+                        style: TextStyle(
+                          color: KwellaColors.textOnDarkMuted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              authState.email ?? '',
-              style: const TextStyle(
-                  color: KwellaColors.textOnDarkMuted, fontSize: 14),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Slide-to-Confirm button
+// ---------------------------------------------------------------------------
+class SlideToConfirmButton extends StatefulWidget {
+  const SlideToConfirmButton({
+    super.key,
+    required this.label,
+    required this.onConfirmed,
+  });
+
+  /// Text label shown inside the track.
+  final String label;
+
+  /// Called once when the driver successfully slides to the end.
+  final VoidCallback onConfirmed;
+
+  @override
+  State<SlideToConfirmButton> createState() => _SlideToConfirmButtonState();
+}
+
+class _SlideToConfirmButtonState extends State<SlideToConfirmButton>
+    with SingleTickerProviderStateMixin {
+  // Width of the circular handle.
+  static const double _handleDiameter = 56.0;
+  // Horizontal padding inside the track.
+  static const double _trackPadding = 6.0;
+  // Fraction of track width that counts as "confirmed".
+  static const double _confirmThreshold = 0.82;
+
+  double _dragOffset = 0.0; // normalised 0.0 → 1.0
+  bool _confirmed = false;
+
+  late final AnimationController _snapCtrl;
+  late final Animation<double> _snapAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _snapCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    );
+    _snapAnim = CurvedAnimation(parent: _snapCtrl, curve: Curves.elasticOut);
+  }
+
+  @override
+  void dispose() {
+    _snapCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onDragUpdate(DragUpdateDetails details, double trackWidth) {
+    if (_confirmed) return;
+    final maxOffset = trackWidth - _handleDiameter - _trackPadding * 2;
+    setState(() {
+      _dragOffset =
+          (_dragOffset + details.delta.dx / maxOffset).clamp(0.0, 1.0);
+    });
+  }
+
+  void _onDragEnd(DragEndDetails _, double trackWidth) {
+    if (_confirmed) return;
+    if (_dragOffset >= _confirmThreshold) {
+      setState(() {
+        _dragOffset = 1.0;
+        _confirmed = true;
+      });
+      widget.onConfirmed();
+    } else {
+      // Snap back
+      final startOffset = _dragOffset;
+      _snapCtrl.reset();
+      _snapAnim.addListener(() {
+        if (!mounted) return;
+        setState(() {
+          _dragOffset = startOffset * (1.0 - _snapAnim.value);
+        });
+      });
+      _snapCtrl.forward();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final trackWidth = constraints.maxWidth;
+          final maxOffset =
+              trackWidth - _handleDiameter - _trackPadding * 2;
+          final handleLeft = _trackPadding + _dragOffset * maxOffset;
+
+          return Stack(
+            alignment: Alignment.centerLeft,
+            children: [
+              // ── Track container ─────────────────────────────────────────
+              Container(
+                height: 68,
+                width: trackWidth,
+                decoration: BoxDecoration(
+                  color: KwellaColors.deepSlateCard.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(34),
+                  border: Border.all(
+                    color: _confirmed
+                        ? KwellaColors.cataTransitGreen
+                        : KwellaColors.deepSlateBorder,
+                    width: _confirmed ? 1.5 : 1.0,
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x44000000),
+                      blurRadius: 16,
+                      offset: Offset(0, 6),
+                    ),
+                  ],
+                ),
+                // ── Progress fill ──────────────────────────────────────────
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(34),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FractionallySizedBox(
+                      widthFactor: _dragOffset,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              KwellaColors.cataTransitGreen
+                                  .withValues(alpha: 0.18),
+                              KwellaColors.cataTransitGreen
+                                  .withValues(alpha: 0.06),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // ── Track label ─────────────────────────────────────────────
+              Center(
+                child: AnimatedOpacity(
+                  opacity: _confirmed ? 0.0 : (1.0 - _dragOffset * 1.8).clamp(0.0, 1.0),
+                  duration: const Duration(milliseconds: 150),
+                  child: Text(
+                    widget.label,
+                    style: const TextStyle(
+                      color: KwellaColors.textOnDarkMuted,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ),
+
+              // ── Confirmed label ─────────────────────────────────────────
+              if (_confirmed)
+                Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      Icon(Icons.check_circle_rounded,
+                          color: KwellaColors.cataTransitGreen, size: 18),
+                      SizedBox(width: 6),
+                      Text(
+                        'Arrived at Destination',
+                        style: TextStyle(
+                          color: KwellaColors.cataTransitGreen,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              // ── Draggable handle ────────────────────────────────────────
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 0),
+                left: handleLeft,
+                child: GestureDetector(
+                  onHorizontalDragUpdate: _confirmed
+                      ? null
+                      : (d) => _onDragUpdate(d, trackWidth),
+                  onHorizontalDragEnd: _confirmed
+                      ? null
+                      : (d) => _onDragEnd(d, trackWidth),
+                  child: Container(
+                    width: _handleDiameter,
+                    height: _handleDiameter,
+                    margin: EdgeInsets.symmetric(vertical: _trackPadding),
+                    decoration: BoxDecoration(
+                      color: _confirmed
+                          ? KwellaColors.successGreen
+                          : KwellaColors.cataTransitGreen,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: KwellaColors.cataTransitGreen
+                              .withValues(alpha: 0.45),
+                          blurRadius: 14,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      _confirmed
+                          ? Icons.check_rounded
+                          : Icons.chevron_right_rounded,
+                      color: KwellaColors.deepSlate,
+                      size: 28,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Driver Home screen – full-screen navigation layout
+// ---------------------------------------------------------------------------
+class DriverHomeScreen extends ConsumerStatefulWidget {
+  const DriverHomeScreen({super.key});
+
+  @override
+  ConsumerState<DriverHomeScreen> createState() => _DriverHomeScreenState();
+}
+
+class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
+  bool _arrived = false;
+
+  void _handleArrival() {
+    setState(() => _arrived = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: KwellaColors.deepSlate,
+      // No AppBar – full bleed immersive map layout.
+      body: Stack(
+        children: [
+          // ── Layer 0 : Map background with transit route ─────────────────
+          Positioned.fill(
+            child: CustomPaint(
+              painter: const _TransitRoutePainter(),
+              child: const SizedBox.expand(),
+            ),
+          ),
+
+          // ── Layer 1 : Sign-out button (top-right corner) ─────────────────
+          Positioned(
+            top: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 12, right: 12),
+                child: Material(
+                  color: KwellaColors.deepSlateCard.withValues(alpha: 0.88),
+                  borderRadius: BorderRadius.circular(12),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => ref
+                        .read(kwellaAuthNotifierProvider.notifier)
+                        .signOut(),
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(
+                        Icons.logout_rounded,
+                        color: KwellaColors.textOnDarkMuted,
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // ── Layer 2 : Telematics header ──────────────────────────────────
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 60, // leave room for sign-out button
+            child: _TelematicsHeader(),
+          ),
+
+          // ── Layer 3 : Arrival status banner ──────────────────────────────
+          if (_arrived)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 132,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: KwellaColors.successGreen.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                      color: KwellaColors.successGreen.withValues(alpha: 0.4)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.place_rounded,
+                        color: KwellaColors.successGreen, size: 22),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Arrived at Destination',
+                        style: TextStyle(
+                          color: KwellaColors.successGreen,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // ── Layer 4 : Slide-to-Confirm at the bottom ──────────────────────
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SlideToConfirmButton(
+              label: _arrived ? 'Trip Complete' : 'Slide to Confirm Arrival',
+              onConfirmed: _arrived ? () {} : _handleArrival,
+            ),
+          ),
+        ],
       ),
     );
   }
