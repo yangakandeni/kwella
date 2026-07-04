@@ -283,12 +283,25 @@ void main() {
       await expectLater(gateway.disconnect(), completes);
     });
 
-    test('send() throws StateError when not connected', () {
+    test('send() journals the payload instead of throwing when not connected',
+        () {
       final gateway = KwellaWebSocketGateway();
       expect(
         () => gateway.send('{"action":"ping"}'),
-        throwsStateError,
+        returnsNormally,
       );
+    });
+
+    test('status starts as disconnected and is exposed via statusStream', () {
+      final gateway = KwellaWebSocketGateway();
+      expect(gateway.status, WebSocketStatus.disconnected);
+      expect(gateway.statusStream, isA<Stream<WebSocketStatus>>());
+    });
+
+    test('disconnect() keeps status at disconnected', () async {
+      final gateway = KwellaWebSocketGateway();
+      await gateway.disconnect();
+      expect(gateway.status, WebSocketStatus.disconnected);
     });
   });
 }

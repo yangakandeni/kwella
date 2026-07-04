@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -14,6 +15,24 @@ final kwellaWebSocketGatewayProvider = Provider<KwellaWebSocketGateway>(
     endpointUrl: KwellaEnvironment.production.webSocketEndpointUrl,
   ),
 );
+
+/// Riverpod stream provider exposing the live [WebSocketStatus] of the
+/// gateway vended by [kwellaWebSocketGatewayProvider].
+///
+/// UI layers can watch this to render a "Connecting..." banner whenever
+/// the connection drops and an automatic reconnect attempt is underway.
+final kwellaWebSocketStatusProvider = StreamProvider<WebSocketStatus>((ref) {
+  final gateway = ref.watch(kwellaWebSocketGatewayProvider);
+  return gateway.statusStream;
+});
+
+/// Connection lifecycle states for [KwellaWebSocketGateway].
+enum WebSocketStatus {
+  disconnected,
+  connecting,
+  connected,
+}
+
 /// Manages an AWS API Gateway v2 WebSocket connection for the Kwella
 /// real-time bidding engine.
 ///
@@ -21,6 +40,11 @@ final kwellaWebSocketGatewayProvider = Provider<KwellaWebSocketGateway>(
 /// [KwellaEnvironment.webSocketEndpointUrl].  Pass a different [endpointUrl]
 /// to the constructor (or override the provider) to target a different stage
 /// (e.g. staging, local mock server).
+///
+/// Unexpected socket closures/errors trigger automatic reconnection with
+/// exponential backoff (2s, 4s, 8s, capped at 16s), and any [send] calls
+/// made while disconnected are journaled and flushed in order once the
+/// connection is re-established.
 ///
 /// Usage:
 /// ```dart
@@ -37,11 +61,27 @@ class KwellaWebSocketGateway {
   /// constructed without an explicit value.
   final String endpointUrl;
 
+  static const Duration _initialBackoff = Duration(seconds: 2);
+  static const Duration _maxBackoff = Duration(seconds: 16);
+
   WebSocketChannel? _channel;
   StreamController<String>? _controller;
+  final StreamController<WebSocketStatus> _statusController =
+      StreamController<WebSocketStatus>.broadcast();
+
+  WebSocketStatus _status = WebSocketStatus.disconnected;
+  int _retryCount = 0;
+  Timer? _reconnectTimer;
+  bool _manualDisconnect = false;
+  String? _lastAccessToken;
+  String? _lastOverrideEndpointUrl;
 
   /// For testing/simulation purposes: stores raw JSON payloads sent via [send].
   final List<String> sentMessages = [];
+
+  /// Outbound payloads submitted via [send] while disconnected, held in
+  /// chronological order until the next successful reconnection flushes them.
+  final List<String> _outboundJournal = [];
 
   KwellaWebSocketGateway({
     String? endpointUrl,
@@ -49,6 +89,13 @@ class KwellaWebSocketGateway {
 
   /// Returns `true` when an active WebSocket connection is open.
   bool get isConnected => _channel != null;
+
+  /// The current [WebSocketStatus] of this gateway.
+  WebSocketStatus get status => _status;
+
+  /// Broadcast stream of [WebSocketStatus] transitions, suitable for driving
+  /// a UI "Connecting..." banner. See [kwellaWebSocketStatusProvider].
+  Stream<WebSocketStatus> get statusStream => _statusController.stream;
 
   /// Exposes decoded UTF-8 JSON frames emitted by the backend bidding engine
   /// as a broadcast stream.
@@ -75,12 +122,26 @@ class KwellaWebSocketGateway {
   /// `$connect`.
   ///
   /// Calling [connect] while already connected will silently disconnect
-  /// the existing channel first.
+  /// the existing channel first. A successful [connect] cancels any pending
+  /// automatic reconnect attempt and re-arms auto-reconnect for future drops.
   Future<void> connect(String accessToken, {String? overrideEndpointUrl}) async {
+    _manualDisconnect = false;
+    _lastAccessToken = accessToken;
+    _lastOverrideEndpointUrl = overrideEndpointUrl;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+
+    await _openConnection(accessToken, overrideEndpointUrl: overrideEndpointUrl);
+  }
+
+  Future<void> _openConnection(String accessToken,
+      {String? overrideEndpointUrl}) async {
     // Close any existing connection cleanly before opening a new one.
     if (_channel != null) {
-      await disconnect();
+      await _closeChannel();
     }
+
+    _setStatus(WebSocketStatus.connecting);
 
     final target = overrideEndpointUrl ?? endpointUrl;
     final parsedUri = Uri.parse(target);
@@ -96,8 +157,21 @@ class KwellaWebSocketGateway {
     _controller = StreamController<String>.broadcast();
     _channel = WebSocketChannel.connect(uri);
 
-    // Await the protocol handshake to surface connection errors early.
-    await _channel!.ready;
+    try {
+      // Await the protocol handshake to surface connection errors early.
+      await _channel!.ready;
+    } catch (error) {
+      _channel = null;
+      _setStatus(WebSocketStatus.disconnected);
+      _scheduleReconnect();
+      rethrow;
+    }
+
+    // Handshake succeeded — reset backoff and flush anything journaled
+    // while we were disconnected.
+    _retryCount = 0;
+    _setStatus(WebSocketStatus.connected);
+    _flushOutboundJournal();
 
     // Forward incoming frames onto the broadcast controller.
     _channel!.stream.listen(
@@ -110,28 +184,69 @@ class KwellaWebSocketGateway {
         if (!_controller!.isClosed) {
           _controller!.addError(error, stack);
         }
+        _handleUnexpectedClosure();
       },
       onDone: () {
         // The channel closed remotely — propagate the closure.
         if (!_controller!.isClosed) {
           _controller!.close();
         }
-        _channel = null;
+        _handleUnexpectedClosure();
       },
       cancelOnError: false,
     );
   }
 
+  /// Reacts to a socket closure/error that was not initiated by [disconnect].
+  void _handleUnexpectedClosure() {
+    _channel = null;
+    if (_manualDisconnect) return;
+    _setStatus(WebSocketStatus.disconnected);
+    _scheduleReconnect();
+  }
+
+  /// Schedules the next reconnect attempt using exponential backoff:
+  /// `delay = min(initialDelay * pow(2, retryCount), maxDelay)`.
+  void _scheduleReconnect() {
+    if (_manualDisconnect || _lastAccessToken == null) return;
+
+    _reconnectTimer?.cancel();
+    final delayMs = min(
+      _initialBackoff.inMilliseconds * pow(2, _retryCount).toInt(),
+      _maxBackoff.inMilliseconds,
+    );
+    _retryCount++;
+
+    _reconnectTimer = Timer(Duration(milliseconds: delayMs), () {
+      if (_manualDisconnect || _lastAccessToken == null) return;
+      _openConnection(_lastAccessToken!,
+          overrideEndpointUrl: _lastOverrideEndpointUrl);
+    });
+  }
+
   /// Sends a raw JSON [payload] string over the open WebSocket channel.
   ///
-  /// Throws a [StateError] if [connect] has not been called first.
+  /// If currently disconnected, [payload] is appended to the outbound
+  /// journal instead of throwing, and will be flushed in chronological
+  /// order once the connection is re-established.
   void send(String payload) {
     if (_channel == null) {
-      throw StateError(
-          'KwellaWebSocketGateway: cannot send — not connected.');
+      _outboundJournal.add(payload);
+      return;
     }
     sentMessages.add(payload);
     _channel!.sink.add(payload);
+  }
+
+  /// Replays journaled payloads (oldest first) through [send], then clears
+  /// the journal.
+  void _flushOutboundJournal() {
+    if (_outboundJournal.isEmpty) return;
+    final pending = List<String>.of(_outboundJournal);
+    _outboundJournal.clear();
+    for (final payload in pending) {
+      send(payload);
+    }
   }
 
   /// For testing/simulation purposes: allows manual injection of an incoming
@@ -144,7 +259,19 @@ class KwellaWebSocketGateway {
   }
 
   /// Closes the WebSocket connection and releases all stream resources.
+  ///
+  /// This is treated as an intentional disconnect — no automatic reconnect
+  /// attempt is scheduled afterwards.
   Future<void> disconnect() async {
+    _manualDisconnect = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+
+    await _closeChannel();
+    _setStatus(WebSocketStatus.disconnected);
+  }
+
+  Future<void> _closeChannel() async {
     await _channel?.sink.close();
     _channel = null;
 
@@ -152,5 +279,12 @@ class KwellaWebSocketGateway {
       await _controller!.close();
     }
     _controller = null;
+  }
+
+  void _setStatus(WebSocketStatus newStatus) {
+    _status = newStatus;
+    if (!_statusController.isClosed) {
+      _statusController.add(newStatus);
+    }
   }
 }
