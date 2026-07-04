@@ -1026,18 +1026,18 @@ _CONFIRM_ARRIVAL_EVENT_BASE = {
 
 
 @mock_aws
-def test_confirm_arrival_settles_accepted_trip_successfully():
+def test_confirm_arrival_settles_in_progress_trip_successfully():
     """Verify confirmArrival calculates net payout, executes transact_write_items, updates trip to COMPLETED, and updates driver wallet."""
     from decimal import Decimal
     table = _create_mock_table()
     handler = _reload_bidding_handler()
 
-    # Pre-populate trip record in ACCEPTED state
+    # Pre-populate trip record in IN_PROGRESS state
     table.put_item(
         Item={
             "PK": "TRIP#trip-accepted-123",
             "SK": "METADATA",
-            "status": "ACCEPTED",
+            "status": "IN_PROGRESS",
         }
     )
 
@@ -1074,18 +1074,18 @@ def test_confirm_arrival_settles_accepted_trip_successfully():
 
 
 @mock_aws
-def test_confirm_arrival_settles_arrived_trip_and_increments_existing_wallet():
-    """Verify confirmArrival increments pre-existing wallet balances for arrived trip."""
+def test_confirm_arrival_increments_existing_wallet_balance():
+    """Verify confirmArrival increments pre-existing wallet balances for an in-progress trip."""
     from decimal import Decimal
     table = _create_mock_table()
     handler = _reload_bidding_handler()
 
-    # Pre-populate trip record in ARRIVED state
+    # Pre-populate trip record in IN_PROGRESS state
     table.put_item(
         Item={
             "PK": "TRIP#trip-arrived-456",
             "SK": "METADATA",
-            "status": "ARRIVED",
+            "status": "IN_PROGRESS",
         }
     )
 
@@ -1173,7 +1173,7 @@ def test_confirm_arrival_fails_on_already_completed_trip():
     assert response["statusCode"] == 400
     body = json.loads(response["body"])
     assert body["error"] == "ValidationError"
-    assert "status must be ACCEPTED or ARRIVED" in body["detail"]
+    assert "status must be IN_PROGRESS" in body["detail"]
 
     # Verify database remains unmodified
     trip_res = table.get_item(Key={"PK": "TRIP#trip-completed-789", "SK": "METADATA"})
@@ -1233,3 +1233,336 @@ def test_confirm_arrival_validation_failures():
     assert "final_bid_amount" in json.loads(response["body"])["detail"]
 
 
+# ---------------------------------------------------------------------------
+# Route: selectBid Tests
+# ---------------------------------------------------------------------------
+
+_SELECT_BID_EVENT_BASE = {
+    "requestContext": {
+        "routeKey": "selectBid",
+        "connectionId": "conn-rider-select-bid",
+    },
+}
+
+
+@mock_aws
+def test_select_bid_transitions_trip_to_accepted_and_notifies_driver():
+    """Verify selectBid updates trip status to ACCEPTED and records the selected driver."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-select-1",
+            "SK": "METADATA",
+            "status": "REQUESTED",
+            "rider_id": "USR#rdr-1",
+        }
+    )
+    table.put_item(
+        Item={
+            "PK": "BID#trip-select-1",
+            "SK": "DRIVER#USR#drv-1",
+            "driver_connection_id": "conn-driver-winner",
+        }
+    )
+
+    payload = {
+        "action": "selectBid",
+        "tripId": "trip-select-1",
+        "driverId": "USR#drv-1",
+    }
+
+    response = handler.lambda_handler(
+        {**_SELECT_BID_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "BidSelected"
+    assert body["tripId"] == "trip-select-1"
+    assert body["driverId"] == "USR#drv-1"
+    assert body["riderId"] == "USR#rdr-1"
+
+    trip_res = table.get_item(Key={"PK": "TRIP#trip-select-1", "SK": "METADATA"})
+    trip_item = trip_res["Item"]
+    assert trip_item["status"] == "ACCEPTED"
+    assert trip_item["selected_driver_id"] == "USR#drv-1"
+
+
+@mock_aws
+def test_select_bid_missing_trip_returns_400():
+    """Verify selectBid returns 400 ValidationError when the trip does not exist."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        "action": "selectBid",
+        "tripId": "trip-does-not-exist",
+        "driverId": "USR#drv-1",
+    }
+
+    response = handler.lambda_handler(
+        {**_SELECT_BID_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "does not exist" in body["detail"]
+
+
+@mock_aws
+def test_select_bid_missing_driver_id_returns_400():
+    """Verify selectBid returns 400 ValidationError when driverId is absent."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        "action": "selectBid",
+        "tripId": "trip-select-2",
+    }
+
+    response = handler.lambda_handler(
+        {**_SELECT_BID_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "driverId" in body["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Route: startTrip Tests
+# ---------------------------------------------------------------------------
+
+_START_TRIP_EVENT_BASE = {
+    "requestContext": {
+        "routeKey": "startTrip",
+        "connectionId": "conn-driver-start-trip",
+    },
+}
+
+
+@mock_aws
+def test_start_trip_transitions_arrived_to_in_progress_and_notifies_rider():
+    """Verify startTrip transitions an ARRIVED trip to IN_PROGRESS and pushes tripStarted to the rider."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-start-1",
+            "SK": "METADATA",
+            "status": "ARRIVED",
+            "rider_connection_id": "conn-rider-1",
+        }
+    )
+
+    payload = {
+        "action": "startTrip",
+        "tripId": "trip-start-1",
+        "driverId": "USR#drv-1",
+    }
+
+    response = handler.lambda_handler(
+        {**_START_TRIP_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "TripStarted"
+    assert body["tripId"] == "trip-start-1"
+
+    trip_res = table.get_item(Key={"PK": "TRIP#trip-start-1", "SK": "METADATA"})
+    assert trip_res["Item"]["status"] == "IN_PROGRESS"
+
+
+@mock_aws
+def test_start_trip_rejects_when_not_arrived():
+    """Verify startTrip returns 400 ValidationError when the trip is not in ARRIVED state."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-start-2",
+            "SK": "METADATA",
+            "status": "ACCEPTED",
+        }
+    )
+
+    payload = {
+        "action": "startTrip",
+        "tripId": "trip-start-2",
+        "driverId": "USR#drv-1",
+    }
+
+    response = handler.lambda_handler(
+        {**_START_TRIP_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "ARRIVED" in body["detail"]
+
+    trip_res = table.get_item(Key={"PK": "TRIP#trip-start-2", "SK": "METADATA"})
+    assert trip_res["Item"]["status"] == "ACCEPTED"
+
+
+# ---------------------------------------------------------------------------
+# Route: submitRating Tests
+# ---------------------------------------------------------------------------
+
+_SUBMIT_RATING_EVENT_BASE = {
+    "requestContext": {
+        "routeKey": "submitRating",
+        "connectionId": "conn-driver-submit-rating",
+    },
+}
+
+
+@mock_aws
+def test_submit_rating_persists_against_driver_profile():
+    """Verify submitRating stores the rating against the trip's selected driver profile."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-rating-1",
+            "SK": "METADATA",
+            "rider_id": "USR#rdr-1",
+            "selected_driver_id": "USR#drv-1",
+        }
+    )
+
+    payload = {
+        "action": "submitRating",
+        "riderId": "USR#rdr-1",
+        "tripId": "trip-rating-1",
+        "rating": 5,
+        "target": "DRIVER",
+    }
+
+    response = handler.lambda_handler(
+        {**_SUBMIT_RATING_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "RatingSubmitted"
+    assert body["target"] == "DRIVER"
+    assert body["average_rating"] == pytest.approx(5.0)
+
+    profile_res = table.get_item(Key={"PK": "DRIVER#USR#drv-1", "SK": "PROFILE"})
+    profile_item = profile_res["Item"]
+    assert profile_item["rating_count"] == 1
+    assert profile_item["rating_sum"] == 5
+
+
+@mock_aws
+def test_submit_rating_averages_across_multiple_submissions():
+    """Verify submitRating computes a running average across successive ratings."""
+    from decimal import Decimal
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-rating-2",
+            "SK": "METADATA",
+            "rider_id": "USR#rdr-1",
+            "selected_driver_id": "USR#drv-2",
+        }
+    )
+    table.put_item(
+        Item={
+            "PK": "DRIVER#USR#drv-2",
+            "SK": "PROFILE",
+            "rating_count": Decimal("1"),
+            "rating_sum": Decimal("4"),
+        }
+    )
+
+    payload = {
+        "action": "submitRating",
+        "riderId": "USR#rdr-1",
+        "tripId": "trip-rating-2",
+        "rating": 2,
+        "target": "DRIVER",
+    }
+
+    response = handler.lambda_handler(
+        {**_SUBMIT_RATING_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["average_rating"] == pytest.approx(3.0)
+
+
+@mock_aws
+def test_submit_rating_invalid_target_returns_400():
+    """Verify submitRating returns 400 ValidationError for an invalid target value."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-rating-3",
+            "SK": "METADATA",
+            "rider_id": "USR#rdr-1",
+            "selected_driver_id": "USR#drv-1",
+        }
+    )
+
+    payload = {
+        "action": "submitRating",
+        "tripId": "trip-rating-3",
+        "rating": 5,
+        "target": "VEHICLE",
+    }
+
+    response = handler.lambda_handler(
+        {**_SUBMIT_RATING_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "target" in body["detail"]
+
+
+@mock_aws
+def test_submit_rating_out_of_range_returns_400():
+    """Verify submitRating returns 400 ValidationError when rating is outside 1-5."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-rating-4",
+            "SK": "METADATA",
+            "rider_id": "USR#rdr-1",
+            "selected_driver_id": "USR#drv-1",
+        }
+    )
+
+    payload = {
+        "action": "submitRating",
+        "tripId": "trip-rating-4",
+        "rating": 7,
+        "target": "DRIVER",
+    }
+
+    response = handler.lambda_handler(
+        {**_SUBMIT_RATING_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "rating" in body["detail"]

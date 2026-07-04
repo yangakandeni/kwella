@@ -7,7 +7,14 @@ Supported WebSocket route keys (dispatched by API Gateway WebSocket proxy):
   $connect          — Extract authorization, record connection telemetry, and save active connection session row.
   $disconnect       — Delete connection session metadata.
   sendBid           — Parse and extract particulars from Driver counter-offers.
+  selectBid         — Rider-initiated bid acceptance: transition trip to ACCEPTED and notify
+                      the winning driver over their WebSocket connection.
   updateLocation    — Ingest real-time driver telematics telemetry and persist to DynamoDB.
+  startTrip         — Driver-initiated trip start: transition trip from ARRIVED to IN_PROGRESS
+                      and notify the rider.
+  confirmArrival    — Driver-initiated trip completion: transition trip from IN_PROGRESS to
+                      COMPLETED, settle the driver's payout, and push WalletSettled to the rider.
+  submitRating      — Persist a 1-5 star rating against the counterparty's profile record.
   requestTrip       — Rider-initiated spatial matching: scan active driver TELEMETRY records,
                       filter by 5000 m proximity, and broadcast rideOfferAvailable offers.
 
@@ -402,6 +409,132 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 })
             }
 
+        elif route_key == "selectBid":
+            raw_body = event.get("body")
+            if raw_body:
+                try:
+                    payload = json.loads(raw_body)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Failed to parse JSON body for selectBid route on connectionId=%s: %s",
+                        connection_id,
+                        exc,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Request body must be valid JSON.",
+                        }),
+                    }
+            else:
+                payload = event
+
+            driver_id: str | None = payload.get("driverId") or payload.get("driver_id")
+            trip_id: str | None = payload.get("tripId") or payload.get("trip_id")
+            rider_id: str | None = payload.get("riderId") or payload.get("rider_id")
+
+            if not driver_id or not isinstance(driver_id, str):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'driverId'.",
+                    }),
+                }
+            if not trip_id or not isinstance(trip_id, str):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'tripId'.",
+                    }),
+                }
+
+            trip_res = table.get_item(Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"})
+            trip_item = trip_res.get("Item")
+            if not trip_item:
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": f"Trip '{trip_id}' does not exist.",
+                    }),
+                }
+
+            # Fall back to the rider_id recorded on the trip at requestTrip time
+            # when the rider's own connection omits it from the selectBid frame.
+            if not rider_id or not isinstance(rider_id, str):
+                rider_id = trip_item.get("rider_id")
+
+            logger.info(
+                "selectBid: riderId=%s selecting driverId=%s for tripId=%s",
+                rider_id, driver_id, trip_id,
+            )
+
+            update_expression_parts = ["#status = :accepted", "#drv = :drv"]
+            expression_attr_names: dict[str, str] = {"#status": "status", "#drv": "selected_driver_id"}
+            expression_attr_values: dict[str, Any] = {":accepted": "ACCEPTED", ":drv": driver_id}
+            if rider_id:
+                update_expression_parts.append("#rid = :rid")
+                expression_attr_names["#rid"] = "rider_id"
+                expression_attr_values[":rid"] = rider_id
+
+            table.update_item(
+                Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"},
+                UpdateExpression="SET " + ", ".join(update_expression_parts),
+                ExpressionAttributeNames=expression_attr_names,
+                ExpressionAttributeValues=expression_attr_values,
+            )
+
+            # Resolve the winning driver's live WebSocket connection from their
+            # bid record (persisted during sendBid) so we can notify them directly.
+            bid_res = table.get_item(Key={"PK": f"BID#{trip_id}", "SK": f"DRIVER#{driver_id}"})
+            bid_item = bid_res.get("Item") or {}
+            driver_conn_id: str | None = bid_item.get("driver_connection_id")
+
+            if _APIGW_ENDPOINT and driver_conn_id:
+                apigw_client = boto3.client(
+                    "apigatewaymanagementapi",
+                    endpoint_url=_APIGW_ENDPOINT,
+                    region_name=_AWS_REGION,
+                )
+                bid_won_payload = json.dumps({
+                    "action": "bidSelected",
+                    "tripId": trip_id,
+                    "driverId": driver_id,
+                    "riderId": rider_id,
+                }).encode("utf-8")
+                try:
+                    apigw_client.post_to_connection(
+                        ConnectionId=driver_conn_id,
+                        Data=bid_won_payload,
+                    )
+                    logger.info(
+                        "Dispatched bidSelected to driver connectionId=%s for tripId=%s",
+                        driver_conn_id, trip_id,
+                    )
+                except botocore.exceptions.ClientError as notify_exc:
+                    logger.warning(
+                        "Failed to push bidSelected to driver connectionId=%s: %s",
+                        driver_conn_id, notify_exc,
+                    )
+            else:
+                logger.warning(
+                    "Could not resolve driver WebSocket connection for driverId=%s tripId=%s — skipping bidSelected push",
+                    driver_id, trip_id,
+                )
+
+            return {
+                "statusCode": 200,
+                "body": json.dumps({
+                    "status": "BidSelected",
+                    "tripId": trip_id,
+                    "driverId": driver_id,
+                    "riderId": rider_id,
+                }),
+            }
+
         elif route_key == "updateLocation":
             # Parse the incoming telematics payload from the WebSocket body.
             # API Gateway v2 WebSocket delivers the JSON message as the top-level
@@ -595,6 +728,122 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "body": json.dumps(response_body),
             }
 
+        elif route_key == "startTrip":
+            raw_body = event.get("body")
+            if raw_body:
+                try:
+                    payload = json.loads(raw_body)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Failed to parse JSON body for startTrip route on connectionId=%s: %s",
+                        connection_id,
+                        exc,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Request body must be valid JSON.",
+                        }),
+                    }
+            else:
+                payload = event
+
+            driver_id = payload.get("driverId") or payload.get("driver_id")
+            trip_id = payload.get("tripId") or payload.get("trip_id")
+
+            if not driver_id or not isinstance(driver_id, str):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'driverId'.",
+                    }),
+                }
+            if not trip_id or not isinstance(trip_id, str):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'tripId'.",
+                    }),
+                }
+
+            try:
+                update_res = table.update_item(
+                    Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"},
+                    UpdateExpression="SET #status = :in_progress",
+                    ConditionExpression="#status = :arrived",
+                    ExpressionAttributeNames={"#status": "status"},
+                    ExpressionAttributeValues={
+                        ":in_progress": "IN_PROGRESS",
+                        ":arrived": "ARRIVED",
+                    },
+                    ReturnValues="ALL_NEW",
+                )
+            except botocore.exceptions.ClientError as exc:
+                error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+                if error_code == "ConditionalCheckFailedException":
+                    logger.warning(
+                        "startTrip rejected for tripId=%s driverId=%s: trip is not in ARRIVED state",
+                        trip_id, driver_id,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Trip status must be ARRIVED to start.",
+                        }),
+                    }
+                raise
+
+            logger.info(
+                "startTrip: tripId=%s driverId=%s transitioned to IN_PROGRESS", trip_id, driver_id
+            )
+
+            trip_meta = update_res.get("Attributes") or {}
+            rider_conn_id: str | None = trip_meta.get("rider_connection_id")
+
+            if _APIGW_ENDPOINT and rider_conn_id:
+                apigw_client = boto3.client(
+                    "apigatewaymanagementapi",
+                    endpoint_url=_APIGW_ENDPOINT,
+                    region_name=_AWS_REGION,
+                )
+                trip_started_payload = json.dumps({
+                    "action": "tripStarted",
+                    "tripId": trip_id,
+                    "driverId": driver_id,
+                }).encode("utf-8")
+                try:
+                    apigw_client.post_to_connection(
+                        ConnectionId=rider_conn_id,
+                        Data=trip_started_payload,
+                    )
+                    logger.info(
+                        "Dispatched tripStarted to rider connectionId=%s for tripId=%s",
+                        rider_conn_id, trip_id,
+                    )
+                except botocore.exceptions.ClientError as notify_exc:
+                    logger.warning(
+                        "Failed to push tripStarted to rider connectionId=%s: %s",
+                        rider_conn_id, notify_exc,
+                    )
+            else:
+                logger.warning(
+                    "Could not resolve rider WebSocket connection for tripId=%s — skipping tripStarted push",
+                    trip_id,
+                )
+
+            return {
+                "statusCode": 200,
+                "body": json.dumps({
+                    "status": "TripStarted",
+                    "tripId": trip_id,
+                    "driverId": driver_id,
+                }),
+            }
+
         elif route_key == "confirmArrival":
             raw_body = event.get("body")
             if raw_body:
@@ -666,14 +915,13 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                                     "SK": {"S": "METADATA"},
                                 },
                                 "UpdateExpression": "SET #status = :completed",
-                                "ConditionExpression": "#status = :accepted OR #status = :arrived",
+                                "ConditionExpression": "#status = :in_progress",
                                 "ExpressionAttributeNames": {
                                     "#status": "status",
                                 },
                                 "ExpressionAttributeValues": {
                                     ":completed": {"S": "COMPLETED"},
-                                    ":accepted": {"S": "ACCEPTED"},
-                                    ":arrived": {"S": "ARRIVED"},
+                                    ":in_progress": {"S": "IN_PROGRESS"},
                                 },
                             }
                         },
@@ -710,7 +958,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         "statusCode": 400,
                         "body": json.dumps({
                             "error": "ValidationError",
-                            "detail": "Payout settlement failed. Trip status must be ACCEPTED or ARRIVED.",
+                            "detail": "Payout settlement failed. Trip status must be IN_PROGRESS.",
                         }),
                     }
                 raise
@@ -770,6 +1018,124 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return {
                 "statusCode": 200,
                 "body": json.dumps(settled_payload),
+            }
+
+        elif route_key == "submitRating":
+            raw_body = event.get("body")
+            if raw_body:
+                try:
+                    payload = json.loads(raw_body)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Failed to parse JSON body for submitRating route on connectionId=%s: %s",
+                        connection_id,
+                        exc,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Request body must be valid JSON.",
+                        }),
+                    }
+            else:
+                payload = event
+
+            trip_id = payload.get("tripId") or payload.get("trip_id")
+            rating = payload.get("rating")
+            target = payload.get("target")
+
+            if not trip_id or not isinstance(trip_id, str):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'tripId'.",
+                    }),
+                }
+            if target not in ("RIDER", "DRIVER"):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Field 'target' must be either 'RIDER' or 'DRIVER'.",
+                    }),
+                }
+            if (
+                not isinstance(rating, (int, float))
+                or isinstance(rating, bool)
+                or not (1 <= rating <= 5)
+            ):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Field 'rating' must be a numeric value between 1 and 5.",
+                    }),
+                }
+
+            trip_res = table.get_item(Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"})
+            trip_item = trip_res.get("Item")
+            if not trip_item:
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": f"Trip '{trip_id}' does not exist.",
+                    }),
+                }
+
+            # The rater identifies the trip and which side they're rating; the
+            # counterparty's identity is resolved from trip metadata (requestTrip
+            # records rider_id, selectBid records selected_driver_id).
+            if target == "RIDER":
+                target_id = trip_item.get("rider_id")
+                target_pk = f"RIDER#{target_id}" if target_id else None
+            else:
+                target_id = trip_item.get("selected_driver_id")
+                target_pk = f"DRIVER#{target_id}" if target_id else None
+
+            if not target_pk:
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": f"Trip '{trip_id}' has no recorded {target.lower()} to rate.",
+                    }),
+                }
+
+            rating_decimal = Decimal(str(rating))
+            profile_res = table.update_item(
+                Key={"PK": target_pk, "SK": "PROFILE"},
+                UpdateExpression=(
+                    "SET rating_count = if_not_exists(rating_count, :zero) + :one, "
+                    "rating_sum = if_not_exists(rating_sum, :zero) + :rating"
+                ),
+                ExpressionAttributeValues={
+                    ":zero": Decimal("0"),
+                    ":one": Decimal("1"),
+                    ":rating": rating_decimal,
+                },
+                ReturnValues="UPDATED_NEW",
+            )
+            updated_profile = profile_res.get("Attributes") or {}
+            rating_count = updated_profile.get("rating_count") or Decimal("1")
+            rating_sum = updated_profile.get("rating_sum") or rating_decimal
+            average_rating = float((rating_sum / rating_count).quantize(Decimal("0.01")))
+
+            logger.info(
+                "submitRating: tripId=%s target=%s targetId=%s rating=%s averageRating=%s",
+                trip_id, target, target_id, rating, average_rating,
+            )
+
+            return {
+                "statusCode": 200,
+                "body": json.dumps({
+                    "status": "RatingSubmitted",
+                    "tripId": trip_id,
+                    "target": target,
+                    "average_rating": average_rating,
+                }),
             }
 
         elif route_key == "requestTrip":
