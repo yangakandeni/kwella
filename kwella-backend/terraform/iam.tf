@@ -73,17 +73,32 @@ data "aws_iam_policy_document" "dynamodb_single_table" {
     ]
   }
 
+  # Grants the bidding engine Lambda the ability to push async messages back
+  # to connected WebSocket clients via the API Gateway Management API, and to
+  # publish SNS notifications. The execute-api actions are scoped to this
+  # region's API Gateway pool (least-privilege); SNS actions are account-wide
+  # because topic ARNs are resolved at runtime.
   statement {
-    sid    = "KwellaBiddingEngineMessaging"
+    sid    = "KwellaBiddingEngineWebSocketPush"
     effect = "Allow"
 
     actions = [
       "execute-api:ManageConnections",
       "execute-api:Invoke",
-      "sns:Publish",
-      "sns:CreatePlatformEndpoint"
     ]
-    
+
+    resources = ["arn:aws:execute-api:af-south-1:*:*/*"]
+  }
+
+  statement {
+    sid    = "KwellaBiddingEngineSnsPublish"
+    effect = "Allow"
+
+    actions = [
+      "sns:Publish",
+      "sns:CreatePlatformEndpoint",
+    ]
+
     resources = ["*"]
   }
 }
