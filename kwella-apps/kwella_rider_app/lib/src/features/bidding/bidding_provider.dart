@@ -1,4 +1,4 @@
-import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kwella_core/kwella_core.dart';
 
@@ -53,84 +53,70 @@ class RiderBiddingState {
   }
 }
 
-/// Notifier simulating a real-time stream of incoming driver bids.
 class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
-  RiderBiddingNotifier()
+  RiderBiddingNotifier(this._ref)
       : super(const RiderBiddingState(status: BiddingStatus.idle, bids: []));
 
-  final List<Timer> _simulationTimers = [];
-
-  static const List<DriverBid> _mockBids = [
-    DriverBid(
-      id: 'bid_1',
-      driverName: 'Sipho Dlamini',
-      rating: '4.9',
-      eta: '3 min away',
-      price: 'R 75.00',
-    ),
-    DriverBid(
-      id: 'bid_2',
-      driverName: 'Lwazi Ndlovu',
-      rating: '4.8',
-      eta: '5 min away',
-      price: 'R 82.00',
-    ),
-    DriverBid(
-      id: 'bid_3',
-      driverName: 'Thabo Mbeki',
-      rating: '4.7',
-      eta: '2 min away',
-      price: 'R 69.00',
-    ),
-  ];
+  final Ref _ref;
+  ProviderSubscription<AsyncValue<KwellaBiddingEvent>>? _subscription;
 
   /// Starts broadcasting a booking request, transitioning status to `.searching`
-  /// and delivering bids asynchronously one by one.
+  /// and subscribing to incoming bids.
   void startBroadcast() {
-    _cancelSimulation();
+    _cancelSubscription();
     
     state = const RiderBiddingState(
       status: BiddingStatus.searching,
       bids: [],
     );
 
-    // Simulate Sipho Dlamini bidding after 1 second
-    _simulationTimers.add(
-      Timer(const Duration(seconds: 1), () {
-        if (!mounted) return;
-        state = RiderBiddingState(
-          status: BiddingStatus.activeBids,
-          bids: [_mockBids[0]],
-        );
-      }),
+    _subscription = _ref.listen<AsyncValue<KwellaBiddingEvent>>(
+      kwellaEventMultiplexerProvider,
+      (previous, next) {
+        if (next is AsyncData<KwellaBiddingEvent>) {
+          _handleEvent(next.value);
+        }
+      },
     );
+  }
 
-    // Simulate Lwazi Ndlovu bidding after 2.5 seconds
-    _simulationTimers.add(
-      Timer(const Duration(milliseconds: 2500), () {
-        if (!mounted) return;
-        state = RiderBiddingState(
-          status: BiddingStatus.activeBids,
-          bids: [_mockBids[0], _mockBids[1]],
-        );
-      }),
-    );
+  void _handleEvent(KwellaBiddingEvent event) {
+    if (!mounted) return;
 
-    // Simulate Thabo Mbeki bidding after 4 seconds
-    _simulationTimers.add(
-      Timer(const Duration(seconds: 4), () {
-        if (!mounted) return;
-        state = RiderBiddingState(
-          status: BiddingStatus.activeBids,
-          bids: [_mockBids[0], _mockBids[1], _mockBids[2]],
-        );
-      }),
-    );
+    if (event is BidReceivedEvent) {
+      final updatedBids = List<DriverBid>.from(state.bids)..add(event.bid);
+      state = state.copyWith(
+        status: BiddingStatus.activeBids,
+        bids: updatedBids,
+      );
+    } else if (event is RideAcceptedEvent) {
+      // Find the accepted bid
+      final bid = state.bids.firstWhere(
+        (b) => b.id == event.driverId,
+        orElse: () => DriverBid(
+          id: event.driverId,
+          driverName: 'Driver',
+          rating: 'N/A',
+          eta: 'N/A',
+          price: event.finalPrice,
+        ),
+      );
+      
+      state = state.copyWith(
+        status: BiddingStatus.accepted,
+        acceptedBid: bid,
+      );
+    } else if (event is RideCancelledEvent) {
+      state = state.copyWith(
+        status: BiddingStatus.cancelled,
+      );
+      _cancelSubscription();
+    }
   }
 
   /// Transitions status to `.accepted` and preserves the selected bid.
   void acceptBid(DriverBid bid) {
-    _cancelSimulation();
+    _cancelSubscription();
     state = RiderBiddingState(
       status: BiddingStatus.accepted,
       bids: state.bids,
@@ -140,7 +126,7 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
 
   /// Transitions status to `.cancelled` and clears active timers and bids.
   void cancelBroadcast() {
-    _cancelSimulation();
+    _cancelSubscription();
     state = const RiderBiddingState(
       status: BiddingStatus.cancelled,
       bids: [],
@@ -149,23 +135,21 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
 
   /// Resets the bidding notifier to initial idle state.
   void reset() {
-    _cancelSimulation();
+    _cancelSubscription();
     state = const RiderBiddingState(
       status: BiddingStatus.idle,
       bids: [],
     );
   }
 
-  void _cancelSimulation() {
-    for (final timer in _simulationTimers) {
-      timer.cancel();
-    }
-    _simulationTimers.clear();
+  void _cancelSubscription() {
+    _subscription?.close();
+    _subscription = null;
   }
 
   @override
   void dispose() {
-    _cancelSimulation();
+    _cancelSubscription();
     super.dispose();
   }
 }
@@ -173,5 +157,5 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
 /// Global provider for the Rider Bidding state machine.
 final riderBiddingProvider =
     StateNotifierProvider<RiderBiddingNotifier, RiderBiddingState>((ref) {
-  return RiderBiddingNotifier();
+  return RiderBiddingNotifier(ref);
 });
