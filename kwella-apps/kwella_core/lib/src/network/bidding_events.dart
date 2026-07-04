@@ -5,7 +5,9 @@ abstract class KwellaBiddingEvent {
 
   factory KwellaBiddingEvent.fromJson(Map<String, dynamic> json) {
     final action = json['action'] as String?;
-    final payload = (json['payload'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final payload =
+        (json['payload'] as Map?)?.cast<String, dynamic>() ??
+        <String, dynamic>{};
 
     switch (action) {
       // ── Client-facing action names (e.g., from unit tests / mocks) ─────────
@@ -29,9 +31,11 @@ abstract class KwellaBiddingEvent {
           reason: payload['reason'] as String?,
         );
       case 'driverArrived':
-        return DriverArrivedEvent(
-          rideId: payload['rideId'] as String,
-        );
+        return DriverArrivedEvent(rideId: payload['rideId'] as String);
+      case 'tripStarted':
+        return TripStartedEvent(rideId: payload['rideId'] as String);
+      case 'tripCompleted':
+        return TripCompletedEvent(rideId: payload['rideId'] as String);
 
       // ── Backend (AWS Lambda) native action labels ──────────────────────────
       //
@@ -45,9 +49,7 @@ abstract class KwellaBiddingEvent {
       case 'rideOfferAvailable':
         return RideRequestReceivedEvent(
           riderName: (payload['rider_id'] as String?) ?? 'Rider',
-          destination: _coordinatesToString(
-            payload['dropoff_location'],
-          ),
+          destination: _coordinatesToString(payload['dropoff_location']),
           estimatedPayout: _parseFare(payload['base_fare']),
           pickupLatitude: _coordinateAt(payload['pickup_location'], 0),
           pickupLongitude: _coordinateAt(payload['pickup_location'], 1),
@@ -62,7 +64,8 @@ abstract class KwellaBiddingEvent {
         return BidReceivedEvent(
           DriverBid(
             id: driverId,
-            driverName: 'Driver ${driverId.substring(driverId.length > 6 ? driverId.length - 6 : 0)}',
+            driverName:
+                'Driver ${driverId.substring(driverId.length > 6 ? driverId.length - 6 : 0)}',
             rating: 'N/A',
             eta: 'N/A',
             price: 'R ${amount ?? '0.00'}',
@@ -200,10 +203,7 @@ class RideCancelledEvent extends KwellaBiddingEvent {
   final String rideId;
   final String? reason;
 
-  const RideCancelledEvent({
-    required this.rideId,
-    this.reason,
-  });
+  const RideCancelledEvent({required this.rideId, this.reason});
 
   @override
   bool operator ==(Object other) =>
@@ -229,6 +229,44 @@ class DriverArrivedEvent extends KwellaBiddingEvent {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is DriverArrivedEvent &&
+          runtimeType == other.runtimeType &&
+          rideId == other.rideId;
+
+  @override
+  int get hashCode => rideId.hashCode;
+}
+
+/// Sent by the Driver app when the driver begins the trip after the
+/// passenger has boarded. Relayed to the rider so their UI can transition
+/// into `.inTransit`.
+class TripStartedEvent extends KwellaBiddingEvent {
+  final String rideId;
+
+  const TripStartedEvent({required this.rideId});
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TripStartedEvent &&
+          runtimeType == other.runtimeType &&
+          rideId == other.rideId;
+
+  @override
+  int get hashCode => rideId.hashCode;
+}
+
+/// Sent by the Driver app when the driver ends the trip at the destination.
+/// Relayed to the rider so their UI can transition into `.tripCompleted` and
+/// tear down the active tracking session.
+class TripCompletedEvent extends KwellaBiddingEvent {
+  final String rideId;
+
+  const TripCompletedEvent({required this.rideId});
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TripCompletedEvent &&
           runtimeType == other.runtimeType &&
           rideId == other.rideId;
 

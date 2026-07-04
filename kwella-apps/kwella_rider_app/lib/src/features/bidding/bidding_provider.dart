@@ -10,6 +10,8 @@ enum BiddingStatus {
   activeBids,
   tripConfirmed,
   driverArrived,
+  inTransit,
+  tripCompleted,
   cancelled,
 }
 
@@ -66,7 +68,7 @@ class RiderBiddingState {
 
 class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
   RiderBiddingNotifier(this._ref)
-      : super(const RiderBiddingState(status: BiddingStatus.idle, bids: []));
+    : super(const RiderBiddingState(status: BiddingStatus.idle, bids: []));
 
   final Ref _ref;
   ProviderSubscription<AsyncValue<KwellaBiddingEvent>>? _subscription;
@@ -75,11 +77,8 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
   /// and subscribing to incoming bids.
   void startBroadcast() {
     _cancelSubscription();
-    
-    state = const RiderBiddingState(
-      status: BiddingStatus.searching,
-      bids: [],
-    );
+
+    state = const RiderBiddingState(status: BiddingStatus.searching, bids: []);
 
     _subscription = _ref.listen<AsyncValue<KwellaBiddingEvent>>(
       kwellaEventMultiplexerProvider,
@@ -122,10 +121,15 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
       );
     } else if (event is DriverArrivedEvent) {
       state = state.copyWith(status: BiddingStatus.driverArrived);
+    } else if (event is TripStartedEvent) {
+      state = state.copyWith(status: BiddingStatus.inTransit);
+    } else if (event is TripCompletedEvent) {
+      state = state.copyWith(status: BiddingStatus.tripCompleted);
+      // Deferred so the UI has a chance to observe `.tripCompleted` before
+      // the session is torn down back to `.idle`.
+      Future.microtask(reset);
     } else if (event is RideCancelledEvent) {
-      state = state.copyWith(
-        status: BiddingStatus.cancelled,
-      );
+      state = state.copyWith(status: BiddingStatus.cancelled);
       _cancelSubscription();
     }
   }
@@ -147,10 +151,12 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
 
     final gateway = _ref.read(kwellaWebSocketGatewayProvider);
     if (gateway.isConnected) {
-      gateway.send(jsonEncode({
-        'action': 'acceptBid',
-        'payload': {'bidId': bidId},
-      }));
+      gateway.send(
+        jsonEncode({
+          'action': 'acceptBid',
+          'payload': {'bidId': bidId},
+        }),
+      );
     }
 
     // Keep the subscription open past acceptance – the driver's later
@@ -165,19 +171,19 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
   /// Transitions status to `.cancelled` and clears active timers and bids.
   void cancelBroadcast() {
     _cancelSubscription();
-    state = const RiderBiddingState(
-      status: BiddingStatus.cancelled,
-      bids: [],
-    );
+    state = const RiderBiddingState(status: BiddingStatus.cancelled, bids: []);
   }
 
-  /// Resets the bidding notifier to initial idle state.
+  /// Resets the bidding notifier to initial idle state, cleanly tearing
+  /// down the active tracking session and closing the socket channel.
   void reset() {
     _cancelSubscription();
-    state = const RiderBiddingState(
-      status: BiddingStatus.idle,
-      bids: [],
-    );
+    state = const RiderBiddingState(status: BiddingStatus.idle, bids: []);
+
+    final gateway = _ref.read(kwellaWebSocketGatewayProvider);
+    if (gateway.isConnected) {
+      gateway.disconnect();
+    }
   }
 
   void _cancelSubscription() {
@@ -195,5 +201,5 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
 /// Global provider for the Rider Bidding state machine.
 final riderBiddingProvider =
     StateNotifierProvider<RiderBiddingNotifier, RiderBiddingState>((ref) {
-  return RiderBiddingNotifier(ref);
-});
+      return RiderBiddingNotifier(ref);
+    });

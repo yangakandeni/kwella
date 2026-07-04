@@ -66,10 +66,7 @@ class _DriverMapState extends ConsumerState<_DriverMap> {
         : null;
 
     return GoogleMap(
-      initialCameraPosition: CameraPosition(
-        target: driverPosition,
-        zoom: 15,
-      ),
+      initialCameraPosition: CameraPosition(target: driverPosition, zoom: 15),
       myLocationEnabled: true,
       myLocationButtonEnabled: false,
       markers: {
@@ -120,12 +117,14 @@ class _PulsingDotState extends State<_PulsingDot>
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
-    _scale = Tween<double>(begin: 0.7, end: 1.3).animate(
-      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
-    );
-    _opacity = Tween<double>(begin: 0.5, end: 1.0).animate(
-      CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut),
-    );
+    _scale = Tween<double>(
+      begin: 0.7,
+      end: 1.3,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
+    _opacity = Tween<double>(
+      begin: 0.5,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
   }
 
   @override
@@ -140,10 +139,7 @@ class _PulsingDotState extends State<_PulsingDot>
       animation: _ctrl,
       builder: (context, child) => Opacity(
         opacity: _opacity.value,
-        child: Transform.scale(
-          scale: _scale.value,
-          child: child,
-        ),
+        child: Transform.scale(scale: _scale.value, child: child),
       ),
       child: Container(
         width: 10,
@@ -171,7 +167,7 @@ class _TelematicsHeader extends ConsumerWidget {
     final coordLabel = telem.latitude == 0.0 && telem.longitude == 0.0
         ? 'Acquiring GPS...'
         : '${telem.latitude.toStringAsFixed(4)}, '
-            '${telem.longitude.toStringAsFixed(4)}';
+              '${telem.longitude.toStringAsFixed(4)}';
 
     return SafeArea(
       child: Padding(
@@ -180,13 +176,14 @@ class _TelematicsHeader extends ConsumerWidget {
           children: [
             // ── Speed badge ───────────────────────────────────────────────
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
                 color: KwellaColors.deepSlateCard.withValues(alpha: 0.92),
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
-                    color: KwellaColors.deepSlateBorder, width: 1.0),
+                  color: KwellaColors.deepSlateBorder,
+                  width: 1.0,
+                ),
                 boxShadow: const [
                   BoxShadow(
                     color: Color(0x33000000),
@@ -198,8 +195,11 @@ class _TelematicsHeader extends ConsumerWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.speed_rounded,
-                      color: KwellaColors.cataTransitGreen, size: 20),
+                  const Icon(
+                    Icons.speed_rounded,
+                    color: KwellaColors.cataTransitGreen,
+                    size: 20,
+                  ),
                   const SizedBox(width: 8),
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 300),
@@ -224,13 +224,17 @@ class _TelematicsHeader extends ConsumerWidget {
             // ── GPS streaming status pill ──────────────────────────────────
             Expanded(
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: KwellaColors.deepSlateCard.withValues(alpha: 0.92),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                      color: KwellaColors.deepSlateBorder, width: 1.0),
+                    color: KwellaColors.deepSlateBorder,
+                    width: 1.0,
+                  ),
                   boxShadow: const [
                     BoxShadow(
                       color: Color(0x33000000),
@@ -279,6 +283,7 @@ class SlideToConfirmButton extends StatefulWidget {
     super.key,
     required this.label,
     required this.onConfirmed,
+    this.confirmedLabel = 'Arrived at Destination',
   });
 
   /// Text label shown inside the track.
@@ -286,6 +291,9 @@ class SlideToConfirmButton extends StatefulWidget {
 
   /// Called once when the driver successfully slides to the end.
   final VoidCallback onConfirmed;
+
+  /// Text label shown once the slide is confirmed.
+  final String confirmedLabel;
 
   @override
   State<SlideToConfirmButton> createState() => _SlideToConfirmButtonState();
@@ -326,8 +334,10 @@ class _SlideToConfirmButtonState extends State<SlideToConfirmButton>
     if (_confirmed) return;
     final maxOffset = trackWidth - _handleDiameter - _trackPadding * 2;
     setState(() {
-      _dragOffset =
-          (_dragOffset + details.delta.dx / maxOffset).clamp(0.0, 1.0);
+      _dragOffset = (_dragOffset + details.delta.dx / maxOffset).clamp(
+        0.0,
+        1.0,
+      );
     });
   }
 
@@ -360,8 +370,7 @@ class _SlideToConfirmButtonState extends State<SlideToConfirmButton>
       child: LayoutBuilder(
         builder: (context, constraints) {
           final trackWidth = constraints.maxWidth;
-          final maxOffset =
-              trackWidth - _handleDiameter - _trackPadding * 2;
+          final maxOffset = trackWidth - _handleDiameter - _trackPadding * 2;
           final handleLeft = _trackPadding + _dragOffset * maxOffset;
 
           return Stack(
@@ -399,10 +408,12 @@ class _SlideToConfirmButtonState extends State<SlideToConfirmButton>
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             colors: [
-                              KwellaColors.cataTransitGreen
-                                  .withValues(alpha: 0.18),
-                              KwellaColors.cataTransitGreen
-                                  .withValues(alpha: 0.06),
+                              KwellaColors.cataTransitGreen.withValues(
+                                alpha: 0.18,
+                              ),
+                              KwellaColors.cataTransitGreen.withValues(
+                                alpha: 0.06,
+                              ),
                             ],
                           ),
                         ),
@@ -415,7 +426,9 @@ class _SlideToConfirmButtonState extends State<SlideToConfirmButton>
               // ── Track label ─────────────────────────────────────────────
               Center(
                 child: AnimatedOpacity(
-                  opacity: _confirmed ? 0.0 : (1.0 - _dragOffset * 1.8).clamp(0.0, 1.0),
+                  opacity: _confirmed
+                      ? 0.0
+                      : (1.0 - _dragOffset * 1.8).clamp(0.0, 1.0),
                   duration: const Duration(milliseconds: 150),
                   child: Text(
                     widget.label,
@@ -434,13 +447,16 @@ class _SlideToConfirmButtonState extends State<SlideToConfirmButton>
                 Center(
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
-                    children: const [
-                      Icon(Icons.check_circle_rounded,
-                          color: KwellaColors.cataTransitGreen, size: 18),
-                      SizedBox(width: 6),
+                    children: [
+                      const Icon(
+                        Icons.check_circle_rounded,
+                        color: KwellaColors.cataTransitGreen,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 6),
                       Text(
-                        'Arrived at Destination',
-                        style: TextStyle(
+                        widget.confirmedLabel,
+                        style: const TextStyle(
                           color: KwellaColors.cataTransitGreen,
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
@@ -473,8 +489,9 @@ class _SlideToConfirmButtonState extends State<SlideToConfirmButton>
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
-                          color: KwellaColors.cataTransitGreen
-                              .withValues(alpha: 0.45),
+                          color: KwellaColors.cataTransitGreen.withValues(
+                            alpha: 0.45,
+                          ),
                           blurRadius: 14,
                           spreadRadius: 1,
                         ),
@@ -525,15 +542,17 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
     final granted = await _locationService.ensurePermissionGranted();
     if (!granted || !mounted) return;
 
-    _positionSubscription = _locationService.positionStream().listen(
-      (position) {
-        ref.read(telematicsBufferProvider.notifier).pushCoordinate(
-              position.latitude,
-              position.longitude,
-              position.speed,
-            );
-      },
-    );
+    _positionSubscription = _locationService.positionStream().listen((
+      position,
+    ) {
+      ref
+          .read(telematicsBufferProvider.notifier)
+          .pushCoordinate(
+            position.latitude,
+            position.longitude,
+            position.speed,
+          );
+    });
   }
 
   @override
@@ -549,10 +568,25 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
     }
   }
 
+  void _handleStartTrip() {
+    final rideId = ref.read(driverBiddingProvider).rideId;
+    if (rideId != null) {
+      ref.read(driverBiddingProvider.notifier).startTrip(rideId);
+    }
+  }
+
+  void _handleEndTrip() {
+    final rideId = ref.read(driverBiddingProvider).rideId;
+    if (rideId != null) {
+      ref.read(driverBiddingProvider.notifier).endTrip(rideId);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final biddingState = ref.watch(driverBiddingProvider);
     final arrived = biddingState.status == DriverJobStatus.waitingForPassenger;
+    final inTransit = biddingState.status == DriverJobStatus.inTransit;
 
     return Scaffold(
       backgroundColor: KwellaColors.deepSlate,
@@ -560,9 +594,7 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
       body: Stack(
         children: [
           // ── Layer 0 : Live Google Map with pickup route ──────────────────
-          const Positioned.fill(
-            child: _DriverMap(),
-          ),
+          const Positioned.fill(child: _DriverMap()),
 
           // ── Layer 1 : Sign-out button (top-right corner) ─────────────────
           Positioned(
@@ -576,9 +608,8 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
                   borderRadius: BorderRadius.circular(12),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(12),
-                    onTap: () => ref
-                        .read(kwellaAuthNotifierProvider.notifier)
-                        .signOut(),
+                    onTap: () =>
+                        ref.read(kwellaAuthNotifierProvider.notifier).signOut(),
                     child: const Padding(
                       padding: EdgeInsets.all(10),
                       child: Icon(
@@ -613,12 +644,16 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
                   color: KwellaColors.successGreen.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
-                      color: KwellaColors.successGreen.withValues(alpha: 0.4)),
+                    color: KwellaColors.successGreen.withValues(alpha: 0.4),
+                  ),
                 ),
                 child: const Row(
                   children: [
-                    Icon(Icons.place_rounded,
-                        color: KwellaColors.successGreen, size: 22),
+                    Icon(
+                      Icons.place_rounded,
+                      color: KwellaColors.successGreen,
+                      size: 22,
+                    ),
                     SizedBox(width: 10),
                     Expanded(
                       child: Text(
@@ -636,7 +671,8 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
             ),
 
           // ── Layer 4 : Bottom UI Area ──────────────────────────────────────
-          if (biddingState.status == DriverJobStatus.offerReceived || biddingState.status == DriverJobStatus.bidSubmitted)
+          if (biddingState.status == DriverJobStatus.offerReceived ||
+              biddingState.status == DriverJobStatus.bidSubmitted)
             Positioned(
               left: 16,
               right: 16,
@@ -649,8 +685,22 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
               right: 0,
               bottom: 0,
               child: SlideToConfirmButton(
-                label: arrived ? 'Waiting for Passenger' : 'Slide to Confirm Arrival',
-                onConfirmed: arrived ? () {} : _handleArrival,
+                key: ValueKey(biddingState.status),
+                label: inTransit
+                    ? 'Slide to End Trip'
+                    : arrived
+                    ? 'Slide to Start Trip'
+                    : 'Slide to Confirm Arrival',
+                confirmedLabel: inTransit
+                    ? 'Trip Completed'
+                    : arrived
+                    ? 'Trip Started'
+                    : 'Arrived at Destination',
+                onConfirmed: inTransit
+                    ? _handleEndTrip
+                    : arrived
+                    ? _handleStartTrip
+                    : _handleArrival,
               ),
             ),
         ],
@@ -671,7 +721,7 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
             color: Colors.black54,
             blurRadius: 20,
             offset: Offset(0, 10),
-          )
+          ),
         ],
       ),
       child: Column(
@@ -689,24 +739,52 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Rider', style: TextStyle(color: KwellaColors.textOnDarkMuted)),
-              Text(state.riderName ?? 'Unknown', style: const TextStyle(color: KwellaColors.textOnDark, fontWeight: FontWeight.bold)),
+              const Text(
+                'Rider',
+                style: TextStyle(color: KwellaColors.textOnDarkMuted),
+              ),
+              Text(
+                state.riderName ?? 'Unknown',
+                style: const TextStyle(
+                  color: KwellaColors.textOnDark,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Destination', style: TextStyle(color: KwellaColors.textOnDarkMuted)),
-              Text(state.destination ?? 'Unknown', style: const TextStyle(color: KwellaColors.textOnDark, fontWeight: FontWeight.bold)),
+              const Text(
+                'Destination',
+                style: TextStyle(color: KwellaColors.textOnDarkMuted),
+              ),
+              Text(
+                state.destination ?? 'Unknown',
+                style: const TextStyle(
+                  color: KwellaColors.textOnDark,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Est. Payout', style: TextStyle(color: KwellaColors.textOnDarkMuted)),
-              Text('\$${state.estimatedPayout?.toStringAsFixed(2) ?? '0.00'}', style: const TextStyle(color: KwellaColors.cataTransitGreen, fontWeight: FontWeight.bold, fontSize: 18)),
+              const Text(
+                'Est. Payout',
+                style: TextStyle(color: KwellaColors.textOnDarkMuted),
+              ),
+              Text(
+                '\$${state.estimatedPayout?.toStringAsFixed(2) ?? '0.00'}',
+                style: const TextStyle(
+                  color: KwellaColors.cataTransitGreen,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 24),
@@ -716,14 +794,25 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
               decoration: BoxDecoration(
                 color: KwellaColors.cataTransitGreen.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: KwellaColors.cataTransitGreen.withValues(alpha: 0.4)),
+                border: Border.all(
+                  color: KwellaColors.cataTransitGreen.withValues(alpha: 0.4),
+                ),
               ),
               child: const Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.check_circle_rounded, color: KwellaColors.cataTransitGreen),
+                  Icon(
+                    Icons.check_circle_rounded,
+                    color: KwellaColors.cataTransitGreen,
+                  ),
                   SizedBox(width: 8),
-                  Text('Waiting for Rider...', style: TextStyle(color: KwellaColors.cataTransitGreen, fontWeight: FontWeight.bold)),
+                  Text(
+                    'Waiting for Rider...',
+                    style: TextStyle(
+                      color: KwellaColors.cataTransitGreen,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ],
               ),
             )
@@ -731,9 +820,12 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
             SizedBox(
               height: 68,
               child: SlideToConfirmButton(
-                label: 'Slide to Bid \$${state.estimatedPayout?.toStringAsFixed(2) ?? '0.00'}',
+                label:
+                    'Slide to Bid \$${state.estimatedPayout?.toStringAsFixed(2) ?? '0.00'}',
                 onConfirmed: () {
-                  ref.read(driverBiddingProvider.notifier).submitBid(state.estimatedPayout ?? 0.0);
+                  ref
+                      .read(driverBiddingProvider.notifier)
+                      .submitBid(state.estimatedPayout ?? 0.0);
                 },
               ),
             ),

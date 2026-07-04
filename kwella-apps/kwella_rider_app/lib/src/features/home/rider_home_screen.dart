@@ -45,7 +45,8 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
 
     // Listen reactively to accepted bid and display success Snackbar.
     ref.listen<RiderBiddingState>(riderBiddingProvider, (previous, next) {
-      if (next.status == BiddingStatus.tripConfirmed && next.acceptedBid != null) {
+      if (next.status == BiddingStatus.tripConfirmed &&
+          next.acceptedBid != null) {
         final driverName = next.acceptedBid!.driverName;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -65,99 +66,110 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
         });
       } else if (next.status == BiddingStatus.driverArrived) {
         _showDriverArrivedSheet(context, next.acceptedBid);
+      } else if (next.status == BiddingStatus.tripCompleted) {
+        _showTripCompletedDialog(context, next.acceptedBid);
       }
     });
 
-    final showBids = biddingStatus == BiddingStatus.searching ||
+    final showBids =
+        biddingStatus == BiddingStatus.searching ||
         biddingStatus == BiddingStatus.activeBids;
 
     return Scaffold(
       backgroundColor: KwellaColors.communityCream,
-      body: _BookingShellLayout(
-        showBids: showBids,
-        biddingStatus: biddingStatus,
-        onCancelBids: () {
-          ref.read(riderBiddingProvider.notifier).cancelBroadcast();
-          setState(() {
-            _selectedBidId = null;
-          });
-        },
-        bidsCarousel: biddingStatus == BiddingStatus.searching
-            ? const Center(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(vertical: 20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          KwellaColors.cataTransitGreen,
-                        ),
-                        strokeWidth: 2.5,
+      body: Stack(
+        children: [
+          _BookingShellLayout(
+            showBids: showBids,
+            biddingStatus: biddingStatus,
+            onCancelBids: () {
+              ref.read(riderBiddingProvider.notifier).cancelBroadcast();
+              setState(() {
+                _selectedBidId = null;
+              });
+            },
+            bidsCarousel: biddingStatus == BiddingStatus.searching
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              KwellaColors.cataTransitGreen,
+                            ),
+                            strokeWidth: 2.5,
+                          ),
+                          SizedBox(height: 12),
+                          Text(
+                            'Searching for nearby drivers...',
+                            style: TextStyle(
+                              color: KwellaColors.textOnLightMuted,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
-                      SizedBox(height: 12),
-                      Text(
-                        'Searching for nearby drivers...',
-                        style: TextStyle(
-                          color: KwellaColors.textOnLightMuted,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
+                    ),
+                  )
+                : DriverBidCarousel(
+                    bids: bids,
+                    selectedBidId: _selectedBidId,
+                    onSelected: (bidId) {
+                      setState(() {
+                        _selectedBidId = bidId;
+                      });
+                    },
                   ),
+            acceptButton: SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton(
+                key: const Key('rider_accept_ride_button'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: KwellaColors.cataTransitGreen,
+                  foregroundColor: KwellaColors.deepSlate,
+                  disabledBackgroundColor: KwellaColors.cataTransitGreen
+                      .withValues(alpha: 0.4),
+                  disabledForegroundColor: KwellaColors.deepSlate.withValues(
+                    alpha: 0.5,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 0,
                 ),
-              )
-            : DriverBidCarousel(
-                bids: bids,
-                selectedBidId: _selectedBidId,
-                onSelected: (bidId) {
-                  setState(() {
-                    _selectedBidId = bidId;
-                  });
-                },
+                onPressed: _selectedBidId != null
+                    ? () {
+                        ref
+                            .read(riderBiddingProvider.notifier)
+                            .acceptBid(_selectedBidId!);
+                      }
+                    : null,
+                child: const Text('Accept Ride'),
               ),
-        acceptButton: SizedBox(
-          width: double.infinity,
-          height: 52,
-          child: ElevatedButton(
-            key: const Key('rider_accept_ride_button'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: KwellaColors.cataTransitGreen,
-              foregroundColor: KwellaColors.deepSlate,
-              disabledBackgroundColor:
-                  KwellaColors.cataTransitGreen.withValues(alpha: 0.4),
-              disabledForegroundColor:
-                  KwellaColors.deepSlate.withValues(alpha: 0.5),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              elevation: 0,
             ),
-            onPressed: _selectedBidId != null
-                ? () {
-                    ref
-                        .read(riderBiddingProvider.notifier)
-                        .acceptBid(_selectedBidId!);
-                  }
-                : null,
-            child: const Text('Accept Ride'),
+            mapSection: _RiderMap(
+              onSignOut: () =>
+                  ref.read(kwellaAuthNotifierProvider.notifier).signOut(),
+            ),
+            sheetContent: _BookingSheetContent(
+              passengerCount: _passengerCount,
+              onPassengerCountChanged: (v) =>
+                  setState(() => _passengerCount = v),
+              onDestinationTapped: () {
+                setState(() {
+                  _selectedBidId = null;
+                });
+                ref.read(riderBiddingProvider.notifier).startBroadcast();
+              },
+            ),
           ),
-        ),
-        mapSection: _RiderMap(
-          onSignOut: () =>
-              ref.read(kwellaAuthNotifierProvider.notifier).signOut(),
-        ),
-        sheetContent: _BookingSheetContent(
-          passengerCount: _passengerCount,
-          onPassengerCountChanged: (v) => setState(() => _passengerCount = v),
-          onDestinationTapped: () {
-            setState(() {
-              _selectedBidId = null;
-            });
-            ref.read(riderBiddingProvider.notifier).startBroadcast();
-          },
-        ),
+          if (biddingStatus == BiddingStatus.inTransit)
+            _EnRouteOverlay(driverName: biddingState.acceptedBid?.driverName),
+        ],
       ),
     );
   }
@@ -241,6 +253,145 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
       ),
     );
   }
+
+  /// Shows a "Ride Completed / Thank You" summary dialog once the driver
+  /// ends the trip, marking the end of this ride's tracking session.
+  void _showTripCompletedDialog(BuildContext context, DriverBid? bid) {
+    final driverName = bid?.driverName ?? 'your driver';
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isDismissible: true,
+      builder: (context) => Container(
+        padding: const EdgeInsets.fromLTRB(24, 28, 24, 36),
+        decoration: const BoxDecoration(
+          color: KwellaColors.communityCream,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: KwellaColors.creamBorder,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: KwellaColors.cataTransitGreen.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.emoji_events_rounded,
+                color: KwellaColors.cataTransitGreen,
+                size: 32,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Ride Completed',
+              style: TextStyle(
+                color: KwellaColors.textOnLight,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Thank you for riding with $driverName. We hope you enjoyed the trip!',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: KwellaColors.textOnLightMuted,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: KwellaColors.cataTransitGreen,
+                  foregroundColor: KwellaColors.deepSlate,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 0,
+                ),
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Done'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Persistent banner shown while the trip is `.inTransit`, letting the
+/// rider know they're en route to their destination.
+class _EnRouteOverlay extends StatelessWidget {
+  const _EnRouteOverlay({required this.driverName});
+
+  final String? driverName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 12,
+      left: 16,
+      right: 16,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: KwellaColors.communityCream,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: KwellaColors.cataTransitGreen.withValues(alpha: 0.4),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.directions_car_filled_rounded,
+                color: KwellaColors.cataTransitGreen,
+                size: 22,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  driverName != null
+                      ? 'En Route – $driverName is taking you there'
+                      : 'En Route to your destination',
+                  style: const TextStyle(
+                    color: KwellaColors.textOnLight,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Positions the map and the bottom sheet using a [Stack].
@@ -291,10 +442,16 @@ class _BookingShellLayout extends StatelessWidget {
               shadowColor: Colors.black.withValues(alpha: 0.12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(20),
-                side: const BorderSide(color: KwellaColors.creamBorder, width: 1),
+                side: const BorderSide(
+                  color: KwellaColors.creamBorder,
+                  width: 1,
+                ),
               ),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 18,
+                ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -413,8 +570,8 @@ class _RiderMapState extends ConsumerState<_RiderMap> {
 
     final initialCenter =
         tracking.anchorLatitude != null && tracking.anchorLongitude != null
-            ? LatLng(tracking.anchorLatitude!, tracking.anchorLongitude!)
-            : _fallbackCenter;
+        ? LatLng(tracking.anchorLatitude!, tracking.anchorLongitude!)
+        : _fallbackCenter;
 
     final markers = <Marker>{
       if (tracking.isActive)
@@ -548,10 +705,7 @@ class _BookingSheetContent extends StatelessWidget {
             const SizedBox(height: 16),
 
             // ── Divider ──────────────────────────────────────────────────
-            const Divider(
-              color: KwellaColors.creamBorder,
-              height: 1,
-            ),
+            const Divider(color: KwellaColors.creamBorder, height: 1),
             const SizedBox(height: 16),
 
             // ── Passenger count selector ─────────────────────────────────
@@ -582,8 +736,7 @@ class _DestinationInputPlaceholder extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         onTap: onTap,
         child: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: KwellaColors.creamBorder),
@@ -628,10 +781,7 @@ class _DestinationInputPlaceholder extends StatelessWidget {
 
 /// Inline passenger count stepper (− count +).
 class _PassengerSelector extends StatelessWidget {
-  const _PassengerSelector({
-    required this.count,
-    required this.onChanged,
-  });
+  const _PassengerSelector({required this.count, required this.onChanged});
 
   final int count;
   final ValueChanged<int> onChanged;
@@ -715,11 +865,7 @@ class _StepperButton extends StatelessWidget {
           onTap: enabled ? onPressed : null,
           child: Padding(
             padding: const EdgeInsets.all(8),
-            child: Icon(
-              icon,
-              size: 18,
-              color: KwellaColors.cataTransitGreen,
-            ),
+            child: Icon(icon, size: 18, color: KwellaColors.cataTransitGreen),
           ),
         ),
       ),
@@ -767,17 +913,19 @@ class DriverBidCard extends StatelessWidget {
             boxShadow: isSelected
                 ? [
                     BoxShadow(
-                      color: KwellaColors.cataTransitGreen.withValues(alpha: 0.15),
+                      color: KwellaColors.cataTransitGreen.withValues(
+                        alpha: 0.15,
+                      ),
                       blurRadius: 10,
                       offset: const Offset(0, 4),
-                    )
+                    ),
                   ]
                 : [
                     BoxShadow(
                       color: Colors.black.withValues(alpha: 0.02),
                       blurRadius: 6,
                       offset: const Offset(0, 2),
-                    )
+                    ),
                   ],
           ),
           child: Row(
@@ -845,7 +993,10 @@ class DriverBidCard extends StatelessWidget {
               const SizedBox(width: 8),
               // Pricing pill
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: KwellaColors.deepSlate,
                   borderRadius: BorderRadius.circular(12),
@@ -870,7 +1021,8 @@ class DriverBidCard extends StatelessWidget {
     final parts = name.split(' ');
     if (parts.isEmpty) return '';
     if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
-    return (parts.first.substring(0, 1) + parts.last.substring(0, 1)).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
   }
 }
 
@@ -898,9 +1050,7 @@ class DriverBidCarousel extends StatelessWidget {
         itemBuilder: (context, index) {
           final bid = bids[index];
           return Padding(
-            padding: EdgeInsets.only(
-              right: index == bids.length - 1 ? 0 : 12,
-            ),
+            padding: EdgeInsets.only(right: index == bids.length - 1 ? 0 : 12),
             child: DriverBidCard(
               bid: bid,
               isSelected: bid.id == selectedBidId,

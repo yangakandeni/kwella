@@ -10,6 +10,8 @@ enum DriverJobStatus {
   jobAccepted,
   waitingForPassenger,
   jobDeclined,
+  inTransit,
+  completed,
 }
 
 class DriverBiddingState {
@@ -59,12 +61,14 @@ class DriverBiddingState {
 class DriverBiddingNotifier extends StateNotifier<DriverBiddingState> {
   final Ref ref;
 
+  ProviderSubscription<AsyncValue<KwellaBiddingEvent>>? _eventSubscription;
+
   DriverBiddingNotifier(this.ref) : super(const DriverBiddingState()) {
     _initStream();
   }
 
   void _initStream() {
-    ref.listen<AsyncValue<KwellaBiddingEvent>>(
+    _eventSubscription = ref.listen<AsyncValue<KwellaBiddingEvent>>(
       kwellaEventMultiplexerProvider,
       (previous, next) {
         next.whenData((event) {
@@ -97,9 +101,7 @@ class DriverBiddingNotifier extends StateNotifier<DriverBiddingState> {
     if (gateway.isConnected) {
       final payload = jsonEncode({
         'action': 'SubmitBid',
-        'payload': {
-          'price': counterPrice,
-        }
+        'payload': {'price': counterPrice},
       });
       gateway.send(payload);
     }
@@ -113,9 +115,7 @@ class DriverBiddingNotifier extends StateNotifier<DriverBiddingState> {
     if (gateway.isConnected) {
       final payload = jsonEncode({
         'action': 'driverArrived',
-        'payload': {
-          'rideId': rideId,
-        }
+        'payload': {'rideId': rideId},
       });
       gateway.send(payload);
     }
@@ -124,9 +124,54 @@ class DriverBiddingNotifier extends StateNotifier<DriverBiddingState> {
       rideId: rideId,
     );
   }
+
+  /// Notifies the rider that the trip has begun, dispatching a `tripStarted`
+  /// event over the WebSocket gateway and transitioning local state into
+  /// `.inTransit`.
+  void startTrip(String rideId) {
+    final gateway = ref.read(kwellaWebSocketGatewayProvider);
+    if (gateway.isConnected) {
+      final payload = jsonEncode({
+        'action': 'tripStarted',
+        'payload': {'rideId': rideId},
+      });
+      gateway.send(payload);
+    }
+    state = state.copyWith(status: DriverJobStatus.inTransit, rideId: rideId);
+  }
+
+  /// Notifies the rider that the trip has ended, dispatching a
+  /// `tripCompleted` event over the WebSocket gateway, then tearing down
+  /// this provider's local state and closing its gateway subscription.
+  void endTrip(String rideId) {
+    final gateway = ref.read(kwellaWebSocketGatewayProvider);
+    if (gateway.isConnected) {
+      final payload = jsonEncode({
+        'action': 'tripCompleted',
+        'payload': {'rideId': rideId},
+      });
+      gateway.send(payload);
+    }
+    state = state.copyWith(status: DriverJobStatus.completed, rideId: rideId);
+    _teardown();
+  }
+
+  /// Resets local state to idle and gracefully closes the subscription to
+  /// the shared event stream, ready for the driver's next job.
+  void _teardown() {
+    _eventSubscription?.close();
+    _eventSubscription = null;
+    state = const DriverBiddingState();
+  }
+
+  @override
+  void dispose() {
+    _eventSubscription?.close();
+    super.dispose();
+  }
 }
 
 final driverBiddingProvider =
     StateNotifierProvider<DriverBiddingNotifier, DriverBiddingState>((ref) {
-  return DriverBiddingNotifier(ref);
-});
+      return DriverBiddingNotifier(ref);
+    });
