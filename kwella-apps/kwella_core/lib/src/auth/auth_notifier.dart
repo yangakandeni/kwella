@@ -3,26 +3,23 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:riverpod/riverpod.dart';
 
+import '../config/environment.dart';
 import 'auth_state.dart';
 import 'token_vault.dart';
-
-/// AWS Cognito regional endpoint for the af-south-1 user pool.
-const String _cognitoEndpoint =
-    'https://cognito-idp.af-south-1.amazonaws.com/';
-
-/// Public mobile client ID – safe to embed; Cognito public clients have no secret.
-const String _cognitoClientId = '6enltlvcl8569tt1r49rnfr354';
 
 /// Riverpod StateNotifier that manages Cognito authentication state.
 class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
   final TokenVault _tokenVault;
   final Dio _dio;
+  final KwellaEnvironment _env;
 
   KwellaAuthNotifier({
     TokenVault? tokenVault,
     Dio? dio,
+    KwellaEnvironment? env,
   })  : _tokenVault = tokenVault ?? TokenVault(),
         _dio = dio ?? Dio(),
+        _env = env ?? KwellaEnvironment.production,
         super(const KwellaAuthState.initial()) {
     _checkPersistedSession();
   }
@@ -89,10 +86,10 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
 
     try {
       final response = await _dio.post(
-        _cognitoEndpoint,
+        _env.cognitoEndpoint,
         data: {
           'AuthFlow': 'USER_PASSWORD_AUTH',
-          'ClientId': _cognitoClientId,
+          'ClientId': _env.cognitoClientId,
           'AuthParameters': {
             'USERNAME': email,
             'PASSWORD': password,
@@ -178,10 +175,10 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
       if (refreshToken == null) return false;
 
       final response = await _dio.post(
-        _cognitoEndpoint,
+        _env.cognitoEndpoint,
         data: {
           'AuthFlow': 'REFRESH_TOKEN_AUTH',
-          'ClientId': _cognitoClientId,
+          'ClientId': _env.cognitoClientId,
           'AuthParameters': {
             'REFRESH_TOKEN': refreshToken,
           },

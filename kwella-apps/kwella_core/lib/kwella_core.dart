@@ -1,6 +1,9 @@
 /// Kwella core library – design tokens, auth, networking, and shared models.
 library;
 
+// ── Config ────────────────────────────────────────────────────────────────
+export 'src/config/environment.dart';
+
 // ── Auth ──────────────────────────────────────────────────────────────────
 export 'src/kwella_core_base.dart';
 export 'src/auth/auth_placeholder.dart';

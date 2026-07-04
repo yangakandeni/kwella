@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:kwella_core/src/models/driver_bid.dart';
 import 'package:kwella_core/src/network/bidding_events.dart';
 
 void main() {

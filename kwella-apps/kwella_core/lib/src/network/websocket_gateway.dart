@@ -3,21 +3,46 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-final kwellaWebSocketGatewayProvider = Provider((ref) => KwellaWebSocketGateway());
+import '../config/environment.dart';
+
+/// Riverpod provider that vends a [KwellaWebSocketGateway] pre-configured
+/// with the production [KwellaEnvironment.webSocketEndpointUrl].
+///
+/// Override this provider in tests using `ProviderContainer(overrides: [...])`.
+final kwellaWebSocketGatewayProvider = Provider<KwellaWebSocketGateway>(
+  (ref) => KwellaWebSocketGateway(
+    endpointUrl: KwellaEnvironment.production.webSocketEndpointUrl,
+  ),
+);
 /// Manages an AWS API Gateway v2 WebSocket connection for the Kwella
 /// real-time bidding engine.
+///
+/// Instantiated by [kwellaWebSocketGatewayProvider] with the production
+/// [KwellaEnvironment.webSocketEndpointUrl].  Pass a different [endpointUrl]
+/// to the constructor (or override the provider) to target a different stage
+/// (e.g. staging, local mock server).
 ///
 /// Usage:
 /// ```dart
 /// final gateway = KwellaWebSocketGateway();
-/// await gateway.connect(wsEndpointUrl, accessToken);
+/// await gateway.connect(accessToken);          // uses configured endpointUrl
 /// gateway.dataStream.listen((frame) { /* process JSON frame */ });
 /// // ...
 /// await gateway.disconnect();
 /// ```
 class KwellaWebSocketGateway {
+  /// The AWS API Gateway v2 WebSocket stage URL that this gateway targets.
+  ///
+  /// Defaults to [kWebSocketEndpointUrl] (the production endpoint) when
+  /// constructed without an explicit value.
+  final String endpointUrl;
+
   WebSocketChannel? _channel;
   StreamController<String>? _controller;
+
+  KwellaWebSocketGateway({
+    String? endpointUrl,
+  }) : endpointUrl = endpointUrl ?? kWebSocketEndpointUrl;
 
   /// Returns `true` when an active WebSocket connection is open.
   bool get isConnected => _channel != null;
@@ -36,8 +61,11 @@ class KwellaWebSocketGateway {
     return ctrl.stream;
   }
 
-  /// Opens a WebSocket connection to [endpointUrl] (an AWS API Gateway v2
-  /// WebSocket stage URL, e.g. `wss://oronlku519.execute-api.af-south-1.amazonaws.com/production`).
+  /// Opens a WebSocket connection.
+  ///
+  /// If [overrideEndpointUrl] is omitted, [endpointUrl] (set at construction
+  /// time from [KwellaEnvironment]) is used.  Pass an explicit value only when
+  /// you need to direct a single call to a different stage.
   ///
   /// [accessToken] is injected as the `Authorization` query parameter so the
   /// API Gateway WebSocket authorizer can validate the Cognito JWT on
@@ -45,14 +73,16 @@ class KwellaWebSocketGateway {
   ///
   /// Calling [connect] while already connected will silently disconnect
   /// the existing channel first.
-  Future<void> connect(String endpointUrl, String accessToken) async {
+  Future<void> connect(String accessToken, {String? overrideEndpointUrl}) async {
     // Close any existing connection cleanly before opening a new one.
     if (_channel != null) {
       await disconnect();
     }
 
+    final target = overrideEndpointUrl ?? endpointUrl;
+
     // Construct the authenticated WebSocket URI.
-    final uri = Uri.parse(endpointUrl).replace(
+    final uri = Uri.parse(target).replace(
       queryParameters: {'Authorization': accessToken},
     );
 
