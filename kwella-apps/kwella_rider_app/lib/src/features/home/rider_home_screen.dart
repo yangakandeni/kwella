@@ -63,7 +63,8 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
         setState(() {
           _selectedBidId = null;
         });
-        ref.read(riderBiddingProvider.notifier).reset();
+      } else if (next.status == BiddingStatus.driverArrived) {
+        _showDriverArrivedSheet(context, next.acceptedBid);
       }
     });
 
@@ -156,6 +157,86 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
             });
             ref.read(riderBiddingProvider.notifier).startBroadcast();
           },
+        ),
+      ),
+    );
+  }
+
+  /// Shows an elegant modal bottom sheet informing the rider that their
+  /// driver has reached the pickup point.
+  void _showDriverArrivedSheet(BuildContext context, DriverBid? bid) {
+    final driverName = bid?.driverName ?? 'Your driver';
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isDismissible: true,
+      builder: (context) => Container(
+        padding: const EdgeInsets.fromLTRB(24, 28, 24, 36),
+        decoration: const BoxDecoration(
+          color: KwellaColors.communityCream,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: KwellaColors.creamBorder,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: KwellaColors.cataTransitGreen.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.directions_car_filled_rounded,
+                color: KwellaColors.cataTransitGreen,
+                size: 32,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Your driver has arrived',
+              style: TextStyle(
+                color: KwellaColors.textOnLight,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '$driverName is waiting for you at the pickup point.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: KwellaColors.textOnLightMuted,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: KwellaColors.cataTransitGreen,
+                  foregroundColor: KwellaColors.deepSlate,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 0,
+                ),
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Got it'),
+              ),
+            ),
+          ],
         ),
       ),
     );

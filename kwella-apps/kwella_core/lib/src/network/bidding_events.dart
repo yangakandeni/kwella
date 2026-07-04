@@ -28,6 +28,10 @@ abstract class KwellaBiddingEvent {
           rideId: payload['rideId'] as String,
           reason: payload['reason'] as String?,
         );
+      case 'driverArrived':
+        return DriverArrivedEvent(
+          rideId: payload['rideId'] as String,
+        );
 
       // ── Backend (AWS Lambda) native action labels ──────────────────────────
       //
@@ -211,6 +215,25 @@ class RideCancelledEvent extends KwellaBiddingEvent {
 
   @override
   int get hashCode => rideId.hashCode ^ (reason?.hashCode ?? 0);
+}
+
+/// Sent by the Driver app when the driver's [SlideToConfirmButton] confirms
+/// they've reached the pickup point. The gateway relays this to the rider so
+/// their UI can transition into `.driverArrived`.
+class DriverArrivedEvent extends KwellaBiddingEvent {
+  final String rideId;
+
+  const DriverArrivedEvent({required this.rideId});
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DriverArrivedEvent &&
+          runtimeType == other.runtimeType &&
+          rideId == other.rideId;
+
+  @override
+  int get hashCode => rideId.hashCode;
 }
 
 /// A single GPS sample as broadcast by the Driver app's telematics buffer.

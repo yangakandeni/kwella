@@ -9,6 +9,7 @@ enum BiddingStatus {
   searching,
   activeBids,
   tripConfirmed,
+  driverArrived,
   cancelled,
 }
 
@@ -119,6 +120,8 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
         status: BiddingStatus.tripConfirmed,
         acceptedBid: bid,
       );
+    } else if (event is DriverArrivedEvent) {
+      state = state.copyWith(status: BiddingStatus.driverArrived);
     } else if (event is RideCancelledEvent) {
       state = state.copyWith(
         status: BiddingStatus.cancelled,
@@ -150,7 +153,8 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
       }));
     }
 
-    _cancelSubscription();
+    // Keep the subscription open past acceptance – the driver's later
+    // `driverArrived` event still needs to reach this notifier.
     state = RiderBiddingState(
       status: BiddingStatus.tripConfirmed,
       bids: state.bids,

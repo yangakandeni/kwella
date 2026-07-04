@@ -8,6 +8,7 @@ enum DriverJobStatus {
   bidding,
   bidSubmitted,
   jobAccepted,
+  waitingForPassenger,
   jobDeclined,
 }
 
@@ -19,6 +20,7 @@ class DriverBiddingState {
   final String? error;
   final double? pickupLatitude;
   final double? pickupLongitude;
+  final String? rideId;
 
   const DriverBiddingState({
     this.status = DriverJobStatus.idle,
@@ -28,6 +30,7 @@ class DriverBiddingState {
     this.error,
     this.pickupLatitude,
     this.pickupLongitude,
+    this.rideId,
   });
 
   DriverBiddingState copyWith({
@@ -38,6 +41,7 @@ class DriverBiddingState {
     String? error,
     double? pickupLatitude,
     double? pickupLongitude,
+    String? rideId,
   }) {
     return DriverBiddingState(
       status: status ?? this.status,
@@ -47,6 +51,7 @@ class DriverBiddingState {
       error: error ?? this.error,
       pickupLatitude: pickupLatitude ?? this.pickupLatitude,
       pickupLongitude: pickupLongitude ?? this.pickupLongitude,
+      rideId: rideId ?? this.rideId,
     );
   }
 }
@@ -73,7 +78,10 @@ class DriverBiddingNotifier extends StateNotifier<DriverBiddingState> {
               pickupLongitude: event.pickupLongitude,
             );
           } else if (event is RideAcceptedEvent) {
-            state = state.copyWith(status: DriverJobStatus.jobAccepted);
+            state = state.copyWith(
+              status: DriverJobStatus.jobAccepted,
+              rideId: event.rideId,
+            );
           } else if (event is RideCancelledEvent) {
             state = const DriverBiddingState();
           }
@@ -95,6 +103,26 @@ class DriverBiddingNotifier extends StateNotifier<DriverBiddingState> {
       });
       gateway.send(payload);
     }
+  }
+
+  /// Notifies the rider that the driver has reached the pickup point,
+  /// dispatching a `driverArrived` event over the WebSocket gateway and
+  /// transitioning the local state into `.waitingForPassenger`.
+  void arriveAtPickup(String rideId) {
+    final gateway = ref.read(kwellaWebSocketGatewayProvider);
+    if (gateway.isConnected) {
+      final payload = jsonEncode({
+        'action': 'driverArrived',
+        'payload': {
+          'rideId': rideId,
+        }
+      });
+      gateway.send(payload);
+    }
+    state = state.copyWith(
+      status: DriverJobStatus.waitingForPassenger,
+      rideId: rideId,
+    );
   }
 }
 

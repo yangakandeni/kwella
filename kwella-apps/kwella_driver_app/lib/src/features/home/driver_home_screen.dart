@@ -509,8 +509,6 @@ class DriverHomeScreen extends ConsumerStatefulWidget {
 }
 
 class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
-  bool _arrived = false;
-
   final _locationService = const NativeLocationService();
 
   /// Subscription to the native position stream, forwarding every sample
@@ -545,16 +543,16 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
   }
 
   void _handleArrival() {
-    setState(() => _arrived = true);
+    final rideId = ref.read(driverBiddingProvider).rideId;
+    if (rideId != null) {
+      ref.read(driverBiddingProvider.notifier).arriveAtPickup(rideId);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final biddingState = ref.watch(driverBiddingProvider);
-
-    // If we just received an offer, show the bottom sheet over the map.
-    // Ensure we only show it once by checking if a route is active or something,
-    // but for now we'll just rely on the UI overlay. We can just render it as a positioned widget instead of a modal to match the Phase 3 requirement "display a floating incoming request bottom sheet over the map".
+    final arrived = biddingState.status == DriverJobStatus.waitingForPassenger;
 
     return Scaffold(
       backgroundColor: KwellaColors.deepSlate,
@@ -604,7 +602,7 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
           ),
 
           // ── Layer 3 : Arrival status banner ──────────────────────────────
-          if (_arrived)
+          if (arrived)
             Positioned(
               left: 16,
               right: 16,
@@ -624,7 +622,7 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
                     SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'Arrived at Destination',
+                        'Arrived at Pickup – Waiting for Passenger',
                         style: TextStyle(
                           color: KwellaColors.successGreen,
                           fontSize: 15,
@@ -651,8 +649,8 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
               right: 0,
               bottom: 0,
               child: SlideToConfirmButton(
-                label: _arrived ? 'Trip Complete' : 'Slide to Confirm Arrival',
-                onConfirmed: _arrived ? () {} : _handleArrival,
+                label: arrived ? 'Waiting for Passenger' : 'Slide to Confirm Arrival',
+                onConfirmed: arrived ? () {} : _handleArrival,
               ),
             ),
         ],
