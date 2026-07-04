@@ -308,20 +308,26 @@ class _RiderMapState extends ConsumerState<_RiderMap> {
   GoogleMapController? _mapController;
 
   @override
+  void dispose() {
+    _mapController?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final tracking = ref.watch(driverTrackingProvider);
 
     ref.listen<DriverTrackingState>(driverTrackingProvider, (previous, next) {
-      final justAnchored = previous?.anchorLatitude == null &&
-          next.anchorLatitude != null &&
-          next.anchorLongitude != null;
-      if (justAnchored) {
-        _mapController?.animateCamera(
-          CameraUpdate.newLatLng(
-            LatLng(next.anchorLatitude!, next.anchorLongitude!),
-          ),
-        );
-      }
+      // Guard against a disconnected/reset tracking state (isActive false)
+      // so the camera never snaps to the LatLng(0, 0) default.
+      if (!next.isActive) return;
+
+      final controller = _mapController;
+      if (controller == null) return;
+
+      controller.animateCamera(
+        CameraUpdate.newLatLng(LatLng(next.latitude, next.longitude)),
+      );
     });
 
     final initialCenter =
