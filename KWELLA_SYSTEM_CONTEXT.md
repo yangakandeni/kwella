@@ -40,6 +40,10 @@
 
 * **Anti-Over-Engineering Mandate:** AI agents and developers must strictly prioritize production-grade, open-source packages and native platform SDKs over building custom internal algorithms or utilities (e.g., custom polyline decoders or math-heavy coordinate interpolators). If a stable out-of-the-box solution exists, it must be used. Custom logic is strictly an exception requiring explicit business justification.
 
+### Zero-Hardcoded-Secrets Mandate
+
+No private API keys, cloud credentials, tokens, or plaintext environment secrets may ever be hardcoded inside tracked source code, configuration files, or manifests. Mobile client SDK keys (such as Google Maps keys) must be injected at build-time using local-only, git-ignored properties files (e.g., `local.properties`) via manifest placeholders or environment parameters. Credentials must be restricted at the cloud provider level by application package name and SHA-1 signing fingerprints.
+
 ## 6. Current State of Implementation (Phases 12-15)
 
 The following core modules are fully implemented, thoroughly tested (144+ automated tests), and live in the workspace:
