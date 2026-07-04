@@ -9,6 +9,8 @@ Supported WebSocket route keys (dispatched by API Gateway WebSocket proxy):
   sendBid           — Parse and extract particulars from Driver counter-offers.
   selectBid         — Rider-initiated bid acceptance: transition trip to ACCEPTED and notify
                       the winning driver over their WebSocket connection.
+  driverArrived     — Driver-initiated pickup arrival: transition trip from ACCEPTED to ARRIVED
+                      and notify the rider.
   updateLocation    — Ingest real-time driver telematics telemetry and persist to DynamoDB.
   startTrip         — Driver-initiated trip start: transition trip from ARRIVED to IN_PROGRESS
                       and notify the rider.
@@ -532,6 +534,111 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     "tripId": trip_id,
                     "driverId": driver_id,
                     "riderId": rider_id,
+                }),
+            }
+
+        elif route_key == "driverArrived":
+            raw_body = event.get("body")
+            if raw_body:
+                try:
+                    payload = json.loads(raw_body)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Failed to parse JSON body for driverArrived route on connectionId=%s: %s",
+                        connection_id,
+                        exc,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Request body must be valid JSON.",
+                        }),
+                    }
+            else:
+                payload = event
+
+            trip_id = payload.get("tripId") or payload.get("trip_id")
+
+            if not trip_id or not isinstance(trip_id, str):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'tripId'.",
+                    }),
+                }
+
+            try:
+                update_res = table.update_item(
+                    Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"},
+                    UpdateExpression="SET #status = :arrived",
+                    ConditionExpression="#status = :accepted",
+                    ExpressionAttributeNames={"#status": "status"},
+                    ExpressionAttributeValues={
+                        ":arrived": "ARRIVED",
+                        ":accepted": "ACCEPTED",
+                    },
+                    ReturnValues="ALL_NEW",
+                )
+            except botocore.exceptions.ClientError as exc:
+                error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+                if error_code == "ConditionalCheckFailedException":
+                    logger.warning(
+                        "driverArrived rejected for tripId=%s: trip is not in ACCEPTED state",
+                        trip_id,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Trip status must be ACCEPTED to mark arrival.",
+                        }),
+                    }
+                raise
+
+            logger.info(
+                "driverArrived: tripId=%s transitioned to ARRIVED", trip_id
+            )
+
+            trip_meta = update_res.get("Attributes") or {}
+            rider_conn_id: str | None = trip_meta.get("rider_connection_id")
+
+            if _APIGW_ENDPOINT and rider_conn_id:
+                apigw_client = boto3.client(
+                    "apigatewaymanagementapi",
+                    endpoint_url=_APIGW_ENDPOINT,
+                    region_name=_AWS_REGION,
+                )
+                driver_arrived_payload = json.dumps({
+                    "action": "driverArrived",
+                    "tripId": trip_id,
+                }).encode("utf-8")
+                try:
+                    apigw_client.post_to_connection(
+                        ConnectionId=rider_conn_id,
+                        Data=driver_arrived_payload,
+                    )
+                    logger.info(
+                        "Dispatched driverArrived to rider connectionId=%s for tripId=%s",
+                        rider_conn_id, trip_id,
+                    )
+                except botocore.exceptions.ClientError as notify_exc:
+                    logger.warning(
+                        "Failed to push driverArrived to rider connectionId=%s: %s",
+                        rider_conn_id, notify_exc,
+                    )
+            else:
+                logger.warning(
+                    "Could not resolve rider WebSocket connection for tripId=%s — skipping driverArrived push",
+                    trip_id,
+                )
+
+            return {
+                "statusCode": 200,
+                "body": json.dumps({
+                    "status": "DriverArrived",
+                    "tripId": trip_id,
                 }),
             }
 

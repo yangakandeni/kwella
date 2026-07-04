@@ -1334,6 +1334,83 @@ def test_select_bid_missing_driver_id_returns_400():
 
 
 # ---------------------------------------------------------------------------
+# Route: driverArrived Tests
+# ---------------------------------------------------------------------------
+
+_DRIVER_ARRIVED_EVENT_BASE = {
+    "requestContext": {
+        "routeKey": "driverArrived",
+        "connectionId": "conn-driver-arrived",
+    },
+}
+
+
+@mock_aws
+def test_driver_arrived_transitions_accepted_to_arrived_and_notifies_rider():
+    """Verify driverArrived transitions an ACCEPTED trip to ARRIVED and pushes driverArrived to the rider."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-arrived-1",
+            "SK": "METADATA",
+            "status": "ACCEPTED",
+            "rider_connection_id": "conn-rider-1",
+        }
+    )
+
+    payload = {
+        "action": "driverArrived",
+        "tripId": "trip-arrived-1",
+    }
+
+    response = handler.lambda_handler(
+        {**_DRIVER_ARRIVED_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["status"] == "DriverArrived"
+    assert body["tripId"] == "trip-arrived-1"
+
+    trip_res = table.get_item(Key={"PK": "TRIP#trip-arrived-1", "SK": "METADATA"})
+    assert trip_res["Item"]["status"] == "ARRIVED"
+
+
+@mock_aws
+def test_driver_arrived_rejects_when_not_accepted():
+    """Verify driverArrived returns 400 ValidationError when the trip is not in ACCEPTED state."""
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-arrived-2",
+            "SK": "METADATA",
+            "status": "REQUESTED",
+        }
+    )
+
+    payload = {
+        "action": "driverArrived",
+        "tripId": "trip-arrived-2",
+    }
+
+    response = handler.lambda_handler(
+        {**_DRIVER_ARRIVED_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "ACCEPTED" in body["detail"]
+
+    trip_res = table.get_item(Key={"PK": "TRIP#trip-arrived-2", "SK": "METADATA"})
+    assert trip_res["Item"]["status"] == "REQUESTED"
+
+
+# ---------------------------------------------------------------------------
 # Route: startTrip Tests
 # ---------------------------------------------------------------------------
 
