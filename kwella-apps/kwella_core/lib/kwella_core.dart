@@ -12,6 +12,8 @@ export 'src/auth/auth_notifier.dart';
 export 'src/network/network_placeholder.dart';
 export 'src/network/websocket_gateway.dart';
 export 'src/network/aws_error_interceptor.dart';
+export 'src/network/bidding_events.dart';
+export 'src/network/event_multiplexer.dart';
 
 // ── Models ────────────────────────────────────────────────────────────────
 export 'src/models/models_placeholder.dart';

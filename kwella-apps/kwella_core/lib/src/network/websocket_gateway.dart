@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+final kwellaWebSocketGatewayProvider = Provider((ref) => KwellaWebSocketGateway());
 /// Manages an AWS API Gateway v2 WebSocket connection for the Kwella
 /// real-time bidding engine.
 ///
