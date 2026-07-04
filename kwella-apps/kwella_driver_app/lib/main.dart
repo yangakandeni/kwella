@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kwella_core/kwella_core.dart';
 
 import 'src/features/bidding/driver_bidding_provider.dart';
+import 'src/features/telematics/telematics_buffer.dart';
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -553,13 +556,21 @@ class _PulsingDotState extends State<_PulsingDot>
 }
 
 // ---------------------------------------------------------------------------
-// Telematics header overlay
+// Telematics header overlay  –  reactive to TelematicsBufferManager
 // ---------------------------------------------------------------------------
-class _TelematicsHeader extends StatelessWidget {
+class _TelematicsHeader extends ConsumerWidget {
   const _TelematicsHeader();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final telem = ref.watch(telematicsBufferProvider);
+
+    final speedLabel = '${telem.speed.toStringAsFixed(0)} km/h';
+    final coordLabel = telem.latitude == 0.0 && telem.longitude == 0.0
+        ? 'Acquiring GPS...'
+        : '${telem.latitude.toStringAsFixed(4)}, '
+            '${telem.longitude.toStringAsFixed(4)}';
+
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -582,19 +593,25 @@ class _TelematicsHeader extends StatelessWidget {
                   ),
                 ],
               ),
-              child: const Row(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.speed_rounded,
+                  const Icon(Icons.speed_rounded,
                       color: KwellaColors.cataTransitGreen, size: 20),
-                  SizedBox(width: 8),
-                  Text(
-                    '45 km/h',
-                    style: TextStyle(
-                      color: KwellaColors.textOnDark,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.5,
+                  const SizedBox(width: 8),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    transitionBuilder: (child, anim) =>
+                        FadeTransition(opacity: anim, child: child),
+                    child: Text(
+                      speedLabel,
+                      key: ValueKey(speedLabel),
+                      style: const TextStyle(
+                        color: KwellaColors.textOnDark,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                      ),
                     ),
                   ),
                 ],
@@ -620,19 +637,25 @@ class _TelematicsHeader extends StatelessWidget {
                     ),
                   ],
                 ),
-                child: const Row(
+                child: Row(
                   children: [
-                    _PulsingDot(),
-                    SizedBox(width: 8),
+                    const _PulsingDot(),
+                    const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        'Streaming GPS Deltas to AWS...',
-                        style: TextStyle(
-                          color: KwellaColors.textOnDarkMuted,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 400),
+                        transitionBuilder: (child, anim) =>
+                            FadeTransition(opacity: anim, child: child),
+                        child: Text(
+                          coordLabel,
+                          key: ValueKey(coordLabel),
+                          style: const TextStyle(
+                            color: KwellaColors.textOnDarkMuted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ],
@@ -885,6 +908,30 @@ class DriverHomeScreen extends ConsumerStatefulWidget {
 
 class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
   bool _arrived = false;
+
+  /// Mock GPS walker – simulates a vehicle in motion.
+  final _walker = MockCoordinateWalker();
+
+  /// Pushes a new simulated coordinate sample into the buffer every 800 ms.
+  /// The buffer manager batches and flushes these to the WebSocket every 3 s.
+  Timer? _gpsLoop;
+
+  @override
+  void initState() {
+    super.initState();
+    _gpsLoop = Timer.periodic(const Duration(milliseconds: 800), (_) {
+      final coord = _walker.next();
+      ref
+          .read(telematicsBufferProvider.notifier)
+          .pushCoordinate(coord.lat, coord.lng, coord.speed);
+    });
+  }
+
+  @override
+  void dispose() {
+    _gpsLoop?.cancel();
+    super.dispose();
+  }
 
   void _handleArrival() {
     setState(() => _arrived = true);
