@@ -40,6 +40,9 @@ class KwellaWebSocketGateway {
   WebSocketChannel? _channel;
   StreamController<String>? _controller;
 
+  /// For testing/simulation purposes: stores raw JSON payloads sent via [send].
+  final List<String> sentMessages = [];
+
   KwellaWebSocketGateway({
     String? endpointUrl,
   }) : endpointUrl = endpointUrl ?? kWebSocketEndpointUrl;
@@ -80,10 +83,14 @@ class KwellaWebSocketGateway {
     }
 
     final target = overrideEndpointUrl ?? endpointUrl;
+    final parsedUri = Uri.parse(target);
 
-    // Construct the authenticated WebSocket URI.
-    final uri = Uri.parse(target).replace(
-      queryParameters: {'Authorization': accessToken},
+    // Construct the authenticated WebSocket URI, preserving any query parameters.
+    final uri = parsedUri.replace(
+      queryParameters: {
+        ...parsedUri.queryParameters,
+        'Authorization': accessToken,
+      },
     );
 
     _controller = StreamController<String>.broadcast();
@@ -123,7 +130,17 @@ class KwellaWebSocketGateway {
       throw StateError(
           'KwellaWebSocketGateway: cannot send — not connected.');
     }
+    sentMessages.add(payload);
     _channel!.sink.add(payload);
+  }
+
+  /// For testing/simulation purposes: allows manual injection of an incoming
+  /// JSON frame onto the [dataStream] broadcast stream.
+  void simulateIncomingFrame(String payload) {
+    final ctrl = _controller;
+    if (ctrl != null && !ctrl.isClosed) {
+      ctrl.add(payload);
+    }
   }
 
   /// Closes the WebSocket connection and releases all stream resources.

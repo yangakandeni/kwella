@@ -36,6 +36,10 @@
 ## 5. Engineering Governance
 * **Code Quality & Stability Constraints:** All code generation tasks must strictly adhere to the anti-deprecation and security guardrails outlined in `KWELLA_CODE_GOVERNANCE.md`.
 
+## Core Engineering Governance & Guardrails
+
+* **Anti-Over-Engineering Mandate:** AI agents and developers must strictly prioritize production-grade, open-source packages and native platform SDKs over building custom internal algorithms or utilities (e.g., custom polyline decoders or math-heavy coordinate interpolators). If a stable out-of-the-box solution exists, it must be used. Custom logic is strictly an exception requiring explicit business justification.
+
 ## 6. Current State of Implementation (Phases 12-15)
 
 The following core modules are fully implemented, thoroughly tested (144+ automated tests), and live in the workspace:

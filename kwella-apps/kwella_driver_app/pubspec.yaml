@@ -38,6 +38,7 @@ dependencies:
   kwella_core:
     path: ../kwella_core
   flutter_riverpod: ^2.5.0
+  geolocator: ^13.0.2
 
 dev_dependencies:
   flutter_test:
