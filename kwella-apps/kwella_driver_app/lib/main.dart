@@ -531,18 +531,19 @@ class _PulsingDotState extends State<_PulsingDot>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _ctrl,
-      builder: (context, _) => Opacity(
+      builder: (context, child) => Opacity(
         opacity: _opacity.value,
         child: Transform.scale(
           scale: _scale.value,
-          child: Container(
-            width: 10,
-            height: 10,
-            decoration: const BoxDecoration(
-              color: KwellaColors.cataTransitGreen,
-              shape: BoxShape.circle,
-            ),
-          ),
+          child: child,
+        ),
+      ),
+      child: Container(
+        width: 10,
+        height: 10,
+        decoration: const BoxDecoration(
+          color: KwellaColors.cataTransitGreen,
+          shape: BoxShape.circle,
         ),
       ),
     );
@@ -896,9 +897,11 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
         children: [
           // ── Layer 0 : Map background with transit route ─────────────────
           Positioned.fill(
-            child: CustomPaint(
-              painter: const _TransitRoutePainter(),
-              child: const SizedBox.expand(),
+            child: RepaintBoundary(
+              child: CustomPaint(
+                painter: const _TransitRoutePainter(),
+                child: const SizedBox.expand(),
+              ),
             ),
           ),
 
