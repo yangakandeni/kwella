@@ -45,6 +45,8 @@ abstract class KwellaBiddingEvent {
             payload['dropoff_location'],
           ),
           estimatedPayout: _parseFare(payload['base_fare']),
+          pickupLatitude: _coordinateAt(payload['pickup_location'], 0),
+          pickupLongitude: _coordinateAt(payload['pickup_location'], 1),
         );
 
       /// `sendBid` response: the backend pushes `driverBidReceived` to the
@@ -95,6 +97,16 @@ String _coordinatesToString(dynamic coords) {
   return coords?.toString() ?? 'Unknown destination';
 }
 
+/// Reads the numeric value at [index] from a `[lat, lng]` coordinate pair,
+/// returning `null` when the field is absent or malformed.
+double? _coordinateAt(dynamic coords, int index) {
+  if (coords is List && coords.length > index) {
+    final value = coords[index];
+    if (value is num) return value.toDouble();
+  }
+  return null;
+}
+
 /// Parses the `base_fare` field from the backend payload, which may arrive
 /// as a `num`, `String`, or `null`.  Returns `0.0` for unparseable values.
 double _parseFare(dynamic fare) {
@@ -108,10 +120,17 @@ class RideRequestReceivedEvent extends KwellaBiddingEvent {
   final String destination;
   final double estimatedPayout;
 
+  /// Decimal-degree WGS-84 pickup coordinates, when the backend included a
+  /// `pickup_location` field on the offer. `null` when absent/malformed.
+  final double? pickupLatitude;
+  final double? pickupLongitude;
+
   const RideRequestReceivedEvent({
     required this.riderName,
     required this.destination,
     required this.estimatedPayout,
+    this.pickupLatitude,
+    this.pickupLongitude,
   });
 
   @override
@@ -121,11 +140,17 @@ class RideRequestReceivedEvent extends KwellaBiddingEvent {
           runtimeType == other.runtimeType &&
           riderName == other.riderName &&
           destination == other.destination &&
-          estimatedPayout == other.estimatedPayout;
+          estimatedPayout == other.estimatedPayout &&
+          pickupLatitude == other.pickupLatitude &&
+          pickupLongitude == other.pickupLongitude;
 
   @override
   int get hashCode =>
-      riderName.hashCode ^ destination.hashCode ^ estimatedPayout.hashCode;
+      riderName.hashCode ^
+      destination.hashCode ^
+      estimatedPayout.hashCode ^
+      pickupLatitude.hashCode ^
+      pickupLongitude.hashCode;
 }
 
 class BidReceivedEvent extends KwellaBiddingEvent {

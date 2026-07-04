@@ -17,6 +17,8 @@ class DriverBiddingState {
   final String? destination;
   final double? estimatedPayout;
   final String? error;
+  final double? pickupLatitude;
+  final double? pickupLongitude;
 
   const DriverBiddingState({
     this.status = DriverJobStatus.idle,
@@ -24,6 +26,8 @@ class DriverBiddingState {
     this.destination,
     this.estimatedPayout,
     this.error,
+    this.pickupLatitude,
+    this.pickupLongitude,
   });
 
   DriverBiddingState copyWith({
@@ -32,6 +36,8 @@ class DriverBiddingState {
     String? destination,
     double? estimatedPayout,
     String? error,
+    double? pickupLatitude,
+    double? pickupLongitude,
   }) {
     return DriverBiddingState(
       status: status ?? this.status,
@@ -39,6 +45,8 @@ class DriverBiddingState {
       destination: destination ?? this.destination,
       estimatedPayout: estimatedPayout ?? this.estimatedPayout,
       error: error ?? this.error,
+      pickupLatitude: pickupLatitude ?? this.pickupLatitude,
+      pickupLongitude: pickupLongitude ?? this.pickupLongitude,
     );
   }
 }
@@ -61,6 +69,8 @@ class DriverBiddingNotifier extends StateNotifier<DriverBiddingState> {
               riderName: event.riderName,
               destination: event.destination,
               estimatedPayout: event.estimatedPayout,
+              pickupLatitude: event.pickupLatitude,
+              pickupLongitude: event.pickupLongitude,
             );
           } else if (event is RideAcceptedEvent) {
             state = state.copyWith(status: DriverJobStatus.jobAccepted);

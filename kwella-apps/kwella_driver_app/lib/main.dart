@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:kwella_core/kwella_core.dart';
 
 import 'src/features/bidding/driver_bidding_provider.dart';
@@ -387,114 +388,87 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
 // Driver Home screen  –  Phase 3 high-fidelity layout
 // ---------------------------------------------------------------------------
 
-/// Transit-route background painter.
+/// Live Google Map showing the driver's own position (via the native "my
+/// location" blue dot), a marker for the active passenger pickup, and a
+/// polyline tracing the route between them.
 ///
-/// Draws a simulated multi-stop route on the dark map canvas using
-/// [KwellaColors.cataTransitGreen] as the primary route colour.
-class _TransitRoutePainter extends CustomPainter {
-  const _TransitRoutePainter();
+/// Watches [telematicsBufferProvider] for the driver's current hardware fix
+/// and [driverBiddingProvider] for the active offer's pickup coordinates.
+class _DriverMap extends ConsumerStatefulWidget {
+  const _DriverMap();
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
+  ConsumerState<_DriverMap> createState() => _DriverMapState();
+}
 
-    // ── Background grid (street-map effect) ──────────────────────────────
-    final gridPaint = Paint()
-      ..color = const Color(0xFF272D36)
-      ..strokeWidth = 1.0;
+class _DriverMapState extends ConsumerState<_DriverMap> {
+  // Fallback centre used until the device's first GPS fix arrives.
+  static const LatLng _fallbackCenter = LatLng(-33.9249, 18.4241);
+  static const String _pickupMarkerId = 'pickup';
+  static const String _routePolylineId = 'driver_to_pickup';
 
-    // Horizontal grid lines
-    for (double y = 0; y < h; y += 48) {
-      canvas.drawLine(Offset(0, y), Offset(w, y), gridPaint);
-    }
-    // Vertical grid lines
-    for (double x = 0; x < w; x += 48) {
-      canvas.drawLine(Offset(x, 0), Offset(x, h), gridPaint);
-    }
+  GoogleMapController? _mapController;
 
-    // ── Off-route secondary roads ─────────────────────────────────────────
-    final secondaryPaint = Paint()
-      ..color = const Color(0xFF323A47)
-      ..strokeWidth = 2.5
-      ..strokeCap = StrokeCap.round;
-
-    canvas.drawLine(
-        Offset(w * 0.1, 0), Offset(w * 0.3, h * 0.5), secondaryPaint);
-    canvas.drawLine(
-        Offset(w * 0.3, h * 0.5), Offset(w * 0.6, h * 0.9), secondaryPaint);
-    canvas.drawLine(
-        Offset(w * 0.85, 0), Offset(w * 0.7, h * 0.45), secondaryPaint);
-    canvas.drawLine(
-        Offset(w * 0.7, h * 0.45), Offset(w * 0.55, h), secondaryPaint);
-
-    // ── Primary CATA transit route ────────────────────────────────────────
-    final routePath = Path()
-      ..moveTo(w * 0.15, h * 0.85)
-      ..cubicTo(w * 0.25, h * 0.65, w * 0.35, h * 0.60, w * 0.45, h * 0.48)
-      ..cubicTo(w * 0.55, h * 0.36, w * 0.60, h * 0.28, w * 0.72, h * 0.20)
-      ..lineTo(w * 0.85, h * 0.12);
-
-    // Glow/halo layer
-    canvas.drawPath(
-      routePath,
-      Paint()
-        ..color = KwellaColors.cataTransitGreen.withValues(alpha: 0.15)
-        ..strokeWidth = 18
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round,
-    );
-    // Main route line
-    canvas.drawPath(
-      routePath,
-      Paint()
-        ..color = KwellaColors.cataTransitGreen.withValues(alpha: 0.85)
-        ..strokeWidth = 4
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round,
-    );
-
-    // ── Route stop markers ────────────────────────────────────────────────
-    final stopPositions = <Offset>[
-      Offset(w * 0.15, h * 0.85),
-      Offset(w * 0.45, h * 0.48),
-      Offset(w * 0.72, h * 0.20),
-      Offset(w * 0.85, h * 0.12),
-    ];
-    final stopRingPaint = Paint()
-      ..color = KwellaColors.cataTransitGreen
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5;
-    final stopFillPaint = Paint()
-      ..color = KwellaColors.deepSlate
-      ..style = PaintingStyle.fill;
-
-    for (final pos in stopPositions) {
-      canvas.drawCircle(pos, 8, stopFillPaint);
-      canvas.drawCircle(pos, 8, stopRingPaint);
-    }
-
-    // ── Current driver position marker ────────────────────────────────────
-    final driverPos = Offset(w * 0.45, h * 0.48);
-    canvas.drawCircle(
-      driverPos,
-      16,
-      Paint()..color = KwellaColors.cataTransitGreen.withValues(alpha: 0.18),
-    );
-    canvas.drawCircle(
-      driverPos,
-      9,
-      Paint()..color = KwellaColors.cataTransitGreen,
-    );
-    canvas.drawCircle(
-      driverPos,
-      5,
-      Paint()..color = KwellaColors.deepSlate,
-    );
+  @override
+  void dispose() {
+    _mapController?.dispose();
+    super.dispose();
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  Widget build(BuildContext context) {
+    final telematics = ref.watch(telematicsBufferProvider);
+    final bidding = ref.watch(driverBiddingProvider);
+
+    ref.listen<TelematicsState>(telematicsBufferProvider, (previous, next) {
+      final controller = _mapController;
+      if (controller == null) return;
+      controller.animateCamera(
+        CameraUpdate.newLatLng(LatLng(next.latitude, next.longitude)),
+      );
+    });
+
+    final hasFix = telematics.latitude != 0.0 || telematics.longitude != 0.0;
+    final driverPosition = hasFix
+        ? LatLng(telematics.latitude, telematics.longitude)
+        : _fallbackCenter;
+
+    final pickupLatitude = bidding.pickupLatitude;
+    final pickupLongitude = bidding.pickupLongitude;
+    final pickupPosition = pickupLatitude != null && pickupLongitude != null
+        ? LatLng(pickupLatitude, pickupLongitude)
+        : null;
+
+    return GoogleMap(
+      initialCameraPosition: CameraPosition(
+        target: driverPosition,
+        zoom: 15,
+      ),
+      myLocationEnabled: true,
+      myLocationButtonEnabled: false,
+      markers: {
+        if (pickupPosition != null)
+          Marker(
+            markerId: const MarkerId(_pickupMarkerId),
+            position: pickupPosition,
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+              BitmapDescriptor.hueOrange,
+            ),
+            infoWindow: const InfoWindow(title: 'Passenger Pickup'),
+          ),
+      },
+      polylines: {
+        if (pickupPosition != null && hasFix)
+          Polyline(
+            polylineId: const PolylineId(_routePolylineId),
+            points: [driverPosition, pickupPosition],
+            color: Colors.blue,
+            width: 5,
+          ),
+      },
+      onMapCreated: (controller) => _mapController = controller,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -961,14 +935,9 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
       // No AppBar – full bleed immersive map layout.
       body: Stack(
         children: [
-          // ── Layer 0 : Map background with transit route ─────────────────
-          Positioned.fill(
-            child: RepaintBoundary(
-              child: CustomPaint(
-                painter: const _TransitRoutePainter(),
-                child: const SizedBox.expand(),
-              ),
-            ),
+          // ── Layer 0 : Live Google Map with pickup route ──────────────────
+          const Positioned.fill(
+            child: _DriverMap(),
           ),
 
           // ── Layer 1 : Sign-out button (top-right corner) ─────────────────
