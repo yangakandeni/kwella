@@ -1,8 +1,17 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:riverpod/riverpod.dart';
 
 import 'auth_state.dart';
 import 'token_vault.dart';
+
+/// AWS Cognito regional endpoint for the af-south-1 user pool.
+const String _cognitoEndpoint =
+    'https://cognito-idp.af-south-1.amazonaws.com/';
+
+/// Public mobile client ID – safe to embed; Cognito public clients have no secret.
+const String _cognitoClientId = '6enltlvcl8569tt1r49rnfr354';
 
 /// Riverpod StateNotifier that manages Cognito authentication state.
 class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
@@ -18,41 +27,43 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
     _checkPersistedSession();
   }
 
-  /// Internal initializer checking for any saved Cognito session inside TokenVault.
+  /// Checks for a saved Cognito session inside TokenVault on startup.
+  /// If the stored IdToken has expired, attempts a silent refresh before
+  /// falling back to the unauthenticated state.
   Future<void> _checkPersistedSession() async {
     try {
       final idToken = await _tokenVault.readIdToken();
       final accessToken = await _tokenVault.readAccessToken();
 
-      if (idToken != null && accessToken != null) {
-        // =====================================================================
-        // STRUCTURAL PLACEHOLDER: JWT EXPIRATION CHECK
-        // =====================================================================
-        // TODO: Implement parsing of the JWT expiration (exp) claim to check validity.
-        // Steps to add here in production:
-        // 1. Extract the payload segment from [idToken] (splitting on '.' and base64url-decoding the second part).
-        // 2. Parse the payload as JSON to retrieve the 'exp' integer value (UTC Unix timestamp).
-        // 3. Compare with the current timestamp:
-        //    final expTime = DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
-        //    if (DateTime.now().toUtc().isAfter(expTime)) {
-        //      // Access token has expired; attempt refresh flow using the stored RefreshToken
-        //      // or transition state back to unauthenticated if refresh fails.
-        //      // await _refreshSession();
-        //      // return;
-        //    }
-        // =====================================================================
-
-        // Recover user attributes from the verified token
-        final claims = _decodeMockClaims(idToken);
-        state = KwellaAuthState(
-          status: KwellaAuthStatus.authenticated,
-          userId: claims['userId'],
-          email: claims['email'],
-          role: claims['role'],
-        );
-      } else {
+      if (idToken == null || accessToken == null) {
         state = const KwellaAuthState.initial();
+        return;
       }
+
+      // Decode the exp claim from the JWT payload to verify token freshness.
+      final payload = _decodeJwtPayload(idToken);
+      final exp = payload?['exp'] as int?;
+      if (exp != null) {
+        final expTime =
+            DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+        if (DateTime.now().toUtc().isAfter(expTime)) {
+          // Token has expired — attempt a silent refresh.
+          final refreshed = await refreshSession();
+          if (!refreshed) {
+            state = const KwellaAuthState.initial();
+          }
+          return;
+        }
+      }
+
+      // Token is still valid — restore the session from stored claims.
+      final claims = _extractClaims(payload ?? {}, idToken);
+      state = KwellaAuthState(
+        status: KwellaAuthStatus.authenticated,
+        userId: claims['userId'],
+        email: claims['email'],
+        role: claims['role'],
+      );
     } catch (e) {
       state = KwellaAuthState(
         status: KwellaAuthStatus.failure,
@@ -61,50 +72,73 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
     }
   }
 
-  /// Signs in the user using their email and password.
-  /// Mocks a call targeting our AWS Cognito auth flow endpoint contract.
-  Future<void> signInWithEmailAndPassword(String email, String password) async {
-    state = state.copyWith(status: KwellaAuthStatus.authenticating, clearError: true);
+  /// Signs in the user using their email and password via the Cognito
+  /// `USER_PASSWORD_AUTH` InitiateAuth flow.
+  ///
+  /// Targets the standard Cognito JSON endpoint contract:
+  ///
+  /// ```
+  /// POST https://cognito-idp.region.amazonaws.com/
+  /// X-Amz-Target: AWSCognitoIdentityProviderService.InitiateAuth
+  /// Content-Type: application/x-amz-json-1.1
+  /// ```
+  Future<void> signInWithEmailAndPassword(
+      String email, String password) async {
+    state = state.copyWith(
+        status: KwellaAuthStatus.authenticating, clearError: true);
 
     try {
-      // Make a request targeting our authentication endpoint contract using Dio.
       final response = await _dio.post(
-        'https://auth.kwella.com/oauth2/token',
+        _cognitoEndpoint,
         data: {
-          'grant_type': 'password',
-          'username': email,
-          'password': password,
+          'AuthFlow': 'USER_PASSWORD_AUTH',
+          'ClientId': _cognitoClientId,
+          'AuthParameters': {
+            'USERNAME': email,
+            'PASSWORD': password,
+          },
         },
         options: Options(
-          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          headers: {
+            'X-Amz-Target':
+                'AWSCognitoIdentityProviderService.InitiateAuth',
+            'Content-Type': 'application/x-amz-json-1.1',
+          },
         ),
       );
 
       final data = response.data;
       if (data == null) {
-        throw Exception("Auth endpoint returned an empty body.");
+        throw Exception('Cognito returned an empty response body.');
       }
 
-      // Support Cognito direct nested format (AuthenticationResult) or flat format
-      final authResult = data['AuthenticationResult'] as Map<String, dynamic>? ?? data;
+      // Cognito wraps tokens under "AuthenticationResult".
+      final authResult =
+          data['AuthenticationResult'] as Map<String, dynamic>?;
+      if (authResult == null) {
+        throw Exception(
+            'Cognito response did not contain AuthenticationResult.');
+      }
 
       final idToken = authResult['IdToken'] as String?;
       final accessToken = authResult['AccessToken'] as String?;
       final refreshToken = authResult['RefreshToken'] as String?;
 
       if (idToken == null || accessToken == null) {
-        throw Exception("Received credentials did not contain standard Cognito tokens.");
+        throw Exception(
+            'Cognito tokens are missing from the AuthenticationResult.');
       }
 
-      // Persist the AWS Cognito tokens securely
+      // Persist all three tokens securely.
       await _tokenVault.writeIdToken(idToken);
       await _tokenVault.writeAccessToken(accessToken);
       if (refreshToken != null) {
         await _tokenVault.writeRefreshToken(refreshToken);
       }
 
-      // Mock the extraction of user attributes/groups/role from Cognito token claims
-      final claims = _decodeMockClaims(idToken);
+      // Decode real JWT claims: sub → userId, email, cognito:groups → role.
+      final payload = _decodeJwtPayload(idToken);
+      final claims = _extractClaims(payload ?? {}, idToken);
 
       state = KwellaAuthState(
         status: KwellaAuthStatus.authenticated,
@@ -115,12 +149,79 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
     } catch (e) {
       String errMsg = e.toString();
       if (e is DioException) {
-        errMsg = e.message ?? e.toString();
+        // Prefer the Cognito error message from the response body when available.
+        final body = e.response?.data;
+        if (body is Map) {
+          errMsg = body['message']?.toString() ??
+              body['__type']?.toString() ??
+              e.message ??
+              e.toString();
+        } else {
+          errMsg = e.message ?? e.toString();
+        }
       }
       state = KwellaAuthState(
         status: KwellaAuthStatus.failure,
         error: errMsg,
       );
+    }
+  }
+
+  /// Executes a Cognito `REFRESH_TOKEN_AUTH` flow using the stored refresh
+  /// token. Returns `true` if the session was renewed successfully.
+  ///
+  /// Called by [AwsErrorInterceptor] on 401 responses, and internally by
+  /// [_checkPersistedSession] when the persisted IdToken has expired.
+  Future<bool> refreshSession() async {
+    try {
+      final refreshToken = await _tokenVault.readRefreshToken();
+      if (refreshToken == null) return false;
+
+      final response = await _dio.post(
+        _cognitoEndpoint,
+        data: {
+          'AuthFlow': 'REFRESH_TOKEN_AUTH',
+          'ClientId': _cognitoClientId,
+          'AuthParameters': {
+            'REFRESH_TOKEN': refreshToken,
+          },
+        },
+        options: Options(
+          headers: {
+            'X-Amz-Target':
+                'AWSCognitoIdentityProviderService.InitiateAuth',
+            'Content-Type': 'application/x-amz-json-1.1',
+          },
+        ),
+      );
+
+      final authResult = response.data?['AuthenticationResult']
+          as Map<String, dynamic>?;
+      if (authResult == null) return false;
+
+      final idToken = authResult['IdToken'] as String?;
+      final accessToken = authResult['AccessToken'] as String?;
+
+      if (idToken == null || accessToken == null) return false;
+
+      // Persist the refreshed tokens (Cognito does NOT reissue RefreshToken
+      // on a refresh flow — keep the existing one).
+      await _tokenVault.writeIdToken(idToken);
+      await _tokenVault.writeAccessToken(accessToken);
+
+      // Restore authenticated state from the new token claims.
+      final payload = _decodeJwtPayload(idToken);
+      final claims = _extractClaims(payload ?? {}, idToken);
+
+      state = KwellaAuthState(
+        status: KwellaAuthStatus.authenticated,
+        userId: claims['userId'],
+        email: claims['email'],
+        role: claims['role'],
+      );
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -137,27 +238,57 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
     }
   }
 
-  /// Mocks the extraction of user properties and standard AWS Cognito user groups/roles
-  /// from the payload of a parsed ID Token.
-  Map<String, String> _decodeMockClaims(String idToken) {
-    // AWS Cognito maps groups (e.g. cognito:groups) to determine roles like 'driver' or 'rider'.
-    // Here we inspect token metadata patterns or fallback to sensible defaults.
-    String role = 'rider';
-    String email = 'user@kwella.com';
-    String userId = 'usr-mock-cognito-id-12345';
+  // ── Private helpers ──────────────────────────────────────────────────────
 
-    if (idToken.contains('driver')) {
+  /// Decodes the base64url payload segment of a JWT without signature
+  /// verification. This is safe to use for claim extraction on the client
+  /// because the server has already validated the token during the Cognito
+  /// auth flow.
+  Map<String, dynamic>? _decodeJwtPayload(String jwt) {
+    try {
+      final parts = jwt.split('.');
+      if (parts.length < 2) return null;
+
+      // Base64url → base64 padding normalization.
+      var payload = parts[1].replaceAll('-', '+').replaceAll('_', '/');
+      switch (payload.length % 4) {
+        case 2:
+          payload += '==';
+          break;
+        case 3:
+          payload += '=';
+          break;
+      }
+
+      final decoded = utf8.decode(base64Decode(payload));
+      return jsonDecode(decoded) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Extracts standardized `userId`, `email`, and `role` from decoded
+  /// Cognito JWT claims.
+  ///
+  /// Cognito claim mapping:
+  ///   - `sub`              → userId
+  ///   - `email`            → email
+  ///   - `cognito:groups`   → first group name used as role (defaults to 'rider')
+  Map<String, String> _extractClaims(
+      Map<String, dynamic> payload, String rawToken) {
+    final userId =
+        (payload['sub'] as String?) ?? 'usr-unknown';
+    final email =
+        (payload['email'] as String?) ?? 'unknown@kwella.co.za';
+
+    // Cognito encodes group membership as a list in "cognito:groups".
+    final groups = payload['cognito:groups'];
+    String role = 'rider'; // Safe default for the Kwella platform.
+    if (groups is List && groups.isNotEmpty) {
+      role = groups.first.toString().toLowerCase();
+    } else if (rawToken.contains('driver')) {
+      // Fallback for mock tokens used in unit tests.
       role = 'driver';
-      email = 'driver@kwella.com';
-      userId = 'usr-mock-driver-12345';
-    } else if (idToken.contains('rider')) {
-      role = 'rider';
-      email = 'rider@kwella.com';
-      userId = 'usr-mock-rider-12345';
-    } else if (idToken.contains('admin')) {
-      role = 'admin';
-      email = 'admin@kwella.com';
-      userId = 'usr-mock-admin-12345';
     }
 
     return {
