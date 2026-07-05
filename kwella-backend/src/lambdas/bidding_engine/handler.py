@@ -1373,6 +1373,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             offer_payload = {
                 "action": "rideOfferAvailable",
                 "tripId": trip_id,
+                "rider_id": rider_id,
                 "pickup_location": [pickup_lat, pickup_lon],
                 "dropoff_location": [dropoff_lat, dropoff_lon],
                 "base_fare": suggested_fare,
