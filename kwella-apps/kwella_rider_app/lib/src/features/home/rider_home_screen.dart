@@ -163,7 +163,17 @@ class _RiderHomeScreenState extends ConsumerState<RiderHomeScreen> {
                 setState(() {
                   _selectedBidId = null;
                 });
-                ref.read(riderBiddingProvider.notifier).startBroadcast();
+                // TODO(e2e-staging): hardcoded Gugulethu -> Philippi
+                // staging coordinates for the local E2E dual-simulator run.
+                // Revert to a real destination picker before shipping.
+                ref
+                    .read(riderBiddingProvider.notifier)
+                    .startBroadcast(
+                      pickupLatitude: -33.9872,
+                      pickupLongitude: 18.5715,
+                      dropoffLatitude: -34.0150,
+                      dropoffLongitude: 18.5941,
+                    );
               },
             ),
           ),
