@@ -46,12 +46,13 @@ class DriverAuthGate extends ConsumerWidget {
 
     return switch (authState.status) {
       KwellaAuthStatus.authenticating => const _SplashScreen(),
+      KwellaAuthStatus.otpRequired => const DriverOtpScreen(),
       KwellaAuthStatus.authenticated => _resolveAuthenticatedScreen(
           context,
           ref,
           authState,
         ),
-      _ => const DriverLoginScreen(), // unauthenticated | failure
+      _ => const DriverPhoneEntryScreen(), // unauthenticated | failure
     };
   }
 
@@ -153,21 +154,23 @@ class _SplashScreen extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Driver Login screen
+// Driver Phone Entry screen
 // ---------------------------------------------------------------------------
-class DriverLoginScreen extends ConsumerStatefulWidget {
-  const DriverLoginScreen({super.key});
+class DriverPhoneEntryScreen extends ConsumerStatefulWidget {
+  const DriverPhoneEntryScreen({super.key});
 
   @override
-  ConsumerState<DriverLoginScreen> createState() => _DriverLoginScreenState();
+  ConsumerState<DriverPhoneEntryScreen> createState() =>
+      _DriverPhoneEntryScreenState();
 }
 
-class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
+class _DriverPhoneEntryScreenState
+    extends ConsumerState<DriverPhoneEntryScreen>
     with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
-  final _phoneCtrl = TextEditingController();
-  final _passwordCtrl = TextEditingController();
-  bool _obscurePassword = true;
+  // Pre-filled with a test number for the current testing phase (OTP
+  // delivery is not yet wired to real SMS) — still editable for real numbers.
+  final _phoneCtrl = TextEditingController(text: '+27821234567');
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
 
@@ -185,18 +188,14 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
   void dispose() {
     _fadeCtrl.dispose();
     _phoneCtrl.dispose();
-    _passwordCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _handleLogin() async {
+  Future<void> _handleSendCode() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     await ref
         .read(kwellaAuthNotifierProvider.notifier)
-        .signInWithPhoneAndPassword(
-          _phoneCtrl.text.trim(),
-          _passwordCtrl.text,
-        );
+        .requestOtp(_phoneCtrl.text.trim());
   }
 
   @override
@@ -224,7 +223,7 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
                   // ── Error banner ───────────────────────────────────
                   if (authState.status == KwellaAuthStatus.failure &&
                       authState.error != null)
-                    _buildErrorBanner(authState.error!),
+                    buildAuthErrorBanner(authState.error!),
 
                   // ── Phone number field ──────────────────────────────
                   TextFormField(
@@ -247,42 +246,12 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
                       return null;
                     },
                   ),
-                  const SizedBox(height: 16),
-
-                  // ── Password field ─────────────────────────────────
-                  TextFormField(
-                    key: const Key('driver_password_field'),
-                    controller: _passwordCtrl,
-                    obscureText: _obscurePassword,
-                    style: const TextStyle(color: KwellaColors.textOnDark),
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      prefixIcon: const Icon(Icons.lock_outline_rounded),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscurePassword
-                              ? Icons.visibility_off_outlined
-                              : Icons.visibility_outlined,
-                          color: KwellaColors.textOnDarkMuted,
-                        ),
-                        onPressed: () => setState(
-                            () => _obscurePassword = !_obscurePassword),
-                      ),
-                    ),
-                    validator: (v) {
-                      if (v == null || v.isEmpty) {
-                        return 'Please enter your password';
-                      }
-                      if (v.length < 6) return 'Password too short';
-                      return null;
-                    },
-                  ),
                   const SizedBox(height: 32),
 
-                  // ── Login button ───────────────────────────────────
+                  // ── Send code button ────────────────────────────────
                   ElevatedButton(
-                    key: const Key('driver_login_button'),
-                    onPressed: isLoading ? null : _handleLogin,
+                    key: const Key('driver_send_code_button'),
+                    onPressed: isLoading ? null : _handleSendCode,
                     child: isLoading
                         ? const SizedBox(
                             height: 22,
@@ -292,7 +261,7 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
                               strokeWidth: 2.5,
                             ),
                           )
-                        : const Text('Login'),
+                        : const Text('Send code'),
                   ),
                   const SizedBox(height: 24),
 
@@ -345,37 +314,192 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
         ),
         const SizedBox(height: 8),
         const Text(
-          'Sign in to access your Kwella Driver account',
+          "Enter your phone number and we'll send you a one-time code",
           style:
               TextStyle(color: KwellaColors.textOnDarkMuted, fontSize: 15),
         ),
       ],
     );
   }
+}
 
-  Widget _buildErrorBanner(String error) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 20),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: KwellaColors.errorRed.withValues(alpha: 0.12),
-        border: Border.all(
-            color: KwellaColors.errorRed.withValues(alpha: 0.4)),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.error_outline_rounded,
-              color: KwellaColors.errorRed, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              error,
-              style: const TextStyle(
-                  color: KwellaColors.errorRed, fontSize: 13),
+/// Shared error banner styling for the phone-entry and OTP screens.
+Widget buildAuthErrorBanner(String error) {
+  return Container(
+    margin: const EdgeInsets.only(bottom: 20),
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: KwellaColors.errorRed.withValues(alpha: 0.12),
+      border: Border.all(color: KwellaColors.errorRed.withValues(alpha: 0.4)),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.error_outline_rounded,
+            color: KwellaColors.errorRed, size: 18),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            error,
+            style: const TextStyle(color: KwellaColors.errorRed, fontSize: 13),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Driver OTP Verification screen
+// ---------------------------------------------------------------------------
+class DriverOtpScreen extends ConsumerStatefulWidget {
+  const DriverOtpScreen({super.key});
+
+  @override
+  ConsumerState<DriverOtpScreen> createState() => _DriverOtpScreenState();
+}
+
+class _DriverOtpScreenState extends ConsumerState<DriverOtpScreen>
+    with SingleTickerProviderStateMixin {
+  final _formKey = GlobalKey<FormState>();
+  // Pre-filled with the fixed testing-phase code issued by the
+  // CreateAuthChallenge Lambda — still editable once real SMS delivery lands.
+  final _otpCtrl = TextEditingController(text: '123456');
+  late AnimationController _fadeCtrl;
+  late Animation<double> _fadeAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _fadeCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    )..forward();
+    _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
+  }
+
+  @override
+  void dispose() {
+    _fadeCtrl.dispose();
+    _otpCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleVerify() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    await ref
+        .read(kwellaAuthNotifierProvider.notifier)
+        .verifyOtp(_otpCtrl.text.trim());
+  }
+
+  Future<void> _handleResendCode() async {
+    final phoneNumber = ref.read(kwellaAuthNotifierProvider).pendingPhoneNumber;
+    if (phoneNumber == null) return;
+    await ref.read(kwellaAuthNotifierProvider.notifier).requestOtp(phoneNumber);
+  }
+
+  Future<void> _handleUseDifferentNumber() async {
+    await ref.read(kwellaAuthNotifierProvider.notifier).signOut();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final authState = ref.watch(kwellaAuthNotifierProvider);
+    final isLoading = authState.status == KwellaAuthStatus.authenticating;
+    final phoneNumber = authState.pendingPhoneNumber ?? 'your phone';
+
+    return Scaffold(
+      backgroundColor: KwellaColors.deepSlate,
+      body: SafeArea(
+        child: FadeTransition(
+          opacity: _fadeAnim,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 48),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ── Header ─────────────────────────────────────────
+                  Text(
+                    'Enter your code',
+                    style: TextStyle(
+                      color: KwellaColors.textOnDark,
+                      fontSize: 32,
+                      fontWeight: FontWeight.w800,
+                      height: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'We sent a code to $phoneNumber',
+                    style: TextStyle(
+                        color: KwellaColors.textOnDarkMuted, fontSize: 15),
+                  ),
+                  const SizedBox(height: 48),
+
+                  // ── Error banner ───────────────────────────────────
+                  if (authState.status == KwellaAuthStatus.otpRequired &&
+                      authState.error != null)
+                    buildAuthErrorBanner(authState.error!),
+
+                  // ── OTP field ────────────────────────────────────────
+                  TextFormField(
+                    key: const Key('driver_otp_field'),
+                    controller: _otpCtrl,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: KwellaColors.textOnDark),
+                    decoration: const InputDecoration(
+                      labelText: 'One-time code',
+                      prefixIcon: Icon(Icons.password_outlined),
+                    ),
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) {
+                        return 'Please enter the code';
+                      }
+                      if (!RegExp(r'^\d{6}$').hasMatch(v.trim())) {
+                        return 'Enter the 6-digit code';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 32),
+
+                  // ── Verify button ───────────────────────────────────
+                  ElevatedButton(
+                    key: const Key('driver_otp_submit_button'),
+                    onPressed: isLoading ? null : _handleVerify,
+                    child: isLoading
+                        ? const SizedBox(
+                            height: 22,
+                            width: 22,
+                            child: CircularProgressIndicator(
+                              color: KwellaColors.deepSlate,
+                              strokeWidth: 2.5,
+                            ),
+                          )
+                        : const Text('Verify'),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // ── Resend / change number actions ──────────────────
+                  Center(
+                    child: TextButton(
+                      onPressed: isLoading ? null : _handleResendCode,
+                      child: const Text('Resend code'),
+                    ),
+                  ),
+                  Center(
+                    child: TextButton(
+                      onPressed: isLoading ? null : _handleUseDifferentNumber,
+                      child: const Text('Use a different number'),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }

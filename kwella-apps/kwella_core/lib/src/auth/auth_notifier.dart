@@ -69,13 +69,15 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
     }
   }
 
-  /// Signs in the user using their phone number and password via the
-  /// Cognito `USER_PASSWORD_AUTH` InitiateAuth flow.
+  /// Requests an OTP for the given phone number via the Cognito `CUSTOM_AUTH`
+  /// InitiateAuth flow. On success, moves to [KwellaAuthStatus.otpRequired]
+  /// with the returned challenge `Session` and the phone number stored so
+  /// the OTP screen can display it, resend the code, or submit the answer
+  /// via [verifyOtp].
   ///
   /// The Kwella user pool is configured with `phone_number` as its username
-  /// attribute (see `terraform/main.tf`), so `USERNAME` must be an E.164
-  /// phone number (e.g. `+27821234567`) — an email address here will be
-  /// rejected by Cognito with a 400 `InvalidParameterException`.
+  /// attribute (see `terraform/main.tf`), so `phoneNumber` must be an E.164
+  /// number (e.g. `+27821234567`) belonging to an existing Cognito user.
   ///
   /// Targets the standard Cognito JSON endpoint contract:
   ///
@@ -84,8 +86,7 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
   /// X-Amz-Target: AWSCognitoIdentityProviderService.InitiateAuth
   /// Content-Type: application/x-amz-json-1.1
   /// ```
-  Future<void> signInWithPhoneAndPassword(
-      String phoneNumber, String password) async {
+  Future<void> requestOtp(String phoneNumber) async {
     state = state.copyWith(
         status: KwellaAuthStatus.authenticating, clearError: true);
 
@@ -93,11 +94,10 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
       final response = await _dio.post(
         _env.cognitoEndpoint,
         data: {
-          'AuthFlow': 'USER_PASSWORD_AUTH',
+          'AuthFlow': 'CUSTOM_AUTH',
           'ClientId': _env.cognitoClientId,
           'AuthParameters': {
             'USERNAME': phoneNumber,
-            'PASSWORD': password,
           },
         },
         options: Options(
@@ -110,61 +110,95 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
       );
 
       final data = response.data;
-      if (data == null) {
-        throw Exception('Cognito returned an empty response body.');
-      }
-
-      // Cognito wraps tokens under "AuthenticationResult".
-      final authResult =
-          data['AuthenticationResult'] as Map<String, dynamic>?;
-      if (authResult == null) {
+      final session = data?['Session'] as String?;
+      final challengeName = data?['ChallengeName'] as String?;
+      if (session == null || challengeName != 'CUSTOM_CHALLENGE') {
         throw Exception(
-            'Cognito response did not contain AuthenticationResult.');
+            'Cognito did not return a CUSTOM_CHALLENGE session.');
       }
 
-      final idToken = authResult['IdToken'] as String?;
-      final accessToken = authResult['AccessToken'] as String?;
-      final refreshToken = authResult['RefreshToken'] as String?;
-
-      if (idToken == null || accessToken == null) {
-        throw Exception(
-            'Cognito tokens are missing from the AuthenticationResult.');
-      }
-
-      // Persist all three tokens securely.
-      await _tokenVault.writeIdToken(idToken);
-      await _tokenVault.writeAccessToken(accessToken);
-      if (refreshToken != null) {
-        await _tokenVault.writeRefreshToken(refreshToken);
-      }
-
-      // Decode real JWT claims: sub → userId, email, cognito:groups → role.
-      final payload = _decodeJwtPayload(idToken);
-      final claims = _extractClaims(payload ?? {}, idToken);
-
-      state = KwellaAuthState(
-        status: KwellaAuthStatus.authenticated,
-        userId: claims['userId'],
-        email: claims['email'],
-        role: claims['role'],
+      state = state.copyWith(
+        status: KwellaAuthStatus.otpRequired,
+        cognitoSession: session,
+        pendingPhoneNumber: phoneNumber,
+        clearError: true,
       );
     } catch (e) {
-      String errMsg = e.toString();
-      if (e is DioException) {
-        // Prefer the Cognito error message from the response body when available.
-        final body = e.response?.data;
-        if (body is Map) {
-          errMsg = body['message']?.toString() ??
-              body['__type']?.toString() ??
-              e.message ??
-              e.toString();
-        } else {
-          errMsg = e.message ?? e.toString();
-        }
-      }
       state = KwellaAuthState(
         status: KwellaAuthStatus.failure,
-        error: errMsg,
+        error: _extractCognitoErrorMessage(e),
+      );
+    }
+  }
+
+  /// Submits the OTP code entered by the user via Cognito's
+  /// `RespondToAuthChallenge` for the `CUSTOM_CHALLENGE` issued by
+  /// [requestOtp]. Requires a pending challenge (i.e. [requestOtp] must have
+  /// been called first).
+  ///
+  /// Three outcomes:
+  ///   - Correct code: Cognito returns `AuthenticationResult` — tokens are
+  ///     persisted and the state moves to [KwellaAuthStatus.authenticated].
+  ///   - Incorrect code (retry allowed): Cognito returns a new `Session`
+  ///     with no `AuthenticationResult` — state stays
+  ///     [KwellaAuthStatus.otpRequired] with an error for the user to retry.
+  ///   - Incorrect code (too many attempts): Cognito rejects the request —
+  ///     state moves to [KwellaAuthStatus.failure].
+  Future<void> verifyOtp(String otpCode) async {
+    final phoneNumber = state.pendingPhoneNumber;
+    final session = state.cognitoSession;
+    if (phoneNumber == null || session == null) {
+      state = KwellaAuthState(
+        status: KwellaAuthStatus.failure,
+        error: 'No pending OTP challenge — request a new code.',
+      );
+      return;
+    }
+
+    state = state.copyWith(
+        status: KwellaAuthStatus.authenticating, clearError: true);
+
+    try {
+      final response = await _dio.post(
+        _env.cognitoEndpoint,
+        data: {
+          'ChallengeName': 'CUSTOM_CHALLENGE',
+          'ClientId': _env.cognitoClientId,
+          'Session': session,
+          'ChallengeResponses': {
+            'USERNAME': phoneNumber,
+            'ANSWER': otpCode,
+          },
+        },
+        options: Options(
+          headers: {
+            'X-Amz-Target':
+                'AWSCognitoIdentityProviderService.RespondToAuthChallenge',
+            'Content-Type': 'application/x-amz-json-1.1',
+          },
+        ),
+      );
+
+      final data = response.data;
+      final authResult = data?['AuthenticationResult'] as Map<String, dynamic>?;
+
+      if (authResult == null) {
+        // Cognito re-issued the challenge for another attempt rather than
+        // erroring outright — stay on the OTP screen with a retry error.
+        final newSession = data?['Session'] as String?;
+        state = state.copyWith(
+          status: KwellaAuthStatus.otpRequired,
+          cognitoSession: newSession ?? session,
+          error: 'Incorrect code. Please try again.',
+        );
+        return;
+      }
+
+      await _completeAuthentication(authResult);
+    } catch (e) {
+      state = KwellaAuthState(
+        status: KwellaAuthStatus.failure,
+        error: _extractCognitoErrorMessage(e),
       );
     }
   }
@@ -201,26 +235,9 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
           as Map<String, dynamic>?;
       if (authResult == null) return false;
 
-      final idToken = authResult['IdToken'] as String?;
-      final accessToken = authResult['AccessToken'] as String?;
-
-      if (idToken == null || accessToken == null) return false;
-
-      // Persist the refreshed tokens (Cognito does NOT reissue RefreshToken
-      // on a refresh flow — keep the existing one).
-      await _tokenVault.writeIdToken(idToken);
-      await _tokenVault.writeAccessToken(accessToken);
-
-      // Restore authenticated state from the new token claims.
-      final payload = _decodeJwtPayload(idToken);
-      final claims = _extractClaims(payload ?? {}, idToken);
-
-      state = KwellaAuthState(
-        status: KwellaAuthStatus.authenticated,
-        userId: claims['userId'],
-        email: claims['email'],
-        role: claims['role'],
-      );
+      // Cognito does NOT reissue RefreshToken on a refresh flow — keep the
+      // existing one rather than persisting the (absent) new value.
+      await _completeAuthentication(authResult, persistRefreshToken: false);
       return true;
     } catch (_) {
       return false;
@@ -241,6 +258,55 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────
+
+  /// Persists tokens from a Cognito `AuthenticationResult` and moves the
+  /// state to [KwellaAuthStatus.authenticated] with claims decoded from the
+  /// IdToken. Shared by [verifyOtp] and [refreshSession].
+  Future<void> _completeAuthentication(
+    Map<String, dynamic> authResult, {
+    bool persistRefreshToken = true,
+  }) async {
+    final idToken = authResult['IdToken'] as String?;
+    final accessToken = authResult['AccessToken'] as String?;
+    final refreshToken = authResult['RefreshToken'] as String?;
+
+    if (idToken == null || accessToken == null) {
+      throw Exception(
+          'Cognito tokens are missing from the AuthenticationResult.');
+    }
+
+    await _tokenVault.writeIdToken(idToken);
+    await _tokenVault.writeAccessToken(accessToken);
+    if (persistRefreshToken && refreshToken != null) {
+      await _tokenVault.writeRefreshToken(refreshToken);
+    }
+
+    final payload = _decodeJwtPayload(idToken);
+    final claims = _extractClaims(payload ?? {}, idToken);
+
+    state = KwellaAuthState(
+      status: KwellaAuthStatus.authenticated,
+      userId: claims['userId'],
+      email: claims['email'],
+      role: claims['role'],
+    );
+  }
+
+  /// Extracts a human-readable error message, preferring the Cognito
+  /// `message`/`__type` fields from a `DioException`'s response body.
+  String _extractCognitoErrorMessage(Object e) {
+    if (e is DioException) {
+      final body = e.response?.data;
+      if (body is Map) {
+        return body['message']?.toString() ??
+            body['__type']?.toString() ??
+            e.message ??
+            e.toString();
+      }
+      return e.message ?? e.toString();
+    }
+    return e.toString();
+  }
 
   /// Decodes the base64url payload segment of a JWT without signature
   /// verification. This is safe to use for claim extraction on the client

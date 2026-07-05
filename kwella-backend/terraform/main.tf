@@ -105,6 +105,15 @@ resource "aws_cognito_user_pool" "kwella_user_pool" {
     require_numbers   = true
     require_symbols   = false
   }
+
+  # ── Passwordless phone + OTP sign-in (CUSTOM_AUTH) ────────────────────────
+  # See the "OTP Passwordless Auth" Lambda section below. CreateAuthChallenge
+  # currently issues a fixed testing-phase code rather than a real SMS OTP.
+  lambda_config {
+    define_auth_challenge          = aws_lambda_function.define_auth_challenge.arn
+    create_auth_challenge          = aws_lambda_function.create_auth_challenge.arn
+    verify_auth_challenge_response = aws_lambda_function.verify_auth_challenge_response.arn
+  }
 }
 
 resource "aws_cognito_user_pool_client" "mobile_app" {
@@ -116,7 +125,8 @@ resource "aws_cognito_user_pool_client" "mobile_app" {
   explicit_auth_flows = [
     "ALLOW_USER_SRP_AUTH",
     "ALLOW_REFRESH_TOKEN_AUTH",
-    "ALLOW_USER_PASSWORD_AUTH"
+    "ALLOW_USER_PASSWORD_AUTH",
+    "ALLOW_CUSTOM_AUTH"
   ]
 }
 
@@ -194,6 +204,83 @@ resource "aws_lambda_function" "ledger_service" {
       KWELLA_TABLE_NAME = aws_dynamodb_table.kwella_core.name
     }
   }
+}
+
+# ---------------------------------------------------------------------------
+# kwella Passwordless Phone + OTP Auth — Cognito CUSTOM_AUTH Lambda Triggers
+# ---------------------------------------------------------------------------
+# DefineAuthChallenge / CreateAuthChallenge / VerifyAuthChallengeResponse
+# implement the phone-number + OTP sign-in flow (see the lambda_config block
+# on aws_cognito_user_pool.kwella_user_pool above). CreateAuthChallenge issues
+# a fixed testing-phase code (OTP_TEST_CODE) rather than a real SMS OTP —
+# swapping in real SNS SMS delivery later only requires changing that Lambda.
+# ---------------------------------------------------------------------------
+
+resource "aws_lambda_function" "define_auth_challenge" {
+  function_name    = "kwella-define-auth-challenge-${var.environment}"
+  description      = "Cognito CUSTOM_AUTH trigger: decides the next step in the phone + OTP sign-in flow."
+  runtime          = "python3.12"
+  handler          = "handler.lambda_handler"
+  role             = aws_iam_role.lambda_exec.arn
+  filename         = "${path.module}/../../dist/define_auth_challenge.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../dist/define_auth_challenge.zip")
+
+  layers = [aws_lambda_layer_version.kwella_shared.arn]
+}
+
+resource "aws_lambda_function" "create_auth_challenge" {
+  function_name    = "kwella-create-auth-challenge-${var.environment}"
+  description      = "Cognito CUSTOM_AUTH trigger: issues the OTP challenge (fixed test code during the testing phase)."
+  runtime          = "python3.12"
+  handler          = "handler.lambda_handler"
+  role             = aws_iam_role.lambda_exec.arn
+  filename         = "${path.module}/../../dist/create_auth_challenge.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../dist/create_auth_challenge.zip")
+
+  layers = [aws_lambda_layer_version.kwella_shared.arn]
+
+  environment {
+    variables = {
+      OTP_TEST_CODE = "123456"
+    }
+  }
+}
+
+resource "aws_lambda_function" "verify_auth_challenge_response" {
+  function_name    = "kwella-verify-auth-challenge-response-${var.environment}"
+  description      = "Cognito CUSTOM_AUTH trigger: verifies the OTP code submitted by the user."
+  runtime          = "python3.12"
+  handler          = "handler.lambda_handler"
+  role             = aws_iam_role.lambda_exec.arn
+  filename         = "${path.module}/../../dist/verify_auth_challenge_response.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../dist/verify_auth_challenge_response.zip")
+
+  layers = [aws_lambda_layer_version.kwella_shared.arn]
+}
+
+# Grant Cognito permission to invoke the three CUSTOM_AUTH trigger Lambdas.
+resource "aws_lambda_permission" "cognito_invoke_define_auth_challenge" {
+  statement_id  = "AllowCognitoInvokeDefineAuthChallenge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.define_auth_challenge.function_name
+  principal     = "cognito-idp.amazonaws.com"
+  source_arn    = aws_cognito_user_pool.kwella_user_pool.arn
+}
+
+resource "aws_lambda_permission" "cognito_invoke_create_auth_challenge" {
+  statement_id  = "AllowCognitoInvokeCreateAuthChallenge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.create_auth_challenge.function_name
+  principal     = "cognito-idp.amazonaws.com"
+  source_arn    = aws_cognito_user_pool.kwella_user_pool.arn
+}
+
+resource "aws_lambda_permission" "cognito_invoke_verify_auth_challenge_response" {
+  statement_id  = "AllowCognitoInvokeVerifyAuthChallengeResponse"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.verify_auth_challenge_response.function_name
+  principal     = "cognito-idp.amazonaws.com"
+  source_arn    = aws_cognito_user_pool.kwella_user_pool.arn
 }
 
 # ---------------------------------------------------------------------------

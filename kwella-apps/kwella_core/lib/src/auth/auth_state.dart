@@ -2,6 +2,10 @@
 enum KwellaAuthStatus {
   unauthenticated,
   authenticating,
+
+  /// A Cognito CUSTOM_AUTH challenge (OTP) has been issued and is awaiting
+  /// the code the user enters on the OTP screen.
+  otpRequired,
   authenticated,
   failure,
 }
@@ -14,12 +18,22 @@ class KwellaAuthState {
   final String? email;
   final String? role;
 
+  /// The opaque Cognito `Session` token returned by `InitiateAuth` for the
+  /// `CUSTOM_AUTH` flow, required as input to `RespondToAuthChallenge`.
+  final String? cognitoSession;
+
+  /// The phone number entered on the phone-entry screen, carried forward so
+  /// the OTP screen can display it and resend the code.
+  final String? pendingPhoneNumber;
+
   const KwellaAuthState({
     required this.status,
     this.error,
     this.userId,
     this.email,
     this.role,
+    this.cognitoSession,
+    this.pendingPhoneNumber,
   });
 
   /// Factory for the initial unauthenticated state.
@@ -28,7 +42,9 @@ class KwellaAuthState {
         error = null,
         userId = null,
         email = null,
-        role = null;
+        role = null,
+        cognitoSession = null,
+        pendingPhoneNumber = null;
 
   /// Creates a copy of this state but with the given fields replaced with the new values.
   KwellaAuthState copyWith({
@@ -37,8 +53,11 @@ class KwellaAuthState {
     String? userId,
     String? email,
     String? role,
+    String? cognitoSession,
+    String? pendingPhoneNumber,
     bool clearError = false,
     bool clearUser = false,
+    bool clearChallenge = false,
   }) {
     return KwellaAuthState(
       status: status ?? this.status,
@@ -46,6 +65,11 @@ class KwellaAuthState {
       userId: clearUser ? null : (userId ?? this.userId),
       email: clearUser ? null : (email ?? this.email),
       role: clearUser ? null : (role ?? this.role),
+      cognitoSession:
+          clearChallenge ? null : (cognitoSession ?? this.cognitoSession),
+      pendingPhoneNumber: clearChallenge
+          ? null
+          : (pendingPhoneNumber ?? this.pendingPhoneNumber),
     );
   }
 
@@ -58,13 +82,23 @@ class KwellaAuthState {
           error == other.error &&
           userId == other.userId &&
           email == other.email &&
-          role == other.role;
+          role == other.role &&
+          cognitoSession == other.cognitoSession &&
+          pendingPhoneNumber == other.pendingPhoneNumber;
 
   @override
-  int get hashCode => Object.hash(status, error, userId, email, role);
+  int get hashCode => Object.hash(
+        status,
+        error,
+        userId,
+        email,
+        role,
+        cognitoSession,
+        pendingPhoneNumber,
+      );
 
   @override
   String toString() {
-    return 'KwellaAuthState(status: $status, error: $error, userId: $userId, email: $email, role: $role)';
+    return 'KwellaAuthState(status: $status, error: $error, userId: $userId, email: $email, role: $role, cognitoSession: $cognitoSession, pendingPhoneNumber: $pendingPhoneNumber)';
   }
 }

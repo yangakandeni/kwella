@@ -6,7 +6,9 @@
       "Bash(flutter build *)",
       "Read(//Applications/Xcode.app/Contents/Developer/Platforms/**)",
       "Bash(sudo -n xcodebuild -runFirstLaunch)",
-      "Bash(echo \"boot exit: $?\")"
+      "Bash(echo \"boot exit: $?\")",
+      "Bash(unzip -l /Users/yanga/Documents/dev/projects/kwella/kwella-backend/dist/identity_service.zip)",
+      "Bash(terraform validate *)"
     ]
   }
 }
