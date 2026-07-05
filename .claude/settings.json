@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(env)",
+      "Bash(unset GEM_HOME GEM_PATH)",
+      "Bash(flutter build *)",
+      "Read(//Applications/Xcode.app/Contents/Developer/Platforms/**)",
+      "Bash(sudo -n xcodebuild -runFirstLaunch)",
+      "Bash(echo \"boot exit: $?\")"
+    ]
+  }
+}
