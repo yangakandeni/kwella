@@ -47,7 +47,7 @@ IOS_DEVICE_ID=$(echo "${DEVICES_JSON}" | python3 -c '
 import json, sys
 devices = json.load(sys.stdin)
 for d in devices:
-    if d.get("platform", "").startswith("ios") and d.get("emulator"):
+    if d.get("targetPlatform", "") == "ios" and (d.get("emulator") or "-" in d.get("id", "")):
         print(d["id"])
         break
 ')
@@ -56,7 +56,7 @@ ANDROID_DEVICE_ID=$(echo "${DEVICES_JSON}" | python3 -c '
 import json, sys
 devices = json.load(sys.stdin)
 for d in devices:
-    if d.get("platform", "").startswith("android") and d.get("emulator"):
+    if d.get("targetPlatform", "").startswith("android") and d.get("emulator"):
         print(d["id"])
         break
 ')
