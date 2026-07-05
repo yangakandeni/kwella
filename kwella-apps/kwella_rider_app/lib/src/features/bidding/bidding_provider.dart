@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -29,22 +30,26 @@ class RiderBiddingState {
   final BiddingStatus status;
   final List<DriverBid> bids;
   final DriverBid? acceptedBid;
+  final String? tripId;
 
   const RiderBiddingState({
     required this.status,
     required this.bids,
     this.acceptedBid,
+    this.tripId,
   });
 
   RiderBiddingState copyWith({
     BiddingStatus? status,
     List<DriverBid>? bids,
     DriverBid? acceptedBid,
+    String? tripId,
   }) {
     return RiderBiddingState(
       status: status ?? this.status,
       bids: bids ?? this.bids,
       acceptedBid: acceptedBid ?? this.acceptedBid,
+      tripId: tripId ?? this.tripId,
     );
   }
 
@@ -55,14 +60,16 @@ class RiderBiddingState {
           runtimeType == other.runtimeType &&
           status == other.status &&
           bids == other.bids &&
-          acceptedBid == other.acceptedBid;
+          acceptedBid == other.acceptedBid &&
+          tripId == other.tripId;
 
   @override
-  int get hashCode => status.hashCode ^ bids.hashCode ^ acceptedBid.hashCode;
+  int get hashCode =>
+      status.hashCode ^ bids.hashCode ^ acceptedBid.hashCode ^ tripId.hashCode;
 
   @override
   String toString() {
-    return 'RiderBiddingState(status: $status, bidsCount: ${bids.length}, acceptedBid: ${acceptedBid?.driverName})';
+    return 'RiderBiddingState(status: $status, bidsCount: ${bids.length}, acceptedBid: ${acceptedBid?.driverName}, tripId: $tripId)';
   }
 }
 
@@ -72,10 +79,18 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
 
   final Ref _ref;
   ProviderSubscription<AsyncValue<KwellaBiddingEvent>>? _subscription;
+  StreamSubscription<String>? _rawFrameSubscription;
 
-  /// Starts broadcasting a booking request, transitioning status to `.searching`
-  /// and subscribing to incoming bids.
-  void startBroadcast() {
+  /// Starts broadcasting a booking request, transitioning status to `.searching`,
+  /// subscribing to incoming bids, and — when pickup/dropoff coordinates are
+  /// supplied — dispatching a `requestTrip` frame to the backend so it can
+  /// match nearby drivers.
+  void startBroadcast({
+    double? pickupLatitude,
+    double? pickupLongitude,
+    double? dropoffLatitude,
+    double? dropoffLongitude,
+  }) {
     _cancelSubscription();
 
     state = const RiderBiddingState(status: BiddingStatus.searching, bids: []);
@@ -88,6 +103,51 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
         }
       },
     );
+
+    final gateway = _ref.read(kwellaWebSocketGatewayProvider);
+    if (!gateway.isConnected ||
+        pickupLatitude == null ||
+        pickupLongitude == null ||
+        dropoffLatitude == null ||
+        dropoffLongitude == null) {
+      return;
+    }
+
+    final riderId = _ref.read(kwellaAuthNotifierProvider).userId;
+
+    _rawFrameSubscription = gateway.dataStream.listen(_handleRawFrame);
+
+    gateway.send(
+      jsonEncode({
+        'action': 'requestTrip',
+        'riderId': riderId,
+        'pickup_latitude': pickupLatitude,
+        'pickup_longitude': pickupLongitude,
+        'dropoff_latitude': dropoffLatitude,
+        'dropoff_longitude': dropoffLongitude,
+      }),
+    );
+  }
+
+  /// Handles raw WebSocket frames looking for the synchronous `requestTrip`
+  /// response (`{"status": "TripBroadcast", "tripId": ...}`), which arrives
+  /// outside the `action`-keyed [KwellaBiddingEvent] pipeline.
+  void _handleRawFrame(String rawFrame) {
+    if (!mounted) return;
+
+    try {
+      final decoded = jsonDecode(rawFrame);
+      if (decoded is Map<String, dynamic> &&
+          decoded['status'] == 'TripBroadcast') {
+        final tripId = decoded['tripId'];
+        if (tripId is String) {
+          state = state.copyWith(tripId: tripId);
+        }
+      }
+    } catch (_) {
+      // Malformed/unrelated frame — ignored, matches the multiplexer's
+      // own tolerance for non-JSON or unrecognised payloads.
+    }
   }
 
   void _handleEvent(KwellaBiddingEvent event) {
@@ -161,9 +221,8 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
 
     // Keep the subscription open past acceptance – the driver's later
     // `driverArrived` event still needs to reach this notifier.
-    state = RiderBiddingState(
+    state = state.copyWith(
       status: BiddingStatus.tripConfirmed,
-      bids: state.bids,
       acceptedBid: bid,
     );
   }
@@ -189,6 +248,8 @@ class RiderBiddingNotifier extends StateNotifier<RiderBiddingState> {
   void _cancelSubscription() {
     _subscription?.close();
     _subscription = null;
+    _rawFrameSubscription?.cancel();
+    _rawFrameSubscription = null;
   }
 
   @override
