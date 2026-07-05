@@ -69,8 +69,13 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
     }
   }
 
-  /// Signs in the user using their email and password via the Cognito
-  /// `USER_PASSWORD_AUTH` InitiateAuth flow.
+  /// Signs in the user using their phone number and password via the
+  /// Cognito `USER_PASSWORD_AUTH` InitiateAuth flow.
+  ///
+  /// The Kwella user pool is configured with `phone_number` as its username
+  /// attribute (see `terraform/main.tf`), so `USERNAME` must be an E.164
+  /// phone number (e.g. `+27821234567`) — an email address here will be
+  /// rejected by Cognito with a 400 `InvalidParameterException`.
   ///
   /// Targets the standard Cognito JSON endpoint contract:
   ///
@@ -79,8 +84,8 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
   /// X-Amz-Target: AWSCognitoIdentityProviderService.InitiateAuth
   /// Content-Type: application/x-amz-json-1.1
   /// ```
-  Future<void> signInWithEmailAndPassword(
-      String email, String password) async {
+  Future<void> signInWithPhoneAndPassword(
+      String phoneNumber, String password) async {
     state = state.copyWith(
         status: KwellaAuthStatus.authenticating, clearError: true);
 
@@ -91,7 +96,7 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
           'AuthFlow': 'USER_PASSWORD_AUTH',
           'ClientId': _env.cognitoClientId,
           'AuthParameters': {
-            'USERNAME': email,
+            'USERNAME': phoneNumber,
             'PASSWORD': password,
           },
         },

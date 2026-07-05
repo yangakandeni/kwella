@@ -186,7 +186,7 @@ void main() {
       mockInterceptor.mode = MockMode.successRider;
       final notifier = KwellaAuthNotifier(tokenVault: tokenVault, dio: mockDio);
 
-      await notifier.signInWithEmailAndPassword('rider@kwella.com', 'pass123');
+      await notifier.signInWithPhoneAndPassword('+27821234567', 'pass123');
 
       // The mock token contains 'rider' in the raw string — fallback role.
       expect(notifier.state.status, KwellaAuthStatus.authenticated);
@@ -203,7 +203,7 @@ void main() {
       mockInterceptor.mode = MockMode.successDriver;
       final notifier = KwellaAuthNotifier(tokenVault: tokenVault, dio: mockDio);
 
-      await notifier.signInWithEmailAndPassword('driver@kwella.com', 'pass123');
+      await notifier.signInWithPhoneAndPassword('+27831234567', 'pass123');
 
       expect(notifier.state.status, KwellaAuthStatus.authenticated);
       expect(notifier.state.role, 'driver');
@@ -214,7 +214,7 @@ void main() {
       mockInterceptor.mode = MockMode.failBadCredentials;
       final notifier = KwellaAuthNotifier(tokenVault: tokenVault, dio: mockDio);
 
-      await notifier.signInWithEmailAndPassword('wrong@kwella.com', 'wrong');
+      await notifier.signInWithPhoneAndPassword('+27000000000', 'wrong');
 
       expect(notifier.state.status, KwellaAuthStatus.failure);
       // The interceptor extracts the Cognito `message` field from the body.
@@ -228,7 +228,7 @@ void main() {
       mockInterceptor.mode = MockMode.successRider;
       final notifier = KwellaAuthNotifier(tokenVault: tokenVault, dio: mockDio);
 
-      await notifier.signInWithEmailAndPassword('rider@kwella.com', 'pass123');
+      await notifier.signInWithPhoneAndPassword('+27821234567', 'pass123');
       expect(notifier.state.status, KwellaAuthStatus.authenticated);
 
       await notifier.signOut();

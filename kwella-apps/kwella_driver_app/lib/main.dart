@@ -165,7 +165,7 @@ class DriverLoginScreen extends ConsumerStatefulWidget {
 class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
     with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
-  final _emailCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _obscurePassword = true;
   late AnimationController _fadeCtrl;
@@ -184,7 +184,7 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
   @override
   void dispose() {
     _fadeCtrl.dispose();
-    _emailCtrl.dispose();
+    _phoneCtrl.dispose();
     _passwordCtrl.dispose();
     super.dispose();
   }
@@ -193,8 +193,8 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
     if (!(_formKey.currentState?.validate() ?? false)) return;
     await ref
         .read(kwellaAuthNotifierProvider.notifier)
-        .signInWithEmailAndPassword(
-          _emailCtrl.text.trim(),
+        .signInWithPhoneAndPassword(
+          _phoneCtrl.text.trim(),
           _passwordCtrl.text,
         );
   }
@@ -226,21 +226,24 @@ class _DriverLoginScreenState extends ConsumerState<DriverLoginScreen>
                       authState.error != null)
                     _buildErrorBanner(authState.error!),
 
-                  // ── Email field ────────────────────────────────────
+                  // ── Phone number field ──────────────────────────────
                   TextFormField(
-                    key: const Key('driver_email_field'),
-                    controller: _emailCtrl,
-                    keyboardType: TextInputType.emailAddress,
+                    key: const Key('driver_phone_field'),
+                    controller: _phoneCtrl,
+                    keyboardType: TextInputType.phone,
                     style: const TextStyle(color: KwellaColors.textOnDark),
                     decoration: const InputDecoration(
-                      labelText: 'Email address',
-                      prefixIcon: Icon(Icons.mail_outline_rounded),
+                      labelText: 'Phone number',
+                      hintText: '+27821234567',
+                      prefixIcon: Icon(Icons.phone_outlined),
                     ),
                     validator: (v) {
                       if (v == null || v.trim().isEmpty) {
-                        return 'Please enter your email';
+                        return 'Please enter your phone number';
                       }
-                      if (!v.contains('@')) return 'Enter a valid email';
+                      if (!RegExp(r'^\+[1-9]\d{7,14}$').hasMatch(v.trim())) {
+                        return 'Enter a valid phone number, e.g. +27821234567';
+                      }
                       return null;
                     },
                   ),
