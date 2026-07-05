@@ -316,7 +316,7 @@ void main() {
     });
 
     test(
-        'submitBid(150.0) pushes a valid SubmitBid JSON payload through the driver gateway',
+        'submitBid(150.0) pushes a valid sendBid JSON payload through the driver gateway',
         () {
       connectedDriverContainer.read(driverBiddingProvider);
       connectedDriverContainer
@@ -332,12 +332,12 @@ void main() {
       final rawPayload = connectedDriverGateway.sentMessages.last;
       final decoded = jsonDecode(rawPayload) as Map<String, dynamic>;
 
-      expect(decoded['action'], 'SubmitBid',
-          reason: 'Outbound action key must be SubmitBid.');
+      expect(decoded['action'], 'sendBid',
+          reason: 'Outbound action key must be sendBid.');
       expect(
-        (decoded['payload'] as Map<String, dynamic>)['price'],
+        decoded['amount'],
         150.0,
-        reason: 'Bid price must match the submitted amount of 150.0.',
+        reason: 'Bid amount must match the submitted amount of 150.0.',
       );
     });
 
@@ -351,11 +351,10 @@ void main() {
       final decoded = jsonDecode(rawPayload) as Map<String, dynamic>;
 
       expect(decoded.containsKey('action'), isTrue);
-      expect(decoded.containsKey('payload'), isTrue);
-      expect(
-        (decoded['payload'] as Map<String, dynamic>).containsKey('price'),
-        isTrue,
-      );
+      expect(decoded.containsKey('tripId'), isTrue);
+      expect(decoded.containsKey('driverId'), isTrue);
+      expect(decoded.containsKey('riderId'), isTrue);
+      expect(decoded.containsKey('amount'), isTrue);
     });
   });
 
@@ -519,8 +518,8 @@ void main() {
       expect(driverGateway.sentMessages, isNotEmpty);
       final sentPayload =
           jsonDecode(driverGateway.sentMessages.last) as Map<String, dynamic>;
-      expect(sentPayload['action'], 'SubmitBid');
-      expect((sentPayload['payload'] as Map<String, dynamic>)['price'], 150.0);
+      expect(sentPayload['action'], 'sendBid');
+      expect(sentPayload['amount'], 150.0);
 
       // ─── Step D: Backend delivers driverBidReceived to Rider ───────────
       riderGateway.simulateIncomingFrame(jsonEncode({

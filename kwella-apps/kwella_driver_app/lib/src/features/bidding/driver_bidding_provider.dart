@@ -22,7 +22,18 @@ class DriverBiddingState {
   final String? error;
   final double? pickupLatitude;
   final double? pickupLongitude;
-  final String? rideId;
+
+  /// Backend trip identifier (`TRP#<uuid>`) for the active offer/job.
+  final String? tripId;
+
+  /// The authenticated local driver's own id, threaded into every outgoing
+  /// action payload so the backend can resolve this connection.
+  final String? driverId;
+
+  /// The rider's id for the active trip. Not present on the initial
+  /// `rideOfferAvailable` frame — populated once the backend supplies it
+  /// (e.g. on bid selection).
+  final String? riderId;
 
   const DriverBiddingState({
     this.status = DriverJobStatus.idle,
@@ -32,7 +43,9 @@ class DriverBiddingState {
     this.error,
     this.pickupLatitude,
     this.pickupLongitude,
-    this.rideId,
+    this.tripId,
+    this.driverId,
+    this.riderId,
   });
 
   DriverBiddingState copyWith({
@@ -43,7 +56,9 @@ class DriverBiddingState {
     String? error,
     double? pickupLatitude,
     double? pickupLongitude,
-    String? rideId,
+    String? tripId,
+    String? driverId,
+    String? riderId,
   }) {
     return DriverBiddingState(
       status: status ?? this.status,
@@ -53,7 +68,9 @@ class DriverBiddingState {
       error: error ?? this.error,
       pickupLatitude: pickupLatitude ?? this.pickupLatitude,
       pickupLongitude: pickupLongitude ?? this.pickupLongitude,
-      rideId: rideId ?? this.rideId,
+      tripId: tripId ?? this.tripId,
+      driverId: driverId ?? this.driverId,
+      riderId: riderId ?? this.riderId,
     );
   }
 }
@@ -80,11 +97,14 @@ class DriverBiddingNotifier extends StateNotifier<DriverBiddingState> {
               estimatedPayout: event.estimatedPayout,
               pickupLatitude: event.pickupLatitude,
               pickupLongitude: event.pickupLongitude,
+              tripId: event.tripId,
+              driverId: ref.read(kwellaAuthNotifierProvider).userId,
             );
           } else if (event is RideAcceptedEvent) {
             state = state.copyWith(
               status: DriverJobStatus.jobAccepted,
-              rideId: event.rideId,
+              tripId: event.rideId,
+              driverId: event.driverId,
             );
           } else if (event is RideCancelledEvent) {
             state = const DriverBiddingState();
@@ -100,8 +120,11 @@ class DriverBiddingNotifier extends StateNotifier<DriverBiddingState> {
     final gateway = ref.read(kwellaWebSocketGatewayProvider);
     if (gateway.isConnected) {
       final payload = jsonEncode({
-        'action': 'SubmitBid',
-        'payload': {'price': counterPrice},
+        'action': 'sendBid',
+        'tripId': state.tripId,
+        'driverId': state.driverId,
+        'riderId': state.riderId,
+        'amount': counterPrice,
       });
       gateway.send(payload);
     }
@@ -110,49 +133,54 @@ class DriverBiddingNotifier extends StateNotifier<DriverBiddingState> {
   /// Notifies the rider that the driver has reached the pickup point,
   /// dispatching a `driverArrived` event over the WebSocket gateway and
   /// transitioning the local state into `.waitingForPassenger`.
-  void arriveAtPickup(String rideId) {
+  void driverArrived(String tripId) {
     final gateway = ref.read(kwellaWebSocketGatewayProvider);
     if (gateway.isConnected) {
       final payload = jsonEncode({
         'action': 'driverArrived',
-        'payload': {'rideId': rideId},
+        'tripId': tripId,
+        'driverId': state.driverId,
       });
       gateway.send(payload);
     }
     state = state.copyWith(
       status: DriverJobStatus.waitingForPassenger,
-      rideId: rideId,
+      tripId: tripId,
     );
   }
 
-  /// Notifies the rider that the trip has begun, dispatching a `tripStarted`
+  /// Notifies the rider that the trip has begun, dispatching a `startTrip`
   /// event over the WebSocket gateway and transitioning local state into
   /// `.inTransit`.
-  void startTrip(String rideId) {
+  void startTrip(String tripId) {
     final gateway = ref.read(kwellaWebSocketGatewayProvider);
     if (gateway.isConnected) {
       final payload = jsonEncode({
-        'action': 'tripStarted',
-        'payload': {'rideId': rideId},
+        'action': 'startTrip',
+        'tripId': tripId,
+        'driverId': state.driverId,
       });
       gateway.send(payload);
     }
-    state = state.copyWith(status: DriverJobStatus.inTransit, rideId: rideId);
+    state = state.copyWith(status: DriverJobStatus.inTransit, tripId: tripId);
   }
 
-  /// Notifies the rider that the trip has ended, dispatching a
-  /// `tripCompleted` event over the WebSocket gateway, then tearing down
-  /// this provider's local state and closing its gateway subscription.
-  void endTrip(String rideId) {
+  /// Notifies the backend that the trip has ended, dispatching a
+  /// `confirmArrival` event over the WebSocket gateway to settle the
+  /// driver's payout, then tearing down this provider's local state and
+  /// closing its gateway subscription.
+  void confirmArrival(String tripId, double finalBidAmount) {
     final gateway = ref.read(kwellaWebSocketGatewayProvider);
     if (gateway.isConnected) {
       final payload = jsonEncode({
-        'action': 'tripCompleted',
-        'payload': {'rideId': rideId},
+        'action': 'confirmArrival',
+        'tripId': tripId,
+        'driverId': state.driverId,
+        'final_bid_amount': finalBidAmount,
       });
       gateway.send(payload);
     }
-    state = state.copyWith(status: DriverJobStatus.completed, rideId: rideId);
+    state = state.copyWith(status: DriverJobStatus.completed, tripId: tripId);
     _teardown();
   }
 

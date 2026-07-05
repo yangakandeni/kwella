@@ -48,6 +48,7 @@ abstract class KwellaBiddingEvent {
       /// the Driver's [DriverBiddingNotifier] can transition to `.offerReceived`.
       case 'rideOfferAvailable':
         return RideRequestReceivedEvent(
+          tripId: json['tripId'] as String? ?? payload['tripId'] as String?,
           riderName: (payload['rider_id'] as String?) ?? 'Rider',
           destination: _coordinatesToString(payload['dropoff_location']),
           estimatedPayout: _parseFare(payload['base_fare']),
@@ -123,6 +124,9 @@ double _parseFare(dynamic fare) {
 }
 
 class RideRequestReceivedEvent extends KwellaBiddingEvent {
+  /// The backend-issued trip identifier (`TRP#<uuid>`) for this offer, when
+  /// present on the frame. `null` when absent/malformed.
+  final String? tripId;
   final String riderName;
   final String destination;
   final double estimatedPayout;
@@ -133,6 +137,7 @@ class RideRequestReceivedEvent extends KwellaBiddingEvent {
   final double? pickupLongitude;
 
   const RideRequestReceivedEvent({
+    this.tripId,
     required this.riderName,
     required this.destination,
     required this.estimatedPayout,
@@ -145,6 +150,7 @@ class RideRequestReceivedEvent extends KwellaBiddingEvent {
       identical(this, other) ||
       other is RideRequestReceivedEvent &&
           runtimeType == other.runtimeType &&
+          tripId == other.tripId &&
           riderName == other.riderName &&
           destination == other.destination &&
           estimatedPayout == other.estimatedPayout &&
@@ -153,6 +159,7 @@ class RideRequestReceivedEvent extends KwellaBiddingEvent {
 
   @override
   int get hashCode =>
+      tripId.hashCode ^
       riderName.hashCode ^
       destination.hashCode ^
       estimatedPayout.hashCode ^

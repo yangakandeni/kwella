@@ -562,23 +562,26 @@ class _DriverHomeScreenState extends ConsumerState<DriverHomeScreen> {
   }
 
   void _handleArrival() {
-    final rideId = ref.read(driverBiddingProvider).rideId;
-    if (rideId != null) {
-      ref.read(driverBiddingProvider.notifier).arriveAtPickup(rideId);
+    final tripId = ref.read(driverBiddingProvider).tripId;
+    if (tripId != null) {
+      ref.read(driverBiddingProvider.notifier).driverArrived(tripId);
     }
   }
 
   void _handleStartTrip() {
-    final rideId = ref.read(driverBiddingProvider).rideId;
-    if (rideId != null) {
-      ref.read(driverBiddingProvider.notifier).startTrip(rideId);
+    final tripId = ref.read(driverBiddingProvider).tripId;
+    if (tripId != null) {
+      ref.read(driverBiddingProvider.notifier).startTrip(tripId);
     }
   }
 
   void _handleEndTrip() {
-    final rideId = ref.read(driverBiddingProvider).rideId;
-    if (rideId != null) {
-      ref.read(driverBiddingProvider.notifier).endTrip(rideId);
+    final state = ref.read(driverBiddingProvider);
+    final tripId = state.tripId;
+    if (tripId != null) {
+      ref
+          .read(driverBiddingProvider.notifier)
+          .confirmArrival(tripId, state.estimatedPayout ?? 0.0);
     }
   }
 
