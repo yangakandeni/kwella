@@ -242,6 +242,7 @@ resource "aws_lambda_function" "create_auth_challenge" {
   environment {
     variables = {
       OTP_TEST_CODE = "123456"
+      ENVIRONMENT   = var.environment
     }
   }
 }

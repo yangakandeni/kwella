@@ -8,7 +8,18 @@
       "Bash(sudo -n xcodebuild -runFirstLaunch)",
       "Bash(echo \"boot exit: $?\")",
       "Bash(unzip -l /Users/yanga/Documents/dev/projects/kwella/kwella-backend/dist/identity_service.zip)",
-      "Bash(terraform validate *)"
+      "Bash(terraform validate *)",
+      "Bash(aws sts *)",
+      "Bash(terraform version *)",
+      "Bash(python3 -m pytest kwella-backend/tests/test_create_auth_challenge.py -v)",
+      "Bash(/Users/yanga/Documents/dev/projects/kwella/.venv/bin/python3.12 -m pytest kwella-backend/tests/test_create_auth_challenge.py -v)",
+      "Bash(/Users/yanga/Documents/dev/projects/kwella/.venv/bin/python3.12 -m pytest kwella-backend/tests/ -q)",
+      "Bash(/Users/yanga/Documents/dev/projects/kwella/.venv/bin/python3.12 -m pytest kwella-backend/tests/test_ledger_service.py -q)",
+      "Bash(python3 -m py_compile kwella-backend/src/lambdas/create_auth_challenge/handler.py)",
+      "Bash(terraform fmt *)",
+      "Bash(terraform workspace *)",
+      "Bash(terraform plan *)",
+      "Bash(aws configure *)"
     ]
   }
 }
