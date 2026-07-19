@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kwella_core/kwella_core.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -69,15 +71,33 @@ enum MockMode {
 
 /// Interceptor that simulates the Cognito CUSTOM_AUTH JSON endpoint contract
 /// (`InitiateAuth` + `RespondToAuthChallenge`), matching on `X-Amz-Target`.
+///
+/// Request/response bodies are JSON-encoded strings, not raw `Map`s — this
+/// mirrors the real wire contract, since Dio's transformer only auto
+/// encodes/decodes JSON for the `application/json` MIME type, not Cognito's
+/// `application/x-amz-json-1.1`. A mock that skipped this string round-trip
+/// previously masked a bug where the request body was sent URL-encoded
+/// instead of as JSON, and the response body was never parsed at all.
 class MockCognitoInterceptor extends Interceptor {
   MockMode mode;
 
   MockCognitoInterceptor(this.mode);
 
+  /// The raw `options.data` seen by the most recent request, captured so
+  /// tests can assert it's a JSON string rather than a `Map` — a `Map`
+  /// would mean Dio silently URL-encoded it instead of sending JSON, since
+  /// Dio only auto-encodes `Map` data for the `application/json` MIME type,
+  /// not Cognito's `application/x-amz-json-1.1`.
+  dynamic lastRequestBody;
+
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    lastRequestBody = options.data;
     final target = options.headers['X-Amz-Target'] as String? ?? '';
-    final body = options.data as Map<String, dynamic>? ?? {};
+    final rawData = options.data;
+    final body = rawData is String
+        ? jsonDecode(rawData) as Map<String, dynamic>
+        : (rawData as Map<String, dynamic>? ?? {});
     final authFlow = body['AuthFlow'] as String? ?? '';
 
     if (target == 'AWSCognitoIdentityProviderService.InitiateAuth') {
@@ -107,10 +127,10 @@ class MockCognitoInterceptor extends Interceptor {
         response: Response(
           requestOptions: options,
           statusCode: 400,
-          data: {
+          data: jsonEncode({
             '__type': 'UserNotFoundException',
             'message': 'User does not exist.',
-          },
+          }),
         ),
       ));
       return;
@@ -119,11 +139,11 @@ class MockCognitoInterceptor extends Interceptor {
     handler.resolve(Response(
       requestOptions: options,
       statusCode: 200,
-      data: {
+      data: jsonEncode({
         'ChallengeName': 'CUSTOM_CHALLENGE',
         'Session': 'mock_session_1',
         'ChallengeParameters': <String, dynamic>{},
-      },
+      }),
     ));
   }
 
@@ -137,7 +157,7 @@ class MockCognitoInterceptor extends Interceptor {
         handler.resolve(Response(
           requestOptions: options,
           statusCode: 200,
-          data: {
+          data: jsonEncode({
             'AuthenticationResult': {
               'IdToken': 'mock_id_token_$role',
               'AccessToken': 'mock_access_token_$role',
@@ -145,7 +165,7 @@ class MockCognitoInterceptor extends Interceptor {
               'ExpiresIn': 3600,
               'TokenType': 'Bearer',
             },
-          },
+          }),
         ));
         return;
       case MockMode.otpVerifyIncorrectRetry:
@@ -154,11 +174,11 @@ class MockCognitoInterceptor extends Interceptor {
         handler.resolve(Response(
           requestOptions: options,
           statusCode: 200,
-          data: {
+          data: jsonEncode({
             'ChallengeName': 'CUSTOM_CHALLENGE',
             'Session': 'mock_session_2',
             'ChallengeParameters': <String, dynamic>{},
-          },
+          }),
         ));
         return;
       case MockMode.otpVerifyLockedOut:
@@ -169,10 +189,10 @@ class MockCognitoInterceptor extends Interceptor {
           response: Response(
             requestOptions: options,
             statusCode: 400,
-            data: {
+            data: jsonEncode({
               '__type': 'NotAuthorizedException',
               'message': 'Incorrect username or password.',
-            },
+            }),
           ),
         ));
         return;
@@ -191,10 +211,10 @@ class MockCognitoInterceptor extends Interceptor {
         response: Response(
           requestOptions: options,
           statusCode: 400,
-          data: {
+          data: jsonEncode({
             '__type': 'NotAuthorizedException',
             'message': 'Refresh Token has expired',
-          },
+          }),
         ),
       ));
       return;
@@ -203,14 +223,14 @@ class MockCognitoInterceptor extends Interceptor {
     handler.resolve(Response(
       requestOptions: options,
       statusCode: 200,
-      data: {
+      data: jsonEncode({
         'AuthenticationResult': {
           'IdToken': 'refreshed_id_token_rider',
           'AccessToken': 'refreshed_access_token_rider',
           'ExpiresIn': 3600,
           'TokenType': 'Bearer',
         },
-      },
+      }),
     ));
   }
 }
@@ -252,6 +272,22 @@ void main() {
       expect(notifier.state.status, KwellaAuthStatus.otpRequired);
       expect(notifier.state.cognitoSession, 'mock_session_1');
       expect(notifier.state.pendingPhoneNumber, '+27821234567');
+    });
+
+    test(
+        'requestOtp() sends a JSON-encoded string body, not a raw Map '
+        '(Cognito\'s application/x-amz-json-1.1 content type is not '
+        'auto-encoded by Dio)', () async {
+      mockInterceptor.mode = MockMode.otpChallengeIssued;
+      final notifier = KwellaAuthNotifier(tokenVault: tokenVault, dio: mockDio);
+
+      await notifier.requestOtp('+27821234567');
+
+      expect(mockInterceptor.lastRequestBody, isA<String>());
+      final decoded = jsonDecode(mockInterceptor.lastRequestBody as String)
+          as Map<String, dynamic>;
+      expect(decoded['AuthFlow'], 'CUSTOM_AUTH');
+      expect(decoded['AuthParameters']['USERNAME'], '+27821234567');
     });
 
     test('requestOtp() failure — unknown phone number surfaces Cognito error',

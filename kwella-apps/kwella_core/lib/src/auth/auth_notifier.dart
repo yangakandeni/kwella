@@ -93,13 +93,13 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
     try {
       final response = await _dio.post(
         _env.cognitoEndpoint,
-        data: {
+        data: jsonEncode({
           'AuthFlow': 'CUSTOM_AUTH',
           'ClientId': _env.cognitoClientId,
           'AuthParameters': {
             'USERNAME': phoneNumber,
           },
-        },
+        }),
         options: Options(
           headers: {
             'X-Amz-Target':
@@ -109,9 +109,9 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
         ),
       );
 
-      final data = response.data;
-      final session = data?['Session'] as String?;
-      final challengeName = data?['ChallengeName'] as String?;
+      final data = _decodeCognitoBody(response.data);
+      final session = data['Session'] as String?;
+      final challengeName = data['ChallengeName'] as String?;
       if (session == null || challengeName != 'CUSTOM_CHALLENGE') {
         throw Exception(
             'Cognito did not return a CUSTOM_CHALLENGE session.');
@@ -161,7 +161,7 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
     try {
       final response = await _dio.post(
         _env.cognitoEndpoint,
-        data: {
+        data: jsonEncode({
           'ChallengeName': 'CUSTOM_CHALLENGE',
           'ClientId': _env.cognitoClientId,
           'Session': session,
@@ -169,7 +169,7 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
             'USERNAME': phoneNumber,
             'ANSWER': otpCode,
           },
-        },
+        }),
         options: Options(
           headers: {
             'X-Amz-Target':
@@ -179,13 +179,13 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
         ),
       );
 
-      final data = response.data;
-      final authResult = data?['AuthenticationResult'] as Map<String, dynamic>?;
+      final data = _decodeCognitoBody(response.data);
+      final authResult = data['AuthenticationResult'] as Map<String, dynamic>?;
 
       if (authResult == null) {
         // Cognito re-issued the challenge for another attempt rather than
         // erroring outright — stay on the OTP screen with a retry error.
-        final newSession = data?['Session'] as String?;
+        final newSession = data['Session'] as String?;
         state = state.copyWith(
           status: KwellaAuthStatus.otpRequired,
           cognitoSession: newSession ?? session,
@@ -215,13 +215,13 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
 
       final response = await _dio.post(
         _env.cognitoEndpoint,
-        data: {
+        data: jsonEncode({
           'AuthFlow': 'REFRESH_TOKEN_AUTH',
           'ClientId': _env.cognitoClientId,
           'AuthParameters': {
             'REFRESH_TOKEN': refreshToken,
           },
-        },
+        }),
         options: Options(
           headers: {
             'X-Amz-Target':
@@ -231,7 +231,7 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
         ),
       );
 
-      final authResult = response.data?['AuthenticationResult']
+      final authResult = _decodeCognitoBody(response.data)['AuthenticationResult']
           as Map<String, dynamic>?;
       if (authResult == null) return false;
 
@@ -296,16 +296,29 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
   /// `message`/`__type` fields from a `DioException`'s response body.
   String _extractCognitoErrorMessage(Object e) {
     if (e is DioException) {
-      final body = e.response?.data;
-      if (body is Map) {
-        return body['message']?.toString() ??
-            body['__type']?.toString() ??
-            e.message ??
-            e.toString();
-      }
-      return e.message ?? e.toString();
+      final body = _decodeCognitoBody(e.response?.data);
+      return body['message']?.toString() ??
+          body['__type']?.toString() ??
+          e.message ??
+          e.toString();
     }
     return e.toString();
+  }
+
+  /// Decodes a Cognito JSON response body.
+  ///
+  /// Cognito's `application/x-amz-json-1.1` content type isn't recognized as
+  /// JSON by Dio's transformer (it only auto-decodes `application/json`,
+  /// `text/json`, or a `+json` suffix), so [Dio] hands back the raw response
+  /// string instead of a decoded map — this decodes it explicitly. Falls
+  /// back to treating [raw] as an already-decoded map for resilience against
+  /// a future Dio transformer change.
+  Map<String, dynamic> _decodeCognitoBody(dynamic raw) {
+    if (raw is String && raw.isNotEmpty) {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    }
+    if (raw is Map<String, dynamic>) return raw;
+    return const {};
   }
 
   /// Decodes the base64url payload segment of a JWT without signature
