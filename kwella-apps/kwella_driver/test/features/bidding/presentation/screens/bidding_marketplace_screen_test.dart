@@ -57,14 +57,11 @@ class FakeKwellaWebSocketService implements KwellaWebSocketService {
 }
 
 class MockBiddingNotifier extends BiddingNotifier {
+  // BiddingNotifier no longer auto-connects at construction, so no override
+  // is needed to prevent a real connection attempt during these tests.
   MockBiddingNotifier(KwellaWebSocketService wsService, [BiddingState initialState = const BiddingState.initial()])
       : super(wsService: wsService) {
     state = initialState;
-  }
-
-  @override
-  void _connectAndSubscribe() {
-    // Prevent auto-connecting during tests to avoid async stream timing issues
   }
 }
 

@@ -11,11 +11,14 @@ class BiddingNotifier extends StateNotifier<BiddingState> {
 
   BiddingNotifier({KwellaWebSocketService? wsService})
       : _wsService = wsService ?? KwellaWebSocketService.instance,
-        super(const BiddingState.initial()) {
-    _connectAndSubscribe();
-  }
+        super(const BiddingState.initial());
 
-  void _connectAndSubscribe() {
+  /// Connects to the marketplace WebSocket and starts listening for driver
+  /// bids. Invoked on demand when the driver goes online, rather than
+  /// eagerly at construction, so the app launches into the offline "GO"
+  /// screen instead of a permanent connecting spinner.
+  void connectAndSubscribe() {
+    if (_subscription != null) return;
     state = const BiddingState.connecting();
     try {
       _wsService.connect();

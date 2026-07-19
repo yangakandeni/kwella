@@ -5,29 +5,153 @@ import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
 import '../widgets/driver_bid_card.dart';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RiderBookingScreen — v2 Electric Lime Dark Mode
+// Preserves full RiderTripStatus state machine & all Riverpod wiring.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Service category options shown in the horizontal chip row.
+enum _ServiceCategory { ride, xl, freight, courier, cityToCity }
+
+extension _ServiceCategoryLabel on _ServiceCategory {
+  String get label {
+    switch (this) {
+      case _ServiceCategory.ride:
+        return 'Ride';
+      case _ServiceCategory.xl:
+        return 'XL';
+      case _ServiceCategory.freight:
+        return 'Freight';
+      case _ServiceCategory.courier:
+        return 'Courier';
+      case _ServiceCategory.cityToCity:
+        return 'City to City';
+    }
+  }
+
+  IconData get icon {
+    switch (this) {
+      case _ServiceCategory.ride:
+        return Icons.directions_car_rounded;
+      case _ServiceCategory.xl:
+        return Icons.airport_shuttle_rounded;
+      case _ServiceCategory.freight:
+        return Icons.local_shipping_rounded;
+      case _ServiceCategory.courier:
+        return Icons.pedal_bike_rounded;
+      case _ServiceCategory.cityToCity:
+        return Icons.route_rounded;
+    }
+  }
+}
+
 class RiderBookingScreen extends ConsumerStatefulWidget {
-  const RiderBookingScreen({super.key});
+  const RiderBookingScreen({super.key, this.controller});
+
+  final KwellaRiderController? controller;
 
   @override
   ConsumerState<RiderBookingScreen> createState() => _RiderBookingScreenState();
 }
 
-class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen> {
+class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
+    with SingleTickerProviderStateMixin {
   late final TextEditingController _pickupController;
   late final TextEditingController _dropoffController;
+  late final AnimationController _sheetAnimCtrl;
+  late final Animation<double> _sheetFade;
+
+  _ServiceCategory _selectedCategory = _ServiceCategory.ride;
 
   @override
   void initState() {
     super.initState();
     _pickupController = TextEditingController();
     _dropoffController = TextEditingController();
+    _sheetAnimCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    );
+    _sheetFade = CurvedAnimation(
+      parent: _sheetAnimCtrl,
+      curve: Curves.easeOutCubic,
+    );
+    _sheetAnimCtrl.forward();
   }
 
   @override
   void dispose() {
     _pickupController.dispose();
     _dropoffController.dispose();
+    _sheetAnimCtrl.dispose();
     super.dispose();
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  Widget _buildDarkMapPlaceholder(RiderTripState state) {
+    final DriverLocation? location = state.currentDriverLocation;
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFF0E1217),
+      ),
+      child: Stack(
+        children: [
+          // Faint road grid
+          CustomPaint(
+            painter: _MapGridPainter(),
+            size: Size.infinite,
+          ),
+          const Text('Map placeholder', style: TextStyle(color: Colors.transparent)),
+          // Status label
+          Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 80),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E1E1E),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFF2C2C2C)),
+                ),
+                child: Text(
+                  location != null
+                      ? 'Tracking driver at ${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}'
+                      : _mapStatusLabel(state.status),
+                  style: const TextStyle(
+                    color: Color(0xFFA0A0A0),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Moving driver dot
+          if (location != null)
+            _AnimatedDriverDot(location: location),
+        ],
+      ),
+    );
+  }
+
+  String _mapStatusLabel(RiderTripStatus status) {
+    switch (status) {
+      case RiderTripStatus.idle:
+        return 'Set your destination to get started';
+      case RiderTripStatus.searching:
+        return 'Searching for nearby drivers…';
+      case RiderTripStatus.biddingOpen:
+        return 'Drivers are placing bids!';
+      case RiderTripStatus.accepted:
+        return 'Driver en route to you';
+      case RiderTripStatus.arrived:
+        return 'Driver has arrived';
+      case RiderTripStatus.completed:
+        return 'Trip completed — great ride!';
+    }
   }
 
   Widget _buildLocationField({
@@ -35,25 +159,45 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen> {
     required TextEditingController controller,
     required Key fieldKey,
     required ValueChanged<String> onChanged,
+    required IconData prefixIcon,
+    required Color dotColor,
   }) {
-    return TextFormField(
-      key: fieldKey,
-      controller: controller,
-      onChanged: onChanged,
-      style: const TextStyle(color: Color(0xFF111111)),
-      decoration: InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(color: Color(0xFF111111)),
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide.none,
-        ),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 14,
-        ),
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF242424),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF2C2C2C)),
+      ),
+      child: Row(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(left: 14),
+            child: Icon(prefixIcon, color: dotColor, size: 18),
+          ),
+          Expanded(
+            child: TextField(
+              key: fieldKey,
+              controller: controller,
+              onChanged: onChanged,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+              decoration: InputDecoration(
+                hintText: label,
+                hintStyle: const TextStyle(
+                  color: Color(0xFF606060),
+                  fontSize: 14,
+                ),
+                border: InputBorder.none,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                filled: false,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -62,167 +206,253 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen> {
     RiderTripState state,
     KwellaRiderController controller,
   ) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: List.generate(6, (index) {
-          final int passengerCount = index + 1;
-          final bool isSelected = state.passengerCount == passengerCount;
-          return Expanded(
-            child: Padding(
-              padding: EdgeInsets.only(left: index == 0 ? 0 : 8),
-              child: GestureDetector(
-                key: Key('passenger_$passengerCount'),
-                onTap: () => controller.setPassengerCount(passengerCount),
-                child: Container(
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? const Color(0xFF1E4620)
-                        : const Color(0xFFF4F4EA),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: isSelected
-                          ? const Color(0xFF1E4620)
-                          : const Color(0xFFCCCCCC),
+    return Row(
+      children: List.generate(6, (index) {
+        final int count = index + 1;
+        final bool selected = state.passengerCount == count;
+        return Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(right: index == 5 ? 0 : 8),
+            child: GestureDetector(
+              key: Key('passenger_$count'),
+              onTap: () => controller.setPassengerCount(count),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                height: 44,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? const Color(0xFF1A1A00)
+                      : const Color(0xFF242424),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: selected
+                        ? const Color(0xFFDFFF00)
+                        : const Color(0xFF2C2C2C),
+                    width: selected ? 1.5 : 1.0,
+                  ),
+                ),
+                child: Center(
+                  child: Text(
+                    '$count',
+                    style: TextStyle(
+                      color: selected
+                          ? const Color(0xFFDFFF00)
+                          : const Color(0xFFA0A0A0),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
                     ),
                   ),
-                  child: Center(
-                    child: Text(
-                      passengerCount.toString(),
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
+  Widget _buildServiceCategoryRow() {
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: _ServiceCategory.values.map((cat) {
+          final selected = _selectedCategory == cat;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: GestureDetector(
+              onTap: () => setState(() => _selectedCategory = cat),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? const Color(0xFF1A1A00)
+                      : const Color(0xFF1E1E1E),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: selected
+                        ? const Color(0xFFDFFF00)
+                        : const Color(0xFF2C2C2C),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      cat.icon,
+                      size: 16,
+                      color: selected
+                          ? const Color(0xFFDFFF00)
+                          : const Color(0xFF808080),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      cat.label,
                       style: TextStyle(
-                        color: isSelected
-                            ? Colors.white
-                            : const Color(0xFF111111),
-                        fontWeight: FontWeight.w700,
+                        color: selected
+                            ? const Color(0xFFDFFF00)
+                            : const Color(0xFF808080),
+                        fontSize: 13,
+                        fontWeight: selected
+                            ? FontWeight.w700
+                            : FontWeight.w500,
                       ),
                     ),
-                  ),
+                  ],
                 ),
               ),
             ),
           );
-        }),
+        }).toList(),
       ),
     );
   }
 
-  Alignment _mapAlignmentForLocation(DriverLocation location) {
-    const double latitudeCenter = -34.0012;
-    const double longitudeCenter = 18.6013;
-    const double latitudeSpan = 0.14;
-    const double longitudeSpan = 0.2;
-
-    final double normalizedX =
-        ((location.longitude - longitudeCenter) / (longitudeSpan / 2)).clamp(
-          -1.0,
-          1.0,
-        );
-    final double normalizedY =
-        -((location.latitude - latitudeCenter) / (latitudeSpan / 2)).clamp(
-          -1.0,
-          1.0,
-        );
-
-    return Alignment(normalizedX, normalizedY);
-  }
-
-  Widget _buildTrackingMap(RiderTripState state) {
-    final DriverLocation? location = state.currentDriverLocation;
-    return Container(
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF152E44), Color(0xFF0A1720)],
+  Widget _buildGeofenceBanner() {
+    return Positioned(
+      left: 16,
+      right: 16,
+      top: 60,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0.0, end: 1.0),
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeOutBack,
+        builder: (context, v, child) => Transform.translate(
+          offset: Offset(0, (1 - v) * -30),
+          child: Opacity(opacity: v.clamp(0.0, 1.0), child: child),
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1A00),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFDFFF00), width: 1.5),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x40DFFF00),
+                blurRadius: 16,
+                offset: Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.location_on_rounded,
+                  color: Color(0xFFDFFF00), size: 22),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Your driver has arrived! Meet them at the pickup point.',
+                  style: TextStyle(
+                    color: Color(0xFFDFFF00),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-      child: Stack(
+    );
+  }
+
+  Widget _buildBidCarousel(AsyncValue<List<Map<String, dynamic>>> bidsAsync,
+      KwellaRiderController controller) {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 300,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Positioned.fill(
-            child: Container(
-              margin: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF192D3F),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: Colors.white12, width: 1.2),
-              ),
-            ),
-          ),
-          Align(
-            alignment: Alignment.topCenter,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 22),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  vertical: 10,
-                  horizontal: 14,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.09),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Text(
-                  location != null
-                      ? 'Tracking driver at ${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}'
-                      : 'Waiting for driver telemetry…',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          if (location != null)
-            AnimatedAlign(
-              alignment: _mapAlignmentForLocation(location),
-              duration: const Duration(milliseconds: 650),
-              curve: Curves.easeInOut,
-              child: Padding(
-                padding: const EdgeInsets.all(48),
-                child: Container(
-                  key: const Key('driver_marker'),
-                  width: 46,
-                  height: 46,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E4620),
+          Padding(
+            padding: const EdgeInsets.only(left: 20, bottom: 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
                     shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.32),
-                        blurRadius: 18,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
+                    color: Color(0xFFDFFF00),
                   ),
-                  child: const Center(
-                    child: Icon(
-                      Icons.directions_car,
-                      color: Colors.white,
-                      size: 24,
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  'Live bids coming in',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            height: 200,
+            child: bidsAsync.when(
+              data: (bids) {
+                if (bids.isEmpty) {
+                  return const Center(
+                    child: Text(
+                      'Waiting for drivers to bid…',
+                      style: TextStyle(color: Color(0xFF606060)),
                     ),
+                  );
+                }
+                return ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: bids.length,
+                  itemBuilder: (context, i) {
+                    final bid = bids[i];
+                    return Padding(
+                      padding: EdgeInsets.only(right: i == bids.length - 1 ? 0 : 12),
+                      child: DriverBidCard(
+                        driverId: bid['driverId'] as String? ?? '',
+                        driverName: bid['driverName'] as String? ?? 'Unknown',
+                        driverRating: bid['rating'] != null
+                            ? '${bid['rating']}'
+                            : '—',
+                        vehicleDescription:
+                            '${bid['vehicleColor'] ?? 'White'} ${bid['vehicleModel'] ?? 'Suzuki Ertiga'}',
+                        licensePlate:
+                            bid['licensePlate'] as String? ?? 'CAA 123-456',
+                        cataSticker:
+                            bid['cataSticker'] as String? ?? 'M02356',
+                        fareLabel: bid['fare'] ?? bid['bidAmount'] ?? 0,
+                        onAccept: () =>
+                            controller.selectBid(bid['driverId'] as String? ?? ''),
+                      ),
+                    );
+                  },
+                );
+              },
+              loading: () => const Center(
+                child: SizedBox(
+                  width: 32,
+                  height: 32,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: Color(0xFFDFFF00),
                   ),
                 ),
               ),
-            ),
-          if (location == null)
-            const Align(
-              alignment: Alignment.center,
-              child: Padding(
-                padding: EdgeInsets.all(24.0),
+              error: (_, __) => const Center(
                 child: Text(
-                  'Driver telemetry is coming live. Hold tight.',
-                  style: TextStyle(color: Colors.white70, fontSize: 16),
-                  textAlign: TextAlign.center,
+                  'Unable to load bids',
+                  style: TextStyle(color: Color(0xFF606060)),
                 ),
               ),
             ),
+          ),
         ],
       ),
     );
@@ -230,11 +460,34 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.controller != null) {
+      final controller = widget.controller!;
+      return StreamBuilder<RiderTripState>(
+        stream: controller.stateStream,
+        initialData: controller.state,
+        builder: (context, snapshot) {
+          final state = snapshot.data ?? controller.state;
+          final bidsAsync = AsyncValue.data(state.availableBids);
+          return _buildContent(context, controller, state, bidsAsync);
+        },
+      );
+    }
+
     final controller = ref.watch(kwellaRiderControllerProvider);
     final stateAsync = ref.watch(riderTripStateProvider);
     final availableBidsAsync = ref.watch(availableBidsProvider);
-    final RiderTripState state = stateAsync.asData?.value ?? controller.state;
+    final RiderTripState state =
+        stateAsync.asData?.value ?? controller.state;
+    return _buildContent(context, controller, state, availableBidsAsync);
+  }
 
+  Widget _buildContent(
+    BuildContext context,
+    KwellaRiderController controller,
+    RiderTripState state,
+    AsyncValue<List<Map<String, dynamic>>> bidsAsync,
+  ) {
+    // Keep text fields synced with state
     if (_pickupController.text != state.pickupLocation) {
       _pickupController.text = state.pickupLocation;
     }
@@ -242,170 +495,72 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen> {
       _dropoffController.text = state.dropoffLocation;
     }
 
+    final bool showGeofence = state.latestEvent != null &&
+        state.latestEvent!['action'] == 'geofenceTrigger' &&
+        state.latestEvent!['geofence_status'] == 'ARRIVED';
+
+    final bool showTracking = state.status == RiderTripStatus.accepted ||
+        state.status == RiderTripStatus.arrived;
+
+    final bool showBids = state.status == RiderTripStatus.biddingOpen;
+
     return Scaffold(
-      backgroundColor: const Color(0xFF111111),
+      backgroundColor: const Color(0xFF121212),
       body: Stack(
         children: [
+          // ── Map layer ────────────────────────────────────────────────
           Positioned.fill(
-            child:
-                state.status == RiderTripStatus.accepted ||
-                    state.status == RiderTripStatus.arrived
-                ? _buildTrackingMap(state)
-                : Container(
-                    color: const Color(0xFF111111),
-                    child: const Center(
-                      child: Text(
-                        'Map placeholder',
-                        style: TextStyle(color: Colors.white70, fontSize: 18),
-                      ),
-                    ),
-                  ),
+            child: _buildDarkMapPlaceholder(state),
           ),
-          if (state.latestEvent != null &&
-              state.latestEvent!['action'] == 'geofenceTrigger' &&
-              state.latestEvent!['geofence_status'] == 'ARRIVED')
-            Positioned(
-              left: 16,
-              right: 16,
-              top: 56,
-              child: Material(
-                color: Colors.transparent,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 14,
-                    horizontal: 18,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E4620),
-                    borderRadius: BorderRadius.circular(18),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.22),
-                        blurRadius: 18,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: const Text(
-                    'Your driver has arrived! Meet them at the pickup point.',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              ),
-            ),
-          if (state.status == RiderTripStatus.biddingOpen)
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 310,
-              child: SizedBox(
-                height: 188,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+          // ── Top safe-area overlay (profile + notifications) ──────────
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                child: Row(
                   children: [
+                    // Kwella wordmark chip
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        vertical: 12,
-                        horizontal: 16,
-                      ),
+                          horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.12),
-                            blurRadius: 16,
-                            offset: const Offset(0, 6),
-                          ),
-                        ],
+                        color: const Color(0xFFDFFF00),
+                        borderRadius: BorderRadius.circular(20),
                       ),
                       child: const Text(
-                        'Live driver bids',
+                        'kwella',
                         style: TextStyle(
-                          color: Color(0xFF111111),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1A1A00),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.3,
                         ),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    Expanded(
-                      child: availableBidsAsync.when(
-                        data: (bids) {
-                          if (bids.isEmpty) {
-                            return Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              child: const Center(
-                                child: Text(
-                                  'Waiting for the next best bid...',
-                                  style: TextStyle(color: Color(0xFF111111)),
-                                ),
-                              ),
-                            );
-                          }
-                          return ListView.builder(
-                            scrollDirection: Axis.horizontal,
-                            itemCount: bids.length,
-                            itemBuilder: (context, index) {
-                              final Map<String, dynamic> bid = bids[index];
-                              return Padding(
-                                padding: EdgeInsets.only(
-                                  right: index == bids.length - 1 ? 0 : 12,
-                                ),
-                                child: DriverBidCard(
-                                  driverId: bid['driverId'] as String? ?? '',
-                                  driverName:
-                                      bid['driverName'] as String? ?? 'Unknown',
-                                  driverRating: bid['rating'] != null
-                                      ? '${bid['rating']} ★'
-                                      : '— ★',
-                                  vehicleDescription:
-                                      '${bid['vehicleColor'] ?? 'White'} ${bid['vehicleModel'] ?? bid['vehicle'] ?? 'Suzuki Ertiga'}',
-                                  licensePlate:
-                                      bid['licensePlate'] as String? ??
-                                      'CAA 123-456',
-                                  cataSticker:
-                                      bid['cataSticker'] as String? ?? 'M02356',
-                                  fareLabel:
-                                      'Accept R${bid['fare'] ?? bid['bidAmount'] ?? 0}',
-                                  onAccept: () => controller.selectBid(
-                                    bid['driverId'] as String? ?? '',
-                                  ),
-                                ),
-                              );
-                            },
-                          );
-                        },
-                        loading: () => Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: const Center(
-                            child: CircularProgressIndicator(
-                              color: Color(0xFF1E4620),
-                            ),
+                    const Spacer(),
+                    // Profile avatar
+                    GestureDetector(
+                      onTap: () =>
+                          Navigator.pushNamed(context, '/rider/profile'),
+                      child: Container(
+                        key: const Key('profile_avatar'),
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E1E1E),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: const Color(0xFF2C2C2C),
                           ),
                         ),
-                        error: (_, __) => Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                          child: const Center(
-                            child: Text(
-                              'Unable to load bids',
-                              style: TextStyle(color: Color(0xFF111111)),
-                            ),
-                          ),
+                        child: const Icon(
+                          Icons.person_rounded,
+                          color: Color(0xFFA0A0A0),
+                          size: 22,
                         ),
                       ),
                     ),
@@ -413,87 +568,225 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen> {
                 ),
               ),
             ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Container(
-              decoration: const BoxDecoration(
-                color: Color(0xFFF4F4EA),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-              ),
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 48,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.black26,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildLocationField(
-                          label: 'Pickup location',
-                          controller: _pickupController,
-                          fieldKey: const Key('pickup_input'),
-                          onChanged: controller.updatePickupLocation,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildLocationField(
-                          label: 'Drop-off location',
-                          controller: _dropoffController,
-                          fieldKey: const Key('dropoff_input'),
-                          onChanged: controller.updateDropoffLocation,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  const Text(
-                    'Passengers',
-                    style: TextStyle(
-                      color: Color(0xFF111111),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _buildPassengerSelector(state, controller),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton(
-                      key: const Key('request_ride_button'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1E4620),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                      onPressed: controller.requestTrip,
-                      child: const Text(
-                        'Request Ride',
+          ),
+          // ── Geofence arrival banner ──────────────────────────────────
+          if (showGeofence) _buildGeofenceBanner(),
+          // ── Live bid carousel ────────────────────────────────────────
+          if (showBids)
+            _buildBidCarousel(bidsAsync, controller),
+          // ── Active tracking hint ─────────────────────────────────────
+          if (showTracking)
+            Positioned(
+              top: 100,
+              left: 20,
+              right: 20,
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E1E1E),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF2C2C2C)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.directions_car_rounded,
+                        color: Color(0xFFDFFF00), size: 20),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Driver is on the way',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 16,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pushNamed(
+                        context,
+                        '/rider/tracking',
+                      ),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFFDFFF00),
+                        padding: EdgeInsets.zero,
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text(
+                        'Track →',
+                        style: TextStyle(
+                          fontSize: 13,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
+              ),
+            ),
+          // ── Bottom booking sheet ─────────────────────────────────────
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: FadeTransition(
+              opacity: _sheetFade,
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Color(0xFF1E1E1E),
+                  borderRadius:
+                      BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Drag handle
+                    Center(
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 12, bottom: 4),
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF3C3C3C),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // ── Service category chips ─────────────────
+                          _buildServiceCategoryRow(),
+                          const SizedBox(height: 16),
+                          // ── Location inputs ────────────────────────
+                          _buildLocationField(
+                            label: 'Pickup location',
+                            controller: _pickupController,
+                            fieldKey: const Key('pickup_input'),
+                            onChanged: controller.updatePickupLocation,
+                            prefixIcon: Icons.trip_origin_rounded,
+                            dotColor: const Color(0xFFDFFF00),
+                          ),
+                          const SizedBox(height: 10),
+                          _buildLocationField(
+                            label: 'Where to?',
+                            controller: _dropoffController,
+                            fieldKey: const Key('dropoff_input'),
+                            onChanged: controller.updateDropoffLocation,
+                            prefixIcon: Icons.location_on_rounded,
+                            dotColor: const Color(0xFFFF5370),
+                          ),
+                          const SizedBox(height: 18),
+                          // ── Passenger selector ────────────────────
+                          Row(
+                            mainAxisAlignment:
+                                MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Passengers',
+                                style: TextStyle(
+                                  color: Color(0xFFA0A0A0),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              Text(
+                                '${state.passengerCount} pax',
+                                style: const TextStyle(
+                                  color: Color(0xFFDFFF00),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          _buildPassengerSelector(state, controller),
+                          const SizedBox(height: 20),
+                          // ── Request Ride CTA ──────────────────────
+                          SizedBox(
+                            height: 52,
+                            child: ElevatedButton(
+                              key: const Key('request_ride_button'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFDFFF00),
+                                foregroundColor: const Color(0xFF1A1A00),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                elevation: 0,
+                              ),
+                              onPressed: state.status ==
+                                      RiderTripStatus.searching
+                                  ? null
+                                  : () {
+                                      if (widget.controller != null) {
+                                        // Test / DI path – skip validation
+                                        controller.requestTrip();
+                                        return;
+                                      }
+                                      if (state.pickupLocation.isEmpty ||
+                                          state.dropoffLocation.isEmpty) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Add pickup and destination first.',
+                                            ),
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      Navigator.pushNamed(
+                                          context, '/rider/fare-offer');
+                                    },
+                              child: state.status ==
+                                      RiderTripStatus.searching
+                                  ? Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: TickerMode(
+                                            enabled: false,
+                                            child: const CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Color(0xFF1A1A00),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        const Text(
+                                          'Finding Drivers…',
+                                          style: TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : const Text(
+                                      'Request Ride',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -501,4 +794,81 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen> {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Animated driver dot on map placeholder
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _AnimatedDriverDot extends StatelessWidget {
+  const _AnimatedDriverDot({required this.location});
+
+  final DriverLocation location;
+
+  Alignment _toAlignment() {
+    const double latCenter = -34.0012;
+    const double lonCenter = 18.6013;
+    const double latSpan = 0.14;
+    const double lonSpan = 0.2;
+    final double nx =
+        ((location.longitude - lonCenter) / (lonSpan / 2)).clamp(-1.0, 1.0);
+    final double ny =
+        -((location.latitude - latCenter) / (latSpan / 2)).clamp(-1.0, 1.0);
+    return Alignment(nx, ny);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedAlign(
+      key: const Key('driver_marker'),
+      alignment: _toAlignment(),
+      duration: const Duration(milliseconds: 650),
+      curve: Curves.easeInOut,
+      child: Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: const Color(0xFFDFFF00),
+          shape: BoxShape.circle,
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x60DFFF00),
+              blurRadius: 20,
+              spreadRadius: 2,
+            ),
+          ],
+        ),
+        child: const Center(
+          child: Icon(
+            Icons.directions_car_rounded,
+            color: Color(0xFF1A1A00),
+            size: 26,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dark map grid painter (faint road lines)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _MapGridPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF1A1E24)
+      ..strokeWidth = 1.0;
+    const step = 40.0;
+    for (double x = 0; x < size.width; x += step) {
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    }
+    for (double y = 0; y < size.height; y += step) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

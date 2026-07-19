@@ -1,30 +1,23 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:kwella_driver/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('KwellaDriverApp compile and offline screen smoke test',
+      (WidgetTester tester) async {
+    // Provide a finite display size so CustomPaint with Size.infinite
+    // resolves against a bounded parent in the test environment.
+    tester.view.physicalSize = const Size(1080, 2340);
+    addTearDown(tester.view.resetPhysicalSize);
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    // Build our app and allow Riverpod providers + AnimatedSwitcher to settle.
+    await tester.pumpWidget(const ProviderScope(child: KwellaDriverApp()));
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // Verify that the offline layout is active (GO puck visible).
+    expect(find.text('GO'), findsOneWidget);
+    expect(find.text('You are offline'), findsOneWidget);
   });
 }

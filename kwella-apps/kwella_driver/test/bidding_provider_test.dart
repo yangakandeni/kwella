@@ -70,9 +70,20 @@ void main() {
     fakeWsService = FakeKwellaWebSocketService();
   });
 
-  test('BiddingNotifier initializes to connecting state and connects to service', () {
+  test('BiddingNotifier starts idle and stays disconnected until connectAndSubscribe is called', () {
     final notifier = BiddingNotifier(wsService: fakeWsService);
-    
+
+    expect(notifier.debugState, isA<BiddingStateInitial>());
+    expect(fakeWsService.connectCalled, isFalse);
+    expect(fakeWsService.hasListeners, isFalse);
+
+    notifier.dispose();
+  });
+
+  test('BiddingNotifier transitions to connecting state and connects to service once connectAndSubscribe is called', () {
+    final notifier = BiddingNotifier(wsService: fakeWsService);
+    notifier.connectAndSubscribe();
+
     expect(notifier.debugState, isA<BiddingStateConnecting>());
     expect(fakeWsService.connectCalled, isTrue);
     expect(fakeWsService.hasListeners, isTrue);
@@ -82,7 +93,8 @@ void main() {
 
   test('BiddingNotifier processes matching driver bids in camelCase', () async {
     final notifier = BiddingNotifier(wsService: fakeWsService);
-    
+    notifier.connectAndSubscribe();
+
     final payload = {
       'driverId': 'drv_111',
       'riderId': 'rdr_222',
@@ -108,7 +120,8 @@ void main() {
 
   test('BiddingNotifier processes matching driver bids in snake_case and normalizes keys', () async {
     final notifier = BiddingNotifier(wsService: fakeWsService);
-    
+    notifier.connectAndSubscribe();
+
     final payload = {
       'driver_id': 'drv_444',
       'rider_id': 'rdr_555',
@@ -135,7 +148,8 @@ void main() {
 
   test('BiddingNotifier ignores messages that are not driver bids', () async {
     final notifier = BiddingNotifier(wsService: fakeWsService);
-    
+    notifier.connectAndSubscribe();
+
     final payload = {
       'action': 'someOtherAction',
       'message': 'Hello marketplace',
@@ -152,7 +166,8 @@ void main() {
 
   test('BiddingNotifier transitions to error state on stream errors', () async {
     final notifier = BiddingNotifier(wsService: fakeWsService);
-    
+    notifier.connectAndSubscribe();
+
     fakeWsService.emitError('WebSocket failed unexpected connection drop');
     await Future<void>.delayed(Duration.zero);
 
@@ -165,7 +180,8 @@ void main() {
 
   test('BiddingNotifier cancels stream subscription on dispose', () {
     final notifier = BiddingNotifier(wsService: fakeWsService);
-    
+    notifier.connectAndSubscribe();
+
     expect(fakeWsService.hasListeners, isTrue);
     notifier.dispose();
     expect(fakeWsService.hasListeners, isFalse);
