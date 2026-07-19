@@ -82,3 +82,5 @@ windows/flutter/ephemeral/
 runner-*.log
 # Terraform provider plugin cache written during local 'act' runs
 .terraform.d/
+
+.agents/
