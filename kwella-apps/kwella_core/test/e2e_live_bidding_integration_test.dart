@@ -229,7 +229,7 @@ void main() {
       // — flush the microtask queue before injecting so the frame lands on
       // an already-subscribed listener rather than being dropped by the
       // broadcast controller.
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       driverGateway.simulateIncomingFrame(jsonEncode({
         'action': 'rideOfferAvailable',
@@ -243,7 +243,7 @@ void main() {
         },
       }));
 
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       final state = driverContainer.read(driverBiddingProvider);
       expect(
@@ -394,7 +394,7 @@ void main() {
       // Let the multiplexer's stream subscription (started by startBroadcast)
       // settle before injecting, or the frame is dropped by the broadcast
       // controller before anyone is listening.
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       riderGateway.simulateIncomingFrame(jsonEncode({
         'action': 'driverBidReceived',
@@ -406,7 +406,7 @@ void main() {
         },
       }));
 
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       final riderState = riderContainer.read(riderBiddingProvider);
       expect(
@@ -424,7 +424,7 @@ void main() {
       riderContainer.read(riderBiddingProvider.notifier).startBroadcast();
 
       // Let the multiplexer's stream subscription settle before injecting.
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       riderGateway.simulateIncomingFrame(jsonEncode({
         'action': 'driverBidReceived',
@@ -434,7 +434,7 @@ void main() {
           'amount': 120.0,
         },
       }));
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       riderGateway.simulateIncomingFrame(jsonEncode({
         'action': 'driverBidReceived',
@@ -444,7 +444,7 @@ void main() {
           'amount': 135.0,
         },
       }));
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       final riderState = riderContainer.read(riderBiddingProvider);
       expect(riderState.bids.length, 2,
@@ -483,7 +483,7 @@ void main() {
       // subscription) before injecting — otherwise the frame is sent before
       // anyone is listening and is dropped by the broadcast controller.
       driverContainer.read(driverBiddingProvider);
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       driverGateway.simulateIncomingFrame(jsonEncode({
         'action': 'rideOfferAvailable',
@@ -496,7 +496,7 @@ void main() {
           'expires_in_seconds': 15,
         },
       }));
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       expect(
         driverContainer.read(driverBiddingProvider).status,
@@ -531,7 +531,7 @@ void main() {
           'driver_connection_id': 'conn-driver-xyz',
         },
       }));
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
 
       final finalRiderState = riderContainer.read(riderBiddingProvider);
       expect(

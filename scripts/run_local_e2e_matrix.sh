@@ -81,6 +81,8 @@ echo -e "${GREEN}[preflight] Android Emulator found: ${ANDROID_DEVICE_ID}${NC}"
 echo ""
 echo -e "${YELLOW}[launch] Starting kwella_rider_app on iOS Simulator (${IOS_DEVICE_ID})...${NC}"
 echo -e "${YELLOW}[launch] Starting kwella_driver_app on Android Emulator (${ANDROID_DEVICE_ID})...${NC}"
+echo -e "${YELLOW}[launch] Targeting the staging AWS stack (KWELLA_ENV=staging) — the${NC}"
+echo -e "${YELLOW}[launch] phone + OTP CUSTOM_AUTH Lambda triggers are only wired up there.${NC}"
 echo ""
 echo "Both flutter run sessions are attached below (hot-reload keys work per-pane"
 echo "if run in separate terminals). Press Ctrl+C to stop both."
@@ -96,13 +98,13 @@ trap cleanup EXIT INT TERM
 
 (
   cd "${RIDER_APP_DIR}"
-  flutter run -d "${IOS_DEVICE_ID}"
+  flutter run -d "${IOS_DEVICE_ID}" --dart-define=KWELLA_ENV=staging
 ) &
 RIDER_PID=$!
 
 (
   cd "${DRIVER_APP_DIR}"
-  flutter run -d "${ANDROID_DEVICE_ID}"
+  flutter run -d "${ANDROID_DEVICE_ID}" --dart-define=KWELLA_ENV=staging
 ) &
 DRIVER_PID=$!
 

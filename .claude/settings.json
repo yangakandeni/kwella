@@ -19,7 +19,9 @@
       "Bash(terraform fmt *)",
       "Bash(terraform workspace *)",
       "Bash(terraform plan *)",
-      "Bash(aws configure *)"
+      "Bash(aws configure *)",
+      "Bash(xargs -I{} echo {})",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

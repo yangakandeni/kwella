@@ -12,7 +12,7 @@ import '../config/environment.dart';
 /// Override this provider in tests using `ProviderContainer(overrides: [...])`.
 final kwellaWebSocketGatewayProvider = Provider<KwellaWebSocketGateway>(
   (ref) => KwellaWebSocketGateway(
-    endpointUrl: KwellaEnvironment.production.webSocketEndpointUrl,
+    endpointUrl: KwellaEnvironment.current.webSocketEndpointUrl,
   ),
 );
 

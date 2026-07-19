@@ -19,7 +19,7 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
     KwellaEnvironment? env,
   })  : _tokenVault = tokenVault ?? TokenVault(),
         _dio = dio ?? Dio(),
-        _env = env ?? KwellaEnvironment.production,
+        _env = env ?? KwellaEnvironment.current,
         super(const KwellaAuthState.initial()) {
     _checkPersistedSession();
   }

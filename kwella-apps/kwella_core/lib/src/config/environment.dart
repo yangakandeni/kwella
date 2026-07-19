@@ -51,6 +51,25 @@ const String kWebSocketEndpointUrl =
 const String kHttpApiEndpoint =
     'https://dbmi2nczz8.execute-api.af-south-1.amazonaws.com/';
 
+// ── Staging ──────────────────────────────────────────────────────────────
+//
+// The phone-number + OTP passwordless sign-in flow's CUSTOM_AUTH Lambda
+// triggers (DefineAuthChallenge/CreateAuthChallenge/VerifyAuthChallengeResponse)
+// are only wired up on the staging Cognito user pool — CreateAuthChallenge
+// refuses to issue its fixed testing-phase code in production (see
+// `create_auth_challenge/handler.py`), and the production user pool has no
+// auth Lambda triggers configured at all. Use these staging values (via
+// [KwellaEnvironment.staging]) for local end-to-end testing of that flow.
+
+const String kStagingCognitoUserPoolId = 'af-south-1_pv8AO6Pa6';
+const String kStagingCognitoClientId = '6tqpida24t3qnas45r0qgfcin5';
+const String kStagingCognitoEndpoint =
+    'https://cognito-idp.af-south-1.amazonaws.com/';
+const String kStagingWebSocketEndpointUrl =
+    'wss://e8yo42sa1k.execute-api.af-south-1.amazonaws.com/staging';
+const String kStagingHttpApiEndpoint =
+    'https://uxxke5fsi9.execute-api.af-south-1.amazonaws.com/';
+
 // ── Environment snapshot ───────────────────────────────────────────────────
 
 /// A convenience class that groups all production environment tokens.
@@ -96,4 +115,24 @@ class KwellaEnvironment {
 
   /// The default singleton backed by production constants.
   static const KwellaEnvironment production = KwellaEnvironment();
+
+  /// The staging singleton — the only stack with the phone-number + OTP
+  /// CUSTOM_AUTH Lambda triggers currently deployed and permitted to run
+  /// (see the module-level note on the `kStaging*` constants above).
+  static const KwellaEnvironment staging = KwellaEnvironment(
+    cognitoUserPoolId: kStagingCognitoUserPoolId,
+    cognitoClientId: kStagingCognitoClientId,
+    cognitoEndpoint: kStagingCognitoEndpoint,
+    webSocketEndpointUrl: kStagingWebSocketEndpointUrl,
+    httpApiEndpoint: kStagingHttpApiEndpoint,
+  );
+
+  /// Selects [staging] or [production] based on the `KWELLA_ENV` compile-time
+  /// define (e.g. `flutter run --dart-define=KWELLA_ENV=staging`). Defaults
+  /// to [production] so release builds are unaffected.
+  static const KwellaEnvironment current =
+      _kEnvironmentName == 'staging' ? staging : production;
 }
+
+const String _kEnvironmentName =
+    String.fromEnvironment('KWELLA_ENV', defaultValue: 'production');
