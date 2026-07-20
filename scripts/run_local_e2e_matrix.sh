@@ -2,7 +2,7 @@
 # =============================================================================
 # Kwella Local Dual-Simulator E2E Orchestrator
 # =============================================================================
-# Launches kwella_rider_app on a booted iOS Simulator and kwella_driver_app on
+# Launches kwella_rider on a booted iOS Simulator and kwella_driver on
 # a booted Android Emulator, side by side, so the marketplace trip flow
 # (broadcast -> bid -> accept -> arrive -> in-transit -> complete) can be
 # driven interactively across both apps at once.
@@ -26,8 +26,8 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-RIDER_APP_DIR="${PROJECT_ROOT}/kwella-apps/kwella_rider_app"
-DRIVER_APP_DIR="${PROJECT_ROOT}/kwella-apps/kwella_driver_app"
+RIDER_APP_DIR="${PROJECT_ROOT}/kwella-apps/kwella_rider"
+DRIVER_APP_DIR="${PROJECT_ROOT}/kwella-apps/kwella_driver"
 
 # ---------------------------------------------------------------------------
 # Step 1: Discover booted device IDs from `flutter devices`
@@ -79,8 +79,8 @@ echo -e "${GREEN}[preflight] Android Emulator found: ${ANDROID_DEVICE_ID}${NC}"
 # Step 2: Launch both apps concurrently, keeping them attached in foreground
 # ---------------------------------------------------------------------------
 echo ""
-echo -e "${YELLOW}[launch] Starting kwella_rider_app on iOS Simulator (${IOS_DEVICE_ID})...${NC}"
-echo -e "${YELLOW}[launch] Starting kwella_driver_app on Android Emulator (${ANDROID_DEVICE_ID})...${NC}"
+echo -e "${YELLOW}[launch] Starting kwella_rider on iOS Simulator (${IOS_DEVICE_ID})...${NC}"
+echo -e "${YELLOW}[launch] Starting kwella_driver on Android Emulator (${ANDROID_DEVICE_ID})...${NC}"
 echo -e "${YELLOW}[launch] Targeting the staging AWS stack (KWELLA_ENV=staging) — the${NC}"
 echo -e "${YELLOW}[launch] phone + OTP CUSTOM_AUTH Lambda triggers are only wired up there.${NC}"
 echo ""
