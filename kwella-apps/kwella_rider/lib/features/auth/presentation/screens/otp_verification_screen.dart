@@ -1,20 +1,23 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:kwella_core/kwella_core.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kwella Rider – OTP Verification Screen
 // 6 auto-advancing digit boxes, 60-second countdown resend, success push.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class OtpVerificationScreen extends StatefulWidget {
+class OtpVerificationScreen extends ConsumerStatefulWidget {
   const OtpVerificationScreen({super.key});
 
   @override
-  State<OtpVerificationScreen> createState() => _OtpVerificationScreenState();
+  ConsumerState<OtpVerificationScreen> createState() =>
+      _OtpVerificationScreenState();
 }
 
-class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
+class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
   static const int _codeLength = 6;
   final List<TextEditingController> _ctrlList =
       List.generate(_codeLength, (_) => TextEditingController());
@@ -23,7 +26,6 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
 
   int _secondsLeft = 60;
   Timer? _timer;
-  bool _loading = false;
 
   @override
   void initState() {
@@ -55,38 +57,68 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     });
   }
 
-  String get _otpValue =>
-      _ctrlList.map((c) => c.text).join();
+  String get _otpValue => _ctrlList.map((c) => c.text).join();
 
   bool get _isComplete => _otpValue.length == _codeLength;
 
   void _verify() {
     if (!_isComplete) return;
-    setState(() => _loading = true);
-    // In production: KwellaAuthNotifier.verifyOtp(_otpValue)
-    Future.delayed(const Duration(milliseconds: 900), () {
-      if (mounted) {
-        setState(() => _loading = false);
-        // Navigate to home and clear auth stack
+    ref.read(kwellaAuthNotifierProvider.notifier).verifyOtp(_otpValue);
+  }
+
+  void _resend() {
+    final phoneNumber =
+        ref.read(kwellaAuthNotifierProvider).pendingPhoneNumber;
+    if (phoneNumber != null) {
+      ref.read(kwellaAuthNotifierProvider.notifier).requestOtp(phoneNumber);
+    }
+    _startTimer();
+  }
+
+  void _clearCode() {
+    for (final c in _ctrlList) {
+      c.clear();
+    }
+    _focusList.first.requestFocus();
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen<KwellaAuthState>(kwellaAuthNotifierProvider, (previous, next) {
+      if (next.status == KwellaAuthStatus.authenticated) {
         Navigator.pushNamedAndRemoveUntil(
           context,
           '/rider/home',
           (route) => false,
         );
+        return;
+      }
+
+      if (next.error != null) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(next.error!)));
+      }
+
+      // An incorrect-but-retryable answer re-issues the challenge rather
+      // than failing outright — clear the boxes so the user can retry.
+      if (previous?.status == KwellaAuthStatus.authenticating &&
+          next.status == KwellaAuthStatus.otpRequired) {
+        _clearCode();
       }
     });
-  }
 
-  @override
-  Widget build(BuildContext context) {
+    final loading = ref.watch(kwellaAuthNotifierProvider).status ==
+        KwellaAuthStatus.authenticating;
+
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: KwellaColors.canvas,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF121212),
+        backgroundColor: KwellaColors.canvas,
         surfaceTintColor: Colors.transparent,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded,
-              color: Colors.white, size: 20),
+              color: KwellaColors.textPrimary, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
         elevation: 0,
@@ -101,7 +133,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               const Text(
                 'Verify your\nnumber',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: KwellaColors.textPrimary,
                   fontSize: 32,
                   fontWeight: FontWeight.w800,
                   height: 1.2,
@@ -112,7 +144,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               const Text(
                 'Enter the 6-digit code sent to your number.',
                 style: TextStyle(
-                  color: Color(0xFFA0A0A0),
+                  color: KwellaColors.textSecondary,
                   fontSize: 15,
                   fontFamily: 'Outfit',
                 ),
@@ -151,11 +183,10 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                       )
                     : TextButton(
                         key: const Key('resend_otp_button'),
-                        onPressed: _startTimer,
+                        onPressed: _resend,
                         child: const Text(
                           'Resend code',
                           style: TextStyle(
-                            color: Color(0xFFDFFF00),
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                             fontFamily: 'Outfit',
@@ -172,16 +203,8 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                   height: 54,
                   child: ElevatedButton(
                     key: const Key('verify_otp_button'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFDFFF00),
-                      foregroundColor: const Color(0xFF1A1A00),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      elevation: 0,
-                    ),
-                    onPressed: _isComplete && !_loading ? _verify : null,
-                    child: _loading
+                    onPressed: _isComplete && !loading ? _verify : null,
+                    child: loading
                         ? const SizedBox(
                             width: 22,
                             height: 22,
@@ -231,10 +254,10 @@ class _OtpBox extends StatelessWidget {
       width: 48,
       height: 56,
       decoration: BoxDecoration(
-        color: filled ? const Color(0xFF1A1A00) : const Color(0xFF1E1E1E),
+        color: filled ? const Color(0xFF1A1A00) : KwellaColors.elevatedCard,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: filled ? const Color(0xFFDFFF00) : const Color(0xFF2C2C2C),
+          color: filled ? KwellaColors.electricLime : KwellaColors.borderDark,
           width: filled ? 2 : 1,
         ),
       ),
@@ -247,7 +270,7 @@ class _OtpBox extends StatelessWidget {
           maxLength: 1,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           style: const TextStyle(
-            color: Color(0xFFDFFF00),
+            color: KwellaColors.electricLime,
             fontSize: 22,
             fontWeight: FontWeight.w800,
             fontFamily: 'Outfit',

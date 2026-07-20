@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:riverpod/riverpod.dart';
@@ -77,7 +78,12 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
   ///
   /// The Kwella user pool is configured with `phone_number` as its username
   /// attribute (see `terraform/main.tf`), so `phoneNumber` must be an E.164
-  /// number (e.g. `+27821234567`) belonging to an existing Cognito user.
+  /// number (e.g. `+27821234567`). If Cognito reports `UserNotFoundException`
+  /// (i.e. this is the first time this phone number has signed in), a new
+  /// Cognito user is silently provisioned via [_signUpNewUser] and the
+  /// `InitiateAuth` call is retried once — the `PreSignUp` trigger
+  /// auto-confirms that user, so the retry succeeds immediately with no
+  /// separate registration step visible to the user.
   ///
   /// Targets the standard Cognito JSON endpoint contract:
   ///
@@ -91,44 +97,121 @@ class KwellaAuthNotifier extends StateNotifier<KwellaAuthState> {
         status: KwellaAuthStatus.authenticating, clearError: true);
 
     try {
-      final response = await _dio.post(
-        _env.cognitoEndpoint,
-        data: jsonEncode({
-          'AuthFlow': 'CUSTOM_AUTH',
-          'ClientId': _env.cognitoClientId,
-          'AuthParameters': {
-            'USERNAME': phoneNumber,
-          },
-        }),
-        options: Options(
-          headers: {
-            'X-Amz-Target':
-                'AWSCognitoIdentityProviderService.InitiateAuth',
-            'Content-Type': 'application/x-amz-json-1.1',
-          },
-        ),
-      );
-
-      final data = _decodeCognitoBody(response.data);
-      final session = data['Session'] as String?;
-      final challengeName = data['ChallengeName'] as String?;
-      if (session == null || challengeName != 'CUSTOM_CHALLENGE') {
-        throw Exception(
-            'Cognito did not return a CUSTOM_CHALLENGE session.');
+      await _initiateCustomAuth(phoneNumber);
+    } catch (e) {
+      if (!_isUserNotFoundError(e)) {
+        state = KwellaAuthState(
+          status: KwellaAuthStatus.failure,
+          error: _extractCognitoErrorMessage(e),
+        );
+        return;
       }
 
-      state = state.copyWith(
-        status: KwellaAuthStatus.otpRequired,
-        cognitoSession: session,
-        pendingPhoneNumber: phoneNumber,
-        clearError: true,
-      );
-    } catch (e) {
-      state = KwellaAuthState(
-        status: KwellaAuthStatus.failure,
-        error: _extractCognitoErrorMessage(e),
-      );
+      try {
+        await _signUpNewUser(phoneNumber);
+        await _initiateCustomAuth(phoneNumber);
+      } catch (provisioningError) {
+        state = KwellaAuthState(
+          status: KwellaAuthStatus.failure,
+          error: _extractCognitoErrorMessage(provisioningError),
+        );
+      }
     }
+  }
+
+  /// Executes the `CUSTOM_AUTH` `InitiateAuth` call and, on success, moves
+  /// the state to [KwellaAuthStatus.otpRequired]. Throws on any Cognito
+  /// error, letting callers (namely [requestOtp]) decide how to react.
+  Future<void> _initiateCustomAuth(String phoneNumber) async {
+    final response = await _dio.post(
+      _env.cognitoEndpoint,
+      data: jsonEncode({
+        'AuthFlow': 'CUSTOM_AUTH',
+        'ClientId': _env.cognitoClientId,
+        'AuthParameters': {
+          'USERNAME': phoneNumber,
+        },
+      }),
+      options: Options(
+        headers: {
+          'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth',
+          'Content-Type': 'application/x-amz-json-1.1',
+        },
+      ),
+    );
+
+    final data = _decodeCognitoBody(response.data);
+    final session = data['Session'] as String?;
+    final challengeName = data['ChallengeName'] as String?;
+    if (session == null || challengeName != 'CUSTOM_CHALLENGE') {
+      throw Exception('Cognito did not return a CUSTOM_CHALLENGE session.');
+    }
+
+    state = state.copyWith(
+      status: KwellaAuthStatus.otpRequired,
+      cognitoSession: session,
+      pendingPhoneNumber: phoneNumber,
+      clearError: true,
+    );
+  }
+
+  /// Silently provisions a Cognito user for a phone number seen for the
+  /// first time, via the standard `SignUp` API. The password is randomly
+  /// generated and never used again — this pool is signed into exclusively
+  /// through the passwordless `CUSTOM_AUTH` OTP flow. The `PreSignUp`
+  /// trigger auto-confirms the account and auto-verifies the phone number,
+  /// so no separate confirmation step is needed before retrying
+  /// `InitiateAuth`.
+  Future<void> _signUpNewUser(String phoneNumber) async {
+    await _dio.post(
+      _env.cognitoEndpoint,
+      data: jsonEncode({
+        'ClientId': _env.cognitoClientId,
+        'Username': phoneNumber,
+        'Password': _generateTemporaryPassword(),
+        'UserAttributes': [
+          {'Name': 'phone_number', 'Value': phoneNumber},
+        ],
+      }),
+      options: Options(
+        headers: {
+          'X-Amz-Target': 'AWSCognitoIdentityProviderService.SignUp',
+          'Content-Type': 'application/x-amz-json-1.1',
+        },
+      ),
+    );
+  }
+
+  /// Generates a random password satisfying the Kwella user pool's password
+  /// policy (min. 8 chars, upper + lower + digit, no symbols required). Only
+  /// used to satisfy Cognito's `SignUp` API — it is never displayed to the
+  /// user or used to sign in.
+  String _generateTemporaryPassword() {
+    const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const lower = 'abcdefghijklmnopqrstuvwxyz';
+    const digits = '0123456789';
+    const all = upper + lower + digits;
+    final random = Random.secure();
+
+    final chars = [
+      upper[random.nextInt(upper.length)],
+      lower[random.nextInt(lower.length)],
+      digits[random.nextInt(digits.length)],
+      for (var i = 0; i < 13; i++) all[random.nextInt(all.length)],
+    ]..shuffle(random);
+
+    return chars.join();
+  }
+
+  /// Returns `true` if [e] is a `DioException` carrying Cognito's
+  /// `UserNotFoundException` — i.e. the phone number has never signed in
+  /// before and should be silently provisioned via [_signUpNewUser].
+  bool _isUserNotFoundError(Object e) {
+    if (e is DioException) {
+      final body = _decodeCognitoBody(e.response?.data);
+      return body['__type'] == 'UserNotFoundException';
+    }
+    return false;
   }
 
   /// Submits the OTP code entered by the user via Cognito's

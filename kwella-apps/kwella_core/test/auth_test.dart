@@ -60,7 +60,9 @@ class MockFlutterSecureStorage extends Fake implements FlutterSecureStorage {
 /// scenario is being simulated.
 enum MockMode {
   otpChallengeIssued,
-  failRequestOtpUnknownPhone,
+  failRequestOtpOtherError,
+  autoProvisionNewUserThenOtpIssued,
+  autoProvisionSignUpFails,
   otpVerifyCorrectRider,
   otpVerifyCorrectDriver,
   otpVerifyIncorrectRetry,
@@ -90,6 +92,11 @@ class MockCognitoInterceptor extends Interceptor {
   /// not Cognito's `application/x-amz-json-1.1`.
   dynamic lastRequestBody;
 
+  /// Counts `InitiateAuth` calls so the auto-provision scenarios can resolve
+  /// the first attempt with `UserNotFoundException` and only succeed on the
+  /// retry that follows a successful `SignUp` call.
+  int _initiateAuthCalls = 0;
+
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     lastRequestBody = options.data;
@@ -114,12 +121,17 @@ class MockCognitoInterceptor extends Interceptor {
       return;
     }
 
+    if (target == 'AWSCognitoIdentityProviderService.SignUp') {
+      _handleSignUp(options, handler);
+      return;
+    }
+
     throw StateError('Unexpected X-Amz-Target header: $target');
   }
 
   void _handleRequestOtp(
       RequestOptions options, RequestInterceptorHandler handler) {
-    if (mode == MockMode.failRequestOtpUnknownPhone) {
+    if (mode == MockMode.failRequestOtpOtherError) {
       handler.reject(DioException(
         requestOptions: options,
         type: DioExceptionType.badResponse,
@@ -128,8 +140,60 @@ class MockCognitoInterceptor extends Interceptor {
           requestOptions: options,
           statusCode: 400,
           data: jsonEncode({
-            '__type': 'UserNotFoundException',
-            'message': 'User does not exist.',
+            '__type': 'NotAuthorizedException',
+            'message': 'User is disabled.',
+          }),
+        ),
+      ));
+      return;
+    }
+
+    if (mode == MockMode.autoProvisionNewUserThenOtpIssued ||
+        mode == MockMode.autoProvisionSignUpFails) {
+      _initiateAuthCalls += 1;
+      if (_initiateAuthCalls == 1) {
+        handler.reject(DioException(
+          requestOptions: options,
+          type: DioExceptionType.badResponse,
+          error: 'Cognito rejected the InitiateAuth request.',
+          response: Response(
+            requestOptions: options,
+            statusCode: 400,
+            data: jsonEncode({
+              '__type': 'UserNotFoundException',
+              'message': 'User does not exist.',
+            }),
+          ),
+        ));
+        return;
+      }
+      // Second call only happens after a successful SignUp retry.
+    }
+
+    handler.resolve(Response(
+      requestOptions: options,
+      statusCode: 200,
+      data: jsonEncode({
+        'ChallengeName': 'CUSTOM_CHALLENGE',
+        'Session': 'mock_session_1',
+        'ChallengeParameters': <String, dynamic>{},
+      }),
+    ));
+  }
+
+  void _handleSignUp(
+      RequestOptions options, RequestInterceptorHandler handler) {
+    if (mode == MockMode.autoProvisionSignUpFails) {
+      handler.reject(DioException(
+        requestOptions: options,
+        type: DioExceptionType.badResponse,
+        error: 'Cognito rejected the SignUp request.',
+        response: Response(
+          requestOptions: options,
+          statusCode: 400,
+          data: jsonEncode({
+            '__type': 'InvalidParameterException',
+            'message': 'Unable to provision a new account for this phone number.',
           }),
         ),
       ));
@@ -140,9 +204,8 @@ class MockCognitoInterceptor extends Interceptor {
       requestOptions: options,
       statusCode: 200,
       data: jsonEncode({
-        'ChallengeName': 'CUSTOM_CHALLENGE',
-        'Session': 'mock_session_1',
-        'ChallengeParameters': <String, dynamic>{},
+        'UserConfirmed': true,
+        'UserSub': 'mock-new-user-sub',
       }),
     ));
   }
@@ -290,15 +353,42 @@ void main() {
       expect(decoded['AuthParameters']['USERNAME'], '+27821234567');
     });
 
-    test('requestOtp() failure — unknown phone number surfaces Cognito error',
-        () async {
-      mockInterceptor.mode = MockMode.failRequestOtpUnknownPhone;
+    test(
+        'requestOtp() failure — non-UserNotFound Cognito error surfaces '
+        'directly without attempting to sign up', () async {
+      mockInterceptor.mode = MockMode.failRequestOtpOtherError;
+      final notifier = KwellaAuthNotifier(tokenVault: tokenVault, dio: mockDio);
+
+      await notifier.requestOtp('+27821234567');
+
+      expect(notifier.state.status, KwellaAuthStatus.failure);
+      expect(notifier.state.error, contains('User is disabled.'));
+    });
+
+    test(
+        'requestOtp() auto-provisions a brand-new phone number and retries — '
+        'transitions to otpRequired', () async {
+      mockInterceptor.mode = MockMode.autoProvisionNewUserThenOtpIssued;
+      final notifier = KwellaAuthNotifier(tokenVault: tokenVault, dio: mockDio);
+
+      await notifier.requestOtp('+27000000000');
+
+      expect(notifier.state.status, KwellaAuthStatus.otpRequired);
+      expect(notifier.state.cognitoSession, 'mock_session_1');
+      expect(notifier.state.pendingPhoneNumber, '+27000000000');
+    });
+
+    test(
+        'requestOtp() surfaces a failure when auto-provisioning (SignUp) '
+        'itself fails', () async {
+      mockInterceptor.mode = MockMode.autoProvisionSignUpFails;
       final notifier = KwellaAuthNotifier(tokenVault: tokenVault, dio: mockDio);
 
       await notifier.requestOtp('+27000000000');
 
       expect(notifier.state.status, KwellaAuthStatus.failure);
-      expect(notifier.state.error, contains('User does not exist.'));
+      expect(notifier.state.error,
+          contains('Unable to provision a new account for this phone number.'));
     });
 
     test('verifyOtp() correct code as rider — authenticates and persists tokens',

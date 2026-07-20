@@ -1,21 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:kwella_core/kwella_core.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kwella Rider – Phone Entry Screen
 // +27 prefix chip, numeric input, "Send OTP" CTA.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class PhoneEntryScreen extends StatefulWidget {
+class PhoneEntryScreen extends ConsumerStatefulWidget {
   const PhoneEntryScreen({super.key});
 
   @override
-  State<PhoneEntryScreen> createState() => _PhoneEntryScreenState();
+  ConsumerState<PhoneEntryScreen> createState() => _PhoneEntryScreenState();
 }
 
-class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
+class _PhoneEntryScreenState extends ConsumerState<PhoneEntryScreen> {
   final _ctrl = TextEditingController();
-  bool _loading = false;
 
   @override
   void dispose() {
@@ -25,26 +26,31 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
 
   void _sendOtp() {
     if (_ctrl.text.length < 9) return;
-    setState(() => _loading = true);
-    // In production: fire KwellaAuthNotifier.sendOtp('+27${_ctrl.text}')
-    Future.delayed(const Duration(milliseconds: 800), () {
-      if (mounted) {
-        setState(() => _loading = false);
-        Navigator.pushNamed(context, '/auth/otp');
-      }
-    });
+    ref.read(kwellaAuthNotifierProvider.notifier).requestOtp('+27${_ctrl.text}');
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<KwellaAuthState>(kwellaAuthNotifierProvider, (previous, next) {
+      if (next.status == KwellaAuthStatus.otpRequired) {
+        Navigator.pushNamed(context, '/auth/otp');
+      } else if (next.status == KwellaAuthStatus.failure && next.error != null) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(next.error!)));
+      }
+    });
+
+    final loading = ref.watch(kwellaAuthNotifierProvider).status ==
+        KwellaAuthStatus.authenticating;
+
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: KwellaColors.canvas,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF121212),
+        backgroundColor: KwellaColors.canvas,
         surfaceTintColor: Colors.transparent,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded,
-              color: Colors.white, size: 20),
+              color: KwellaColors.textPrimary, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
         elevation: 0,
@@ -60,7 +66,7 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
               const Text(
                 'Enter your\nphone number',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: KwellaColors.textPrimary,
                   fontSize: 32,
                   fontWeight: FontWeight.w800,
                   height: 1.2,
@@ -71,7 +77,7 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
               const Text(
                 'We\'ll send a one-time code to verify it\'s you.',
                 style: TextStyle(
-                  color: Color(0xFFA0A0A0),
+                  color: KwellaColors.textSecondary,
                   fontSize: 15,
                   fontFamily: 'Outfit',
                 ),
@@ -80,9 +86,9 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
               // ── Phone field ──────────────────────────────────────────────
               Container(
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1E1E1E),
+                  color: KwellaColors.elevatedCard,
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFF2C2C2C)),
+                  border: Border.all(color: KwellaColors.borderDark),
                 ),
                 child: Row(
                   children: [
@@ -92,7 +98,7 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
                           horizontal: 14, vertical: 16),
                       decoration: const BoxDecoration(
                         border: Border(
-                          right: BorderSide(color: Color(0xFF2C2C2C)),
+                          right: BorderSide(color: KwellaColors.borderDark),
                         ),
                       ),
                       child: Row(
@@ -105,7 +111,7 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
                           const Text(
                             '+27',
                             style: TextStyle(
-                              color: Colors.white,
+                              color: KwellaColors.textPrimary,
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
                               fontFamily: 'Outfit',
@@ -125,7 +131,7 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
                           LengthLimitingTextInputFormatter(10),
                         ],
                         style: const TextStyle(
-                          color: Colors.white,
+                          color: KwellaColors.textPrimary,
                           fontSize: 16,
                           letterSpacing: 1.5,
                           fontFamily: 'Outfit',
@@ -157,18 +163,9 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
                   height: 54,
                   child: ElevatedButton(
                     key: const Key('send_otp_button'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFDFFF00),
-                      foregroundColor: const Color(0xFF1A1A00),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      elevation: 0,
-                    ),
-                    onPressed: _ctrl.text.length >= 9 && !_loading
-                        ? _sendOtp
-                        : null,
-                    child: _loading
+                    onPressed:
+                        _ctrl.text.length >= 9 && !loading ? _sendOtp : null,
+                    child: loading
                         ? const SizedBox(
                             width: 22,
                             height: 22,

@@ -109,7 +109,10 @@ resource "aws_cognito_user_pool" "kwella_user_pool" {
   # ── Passwordless phone + OTP sign-in (CUSTOM_AUTH) ────────────────────────
   # See the "OTP Passwordless Auth" Lambda section below. CreateAuthChallenge
   # currently issues a fixed testing-phase code rather than a real SMS OTP.
+  # pre_sign_up auto-confirms the user record the app self-provisions for a
+  # phone number Cognito has never seen before (see auth_notifier.dart).
   lambda_config {
+    pre_sign_up                    = aws_lambda_function.pre_sign_up.arn
     define_auth_challenge          = aws_lambda_function.define_auth_challenge.arn
     create_auth_challenge          = aws_lambda_function.create_auth_challenge.arn
     verify_auth_challenge_response = aws_lambda_function.verify_auth_challenge_response.arn
@@ -209,12 +212,24 @@ resource "aws_lambda_function" "ledger_service" {
 # ---------------------------------------------------------------------------
 # kwella Passwordless Phone + OTP Auth — Cognito CUSTOM_AUTH Lambda Triggers
 # ---------------------------------------------------------------------------
-# DefineAuthChallenge / CreateAuthChallenge / VerifyAuthChallengeResponse
+# PreSignUp / DefineAuthChallenge / CreateAuthChallenge / VerifyAuthChallengeResponse
 # implement the phone-number + OTP sign-in flow (see the lambda_config block
 # on aws_cognito_user_pool.kwella_user_pool above). CreateAuthChallenge issues
 # a fixed testing-phase code (OTP_TEST_CODE) rather than a real SMS OTP —
 # swapping in real SNS SMS delivery later only requires changing that Lambda.
 # ---------------------------------------------------------------------------
+
+resource "aws_lambda_function" "pre_sign_up" {
+  function_name    = "kwella-pre-sign-up-${var.environment}"
+  description      = "Cognito trigger: auto-confirms users self-provisioned by the phone + OTP sign-in flow."
+  runtime          = "python3.12"
+  handler          = "handler.lambda_handler"
+  role             = aws_iam_role.lambda_exec.arn
+  filename         = "${path.module}/../../dist/pre_sign_up.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../dist/pre_sign_up.zip")
+
+  layers = [aws_lambda_layer_version.kwella_shared.arn]
+}
 
 resource "aws_lambda_function" "define_auth_challenge" {
   function_name    = "kwella-define-auth-challenge-${var.environment}"
@@ -259,7 +274,15 @@ resource "aws_lambda_function" "verify_auth_challenge_response" {
   layers = [aws_lambda_layer_version.kwella_shared.arn]
 }
 
-# Grant Cognito permission to invoke the three CUSTOM_AUTH trigger Lambdas.
+# Grant Cognito permission to invoke the CUSTOM_AUTH trigger Lambdas.
+resource "aws_lambda_permission" "cognito_invoke_pre_sign_up" {
+  statement_id  = "AllowCognitoInvokePreSignUp"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.pre_sign_up.function_name
+  principal     = "cognito-idp.amazonaws.com"
+  source_arn    = aws_cognito_user_pool.kwella_user_pool.arn
+}
+
 resource "aws_lambda_permission" "cognito_invoke_define_auth_challenge" {
   statement_id  = "AllowCognitoInvokeDefineAuthChallenge"
   action        = "lambda:InvokeFunction"
