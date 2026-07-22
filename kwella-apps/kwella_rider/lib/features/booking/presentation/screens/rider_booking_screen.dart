@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
 import '../widgets/driver_bid_card.dart';
+import '../widgets/kwella_map_view.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RiderBookingScreen — v2 Electric Lime Dark Mode
@@ -89,50 +90,30 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  Widget _buildDarkMapPlaceholder(RiderTripState state) {
+  Widget _buildLocationStatusBadge(RiderTripState state) {
     final DriverLocation? location = state.currentDriverLocation;
-    return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFF0E1217),
-      ),
-      child: Stack(
-        children: [
-          // Faint road grid
-          CustomPaint(
-            painter: _MapGridPainter(),
-            size: Size.infinite,
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 80),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E1E1E),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFF2C2C2C)),
           ),
-          const Text('Map placeholder', style: TextStyle(color: Colors.transparent)),
-          // Status label
-          Align(
-            alignment: Alignment.topCenter,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 80),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E1E1E),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFF2C2C2C)),
-                ),
-                child: Text(
-                  location != null
-                      ? 'Tracking driver at ${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}'
-                      : _mapStatusLabel(state.status),
-                  style: const TextStyle(
-                    color: Color(0xFFA0A0A0),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
+          child: Text(
+            location != null
+                ? 'Tracking driver at ${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}'
+                : _mapStatusLabel(state.status),
+            style: const TextStyle(
+              color: Color(0xFFA0A0A0),
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
             ),
           ),
-          // Moving driver dot
-          if (location != null)
-            _AnimatedDriverDot(location: location),
-        ],
+        ),
       ),
     );
   }
@@ -510,8 +491,10 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
         children: [
           // ── Map layer ────────────────────────────────────────────────
           Positioned.fill(
-            child: _buildDarkMapPlaceholder(state),
+            child: KwellaMapView(driverLocation: state.currentDriverLocation),
           ),
+          // ── Live status badge ────────────────────────────────────────
+          _buildLocationStatusBadge(state),
           // ── Top safe-area overlay (profile + notifications) ──────────
           Positioned(
             top: 0,
@@ -796,79 +779,3 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Animated driver dot on map placeholder
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _AnimatedDriverDot extends StatelessWidget {
-  const _AnimatedDriverDot({required this.location});
-
-  final DriverLocation location;
-
-  Alignment _toAlignment() {
-    const double latCenter = -34.0012;
-    const double lonCenter = 18.6013;
-    const double latSpan = 0.14;
-    const double lonSpan = 0.2;
-    final double nx =
-        ((location.longitude - lonCenter) / (lonSpan / 2)).clamp(-1.0, 1.0);
-    final double ny =
-        -((location.latitude - latCenter) / (latSpan / 2)).clamp(-1.0, 1.0);
-    return Alignment(nx, ny);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedAlign(
-      key: const Key('driver_marker'),
-      alignment: _toAlignment(),
-      duration: const Duration(milliseconds: 650),
-      curve: Curves.easeInOut,
-      child: Container(
-        width: 48,
-        height: 48,
-        decoration: BoxDecoration(
-          color: const Color(0xFFDFFF00),
-          shape: BoxShape.circle,
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x60DFFF00),
-              blurRadius: 20,
-              spreadRadius: 2,
-            ),
-          ],
-        ),
-        child: const Center(
-          child: Icon(
-            Icons.directions_car_rounded,
-            color: Color(0xFF1A1A00),
-            size: 26,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Dark map grid painter (faint road lines)
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _MapGridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFF1A1E24)
-      ..strokeWidth = 1.0;
-    const step = 40.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}

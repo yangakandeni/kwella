@@ -1,11 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../controllers/kwella_rider_controller.dart';
+import '../controllers/rider_trip_state.dart';
+import '../widgets/kwella_map_view.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RideTrackingScreen
 // Active ride / en-route live tracking screen.
+//
+// The driver's live position is sourced from riderTripStateProvider and
+// rendered as a real marker via KwellaMapView. Driver name/rating/vehicle/
+// plate have no backing field on RiderTripState yet (the real backend's
+// bidSelected/tripMatchConfirmed frames don't carry them either — see the
+// kwella-bidding-lifecycle-gaps notes), so they stay constructor defaults
+// until a driver-profile lookup exists.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class RideTrackingScreen extends StatefulWidget {
+class RideTrackingScreen extends ConsumerStatefulWidget {
   const RideTrackingScreen({
     super.key,
     this.driverName = 'Sipho M.',
@@ -22,36 +34,11 @@ class RideTrackingScreen extends StatefulWidget {
   final int etaMinutes;
 
   @override
-  State<RideTrackingScreen> createState() => _RideTrackingScreenState();
+  ConsumerState<RideTrackingScreen> createState() =>
+      _RideTrackingScreenState();
 }
 
-class _RideTrackingScreenState extends State<RideTrackingScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _pingCtrl;
-  late final Animation<double> _pingScale;
-  late final Animation<double> _pingOpacity;
-
-  @override
-  void initState() {
-    super.initState();
-    _pingCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat();
-    _pingScale = Tween<double>(begin: 0.5, end: 2.2).animate(
-      CurvedAnimation(parent: _pingCtrl, curve: Curves.easeOut),
-    );
-    _pingOpacity = Tween<double>(begin: 0.7, end: 0.0).animate(
-      CurvedAnimation(parent: _pingCtrl, curve: Curves.easeOut),
-    );
-  }
-
-  @override
-  void dispose() {
-    _pingCtrl.dispose();
-    super.dispose();
-  }
-
+class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
   void _showCancelDialog() {
     showDialog<void>(
       context: context,
@@ -185,70 +172,16 @@ class _RideTrackingScreenState extends State<RideTrackingScreen>
 
   @override
   Widget build(BuildContext context) {
+    final RiderTripState? state = ref.watch(riderTripStateProvider).asData?.value;
+    final DriverLocation? driverLocation = state?.currentDriverLocation;
+
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       body: Stack(
         children: [
-          // ── Map placeholder ────────────────────────────────────────
+          // ── Map ───────────────────────────────────────────────────
           Positioned.fill(
-            child: Container(
-              color: const Color(0xFF0E1217),
-              child: CustomPaint(
-                painter: _TrackingGridPainter(),
-                size: Size.infinite,
-              ),
-            ),
-          ),
-          // ── Animated driver ping dot ───────────────────────────────
-          Align(
-            alignment: const Alignment(-0.2, -0.1),
-            child: SizedBox(
-              width: 100,
-              height: 100,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  AnimatedBuilder(
-                    animation: _pingCtrl,
-                    builder: (_, __) => Transform.scale(
-                      scale: _pingScale.value,
-                      child: Opacity(
-                        opacity: _pingOpacity.value,
-                        child: Container(
-                          width: 30,
-                          height: 30,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color:
-                                const Color(0xFFDFFF00).withOpacity(0.3),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Color(0xFFDFFF00),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Color(0x60DFFF00),
-                          blurRadius: 20,
-                          spreadRadius: 4,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.directions_car_rounded,
-                      color: Color(0xFF1A1A00),
-                      size: 28,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            child: KwellaMapView(driverLocation: driverLocation),
           ),
           // ── Driver info top card ───────────────────────────────────
           Positioned(
@@ -654,21 +587,3 @@ class _ChatBubble extends StatelessWidget {
   }
 }
 
-class _TrackingGridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFF1A1E24)
-      ..strokeWidth = 1.0;
-    const step = 40.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}

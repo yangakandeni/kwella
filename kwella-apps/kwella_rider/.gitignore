@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local secrets — never commit real API keys
+/android/local.properties
+/ios/Flutter/Secrets.xcconfig

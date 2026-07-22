@@ -1,8 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/rider_booking_screen.dart';
+import 'package:kwella_rider/features/booking/presentation/widgets/kwella_map_view.dart';
+
+/// Reads the marker set currently passed to the real GoogleMap widget —
+/// KwellaMapView renders a driver Marker rather than a Key'd widget, so
+/// tests inspect the GoogleMap's `markers` property directly.
+Set<Marker> _mapMarkers(WidgetTester tester) =>
+    tester.widget<GoogleMap>(find.byKey(const Key('kwella_map_view'))).markers;
 
 void main() {
   late KwellaRiderController controller;
@@ -27,8 +35,8 @@ void main() {
         ),
       );
 
-      expect(find.text('Map placeholder'), findsOneWidget);
-      expect(find.byKey(const Key('driver_marker')), findsNothing);
+      expect(find.byKey(const Key('kwella_map_view')), findsOneWidget);
+      expect(_mapMarkers(tester), isEmpty);
 
       controller.handleIncomingWebSocketEvent({
         'action': 'tripMatchConfirmed',
@@ -43,7 +51,10 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 650));
 
-      expect(find.byKey(const Key('driver_marker')), findsOneWidget);
+      final Marker firstMarker = _mapMarkers(tester).singleWhere(
+        (m) => m.markerId == kDriverMarkerId,
+      );
+      expect(firstMarker.position, const LatLng(-34.0123, 18.6123));
       expect(
         find.textContaining('Tracking driver at -34.0123, 18.6123'),
         findsOneWidget,
@@ -62,7 +73,10 @@ void main() {
         find.textContaining('Tracking driver at -34.0100, 18.6200'),
         findsOneWidget,
       );
-      expect(find.byKey(const Key('driver_marker')), findsOneWidget);
+      final Marker secondMarker = _mapMarkers(tester).singleWhere(
+        (m) => m.markerId == kDriverMarkerId,
+      );
+      expect(secondMarker.position, const LatLng(-34.0100, 18.6200));
     },
   );
 

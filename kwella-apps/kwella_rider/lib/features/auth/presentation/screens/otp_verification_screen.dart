@@ -108,8 +108,9 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
       }
     });
 
-    final loading = ref.watch(kwellaAuthNotifierProvider).status ==
-        KwellaAuthStatus.authenticating;
+    final authState = ref.watch(kwellaAuthNotifierProvider);
+    final loading = authState.status == KwellaAuthStatus.authenticating;
+    final phoneNumber = authState.pendingPhoneNumber;
 
     return Scaffold(
       backgroundColor: KwellaColors.canvas,
@@ -131,7 +132,7 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
             children: [
               const SizedBox(height: 24),
               const Text(
-                'Verify your\nnumber',
+                'Enter the code',
                 style: TextStyle(
                   color: KwellaColors.textPrimary,
                   fontSize: 32,
@@ -141,9 +142,11 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
                 ),
               ),
               const SizedBox(height: 10),
-              const Text(
-                'Enter the 6-digit code sent to your number.',
-                style: TextStyle(
+              Text(
+                phoneNumber != null
+                    ? 'We have sent you a verification code to $phoneNumber'
+                    : 'Enter the 6-digit code sent to your number.',
+                style: const TextStyle(
                   color: KwellaColors.textSecondary,
                   fontSize: 15,
                   fontFamily: 'Outfit',

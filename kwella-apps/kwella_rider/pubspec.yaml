@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   kwella_core:
     path: ../kwella_core
+  google_maps_flutter: ^2.17.1
+  geolocator: ^14.0.3
 
 dev_dependencies:
   flutter_test:
@@ -58,6 +60,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/map_styles/dark_map_style.json
 
   # To add assets to your application, add an assets section, like this:
   # assets:
