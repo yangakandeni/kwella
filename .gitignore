@@ -84,3 +84,7 @@ runner-*.log
 .terraform.d/
 
 .agents/
+
+# Screens should be for dev reference only
+/kwella-apps/driver-app-screens/*
+/kwella-apps/rider-app-screens/*
