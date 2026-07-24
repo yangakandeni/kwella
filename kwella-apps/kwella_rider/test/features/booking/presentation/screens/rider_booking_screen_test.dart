@@ -3,18 +3,20 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/rider_trip_state.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/rider_booking_screen.dart';
+import 'package:kwella_rider/features/booking/presentation/widgets/destination_editor_panel.dart';
 import 'package:kwella_rider/features/location/services/places_autocomplete_service.dart';
 
 class _FakePlacesAutocompleteService extends PlacesAutocompleteService {
   _FakePlacesAutocompleteService() : super(apiKey: 'test-key');
+
+  List<PlaceSuggestion> nextResults = const [];
 
   @override
   Future<List<PlaceSuggestion>> searchPlaces(
     String query, {
     double? originLat,
     double? originLng,
-  }) async =>
-      const [];
+  }) async => nextResults;
 }
 
 void main() {
@@ -85,7 +87,10 @@ void main() {
 
       expect(find.byKey(const Key('to_input')), findsOneWidget);
       expect(
-        tester.widget<TextField>(find.byKey(const Key('to_input'))).controller!.text,
+        tester
+            .widget<TextField>(find.byKey(const Key('to_input')))
+            .controller!
+            .text,
         equals('Zevenwacht Mall'),
       );
       expect(controller.state.dropoffLocation, equals('Zevenwacht Mall'));
@@ -128,16 +133,55 @@ void main() {
     },
   );
 
+  testWidgets('tapping the scrim outside the panel collapses it back', (
+    WidgetTester tester,
+  ) async {
+    final controller = KwellaRiderController();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RiderBookingScreen(
+          controller: controller,
+          placesService: _FakePlacesAutocompleteService(),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('search_bar')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('destination_panel_scrim')), findsOneWidget);
+
+    // Tap a point in the dimmed area above the expanded panel rather than
+    // the widget's geometric center, which the tall panel itself covers.
+    await tester.tapAt(const Offset(700, 20));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('from_input')), findsNothing);
+    expect(find.byKey(const Key('search_bar')), findsOneWidget);
+
+    controller.dispose();
+  });
+
   testWidgets(
-    'tapping the scrim outside the panel collapses it back',
+    'inline destination panel height stays fixed once expanded, even as suggestions appear',
     (WidgetTester tester) async {
       final controller = KwellaRiderController();
+      final placesService = _FakePlacesAutocompleteService()
+        ..nextResults = const [
+          PlaceSuggestion(
+            placeId: 'place-1',
+            description: 'Shoprite Mandalay, Swartklip Road, Cape Town',
+            mainText: 'Shoprite Mandalay',
+            secondaryText: 'Swartklip Road, Cape Town',
+          ),
+        ];
 
       await tester.pumpWidget(
         MaterialApp(
           home: RiderBookingScreen(
             controller: controller,
-            placesService: _FakePlacesAutocompleteService(),
+            placesService: placesService,
           ),
         ),
       );
@@ -145,15 +189,20 @@ void main() {
       await tester.tap(find.byKey(const Key('search_bar')));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('destination_panel_scrim')), findsOneWidget);
+      final Size expandedSize = tester.getSize(
+        find.byType(DestinationEditorPanel),
+      );
 
-      // Tap a point in the dimmed area above the expanded panel rather than
-      // the widget's geometric center, which the tall panel itself covers.
-      await tester.tapAt(const Offset(700, 20));
-      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('to_input')), 'Shoprite');
+      await tester.pump(const Duration(milliseconds: 400));
 
-      expect(find.byKey(const Key('from_input')), findsNothing);
-      expect(find.byKey(const Key('search_bar')), findsOneWidget);
+      expect(find.text('Shoprite Mandalay'), findsOneWidget);
+      expect(tester.getSize(find.byType(DestinationEditorPanel)), expandedSize);
+
+      await tester.enterText(find.byKey(const Key('to_input')), '');
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(tester.getSize(find.byType(DestinationEditorPanel)), expandedSize);
 
       controller.dispose();
     },

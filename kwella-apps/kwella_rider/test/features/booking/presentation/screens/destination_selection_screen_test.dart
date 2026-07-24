@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/destination_selection_screen.dart';
+import 'package:kwella_rider/features/booking/presentation/widgets/destination_editor_panel.dart';
 import 'package:kwella_rider/features/location/services/places_autocomplete_service.dart';
 
 class _FakePlacesAutocompleteService extends PlacesAutocompleteService {
@@ -94,20 +95,29 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('pre-fills the From field with the current pickup location',
-      (tester) async {
+  testWidgets('pre-fills the From field with the current pickup location', (
+    tester,
+  ) async {
     controller.updatePickupLocation('Tennyson St 31');
 
-    await pumpScreen(tester, controller: controller, placesService: placesService);
+    await pumpScreen(
+      tester,
+      controller: controller,
+      placesService: placesService,
+    );
 
     expect(
-      tester.widget<TextField>(find.byKey(const Key('from_input'))).controller!.text,
+      tester
+          .widget<TextField>(find.byKey(const Key('from_input')))
+          .controller!
+          .text,
       equals('Tennyson St 31'),
     );
   });
 
-  testWidgets('pre-fills the To field when an initial destination is passed',
-      (tester) async {
+  testWidgets('pre-fills the To field when an initial destination is passed', (
+    tester,
+  ) async {
     await pumpScreen(
       tester,
       controller: controller,
@@ -116,15 +126,23 @@ void main() {
     );
 
     expect(
-      tester.widget<TextField>(find.byKey(const Key('to_input'))).controller!.text,
+      tester
+          .widget<TextField>(find.byKey(const Key('to_input')))
+          .controller!
+          .text,
       equals('Shoprite Mandalay'),
     );
     expect(controller.state.dropoffLocation, equals('Shoprite Mandalay'));
   });
 
-  testWidgets('does not query suggestions for fewer than 3 characters',
-      (tester) async {
-    await pumpScreen(tester, controller: controller, placesService: placesService);
+  testWidgets('does not query suggestions for fewer than 3 characters', (
+    tester,
+  ) async {
+    await pumpScreen(
+      tester,
+      controller: controller,
+      placesService: placesService,
+    );
 
     await tester.enterText(find.byKey(const Key('to_input')), 'Sh');
     await tester.pump(const Duration(milliseconds: 400));
@@ -134,75 +152,105 @@ void main() {
   });
 
   testWidgets(
-      'shows suggestions after 3+ characters and selecting one fills the To field',
-      (tester) async {
-    placesService.nextResults = _shopriteSuggestions;
-    await pumpScreen(tester, controller: controller, placesService: placesService);
+    'shows suggestions after 3+ characters and selecting one fills the To field',
+    (tester) async {
+      placesService.nextResults = _shopriteSuggestions;
+      await pumpScreen(
+        tester,
+        controller: controller,
+        placesService: placesService,
+      );
 
-    await tester.enterText(find.byKey(const Key('to_input')), 'Shoprite');
-    await tester.pump(const Duration(milliseconds: 400));
+      await tester.enterText(find.byKey(const Key('to_input')), 'Shoprite');
+      await tester.pump(const Duration(milliseconds: 400));
 
-    expect(placesService.queries, contains('Shoprite'));
-    expect(find.text('Shoprite Mandalay'), findsOneWidget);
-    expect(find.text('Shoprite Lentegeur'), findsOneWidget);
+      expect(placesService.queries, contains('Shoprite'));
+      expect(find.text('Shoprite Mandalay'), findsOneWidget);
+      expect(find.text('Shoprite Lentegeur'), findsOneWidget);
 
-    await tester.tap(find.text('Shoprite Mandalay'));
-    await tester.pump();
+      await tester.tap(find.text('Shoprite Mandalay'));
+      await tester.pump();
 
-    expect(
-      tester.widget<TextField>(find.byKey(const Key('to_input'))).controller!.text,
-      equals('Shoprite Mandalay, Swartklip Road, Cape Town'),
-    );
-    expect(
-      controller.state.dropoffLocation,
-      equals('Shoprite Mandalay, Swartklip Road, Cape Town'),
-    );
-    expect(find.text('Shoprite Lentegeur'), findsNothing);
-  });
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('to_input')))
+            .controller!
+            .text,
+        equals('Shoprite Mandalay, Swartklip Road, Cape Town'),
+      );
+      expect(
+        controller.state.dropoffLocation,
+        equals('Shoprite Mandalay, Swartklip Road, Cape Town'),
+      );
+      expect(find.text('Shoprite Lentegeur'), findsNothing);
+    },
+  );
 
   testWidgets(
-      'shows suggestions for the From field and resolves coordinates on selection',
-      (tester) async {
-    placesService.nextResults = _shopriteSuggestions;
-    placesService.nextPlaceLocation = const PlaceLocation(lat: -33.97, lng: 18.63);
-    await pumpScreen(tester, controller: controller, placesService: placesService);
+    'shows suggestions for the From field and resolves coordinates on selection',
+    (tester) async {
+      placesService.nextResults = _shopriteSuggestions;
+      placesService.nextPlaceLocation = const PlaceLocation(
+        lat: -33.97,
+        lng: 18.63,
+      );
+      await pumpScreen(
+        tester,
+        controller: controller,
+        placesService: placesService,
+      );
 
-    await tester.enterText(find.byKey(const Key('from_input')), 'Shoprite');
-    await tester.pump(const Duration(milliseconds: 400));
+      await tester.enterText(find.byKey(const Key('from_input')), 'Shoprite');
+      await tester.pump(const Duration(milliseconds: 400));
 
-    expect(placesService.queries, contains('Shoprite'));
-    expect(find.text('Shoprite Mandalay'), findsOneWidget);
+      expect(placesService.queries, contains('Shoprite'));
+      expect(find.text('Shoprite Mandalay'), findsOneWidget);
 
-    await tester.tap(find.text('Shoprite Mandalay'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('Shoprite Mandalay'));
+      await tester.pumpAndSettle();
 
-    expect(
-      tester.widget<TextField>(find.byKey(const Key('from_input'))).controller!.text,
-      equals('Shoprite Mandalay, Swartklip Road, Cape Town'),
-    );
-    expect(placesService.detailsRequestedFor, contains('place-1'));
-    expect(controller.state.pickupLat, equals(-33.97));
-    expect(controller.state.pickupLng, equals(18.63));
-  });
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('from_input')))
+            .controller!
+            .text,
+        equals('Shoprite Mandalay, Swartklip Road, Cape Town'),
+      );
+      expect(placesService.detailsRequestedFor, contains('place-1'));
+      expect(controller.state.pickupLat, equals(-33.97));
+      expect(controller.state.pickupLng, equals(18.63));
+    },
+  );
 
-  testWidgets('biases destination searches toward the resolved pickup coordinates',
-      (tester) async {
-    controller.updatePickupLocation('Long Street', lat: -33.92, lng: 18.42);
-    await pumpScreen(tester, controller: controller, placesService: placesService);
+  testWidgets(
+    'biases destination searches toward the resolved pickup coordinates',
+    (tester) async {
+      controller.updatePickupLocation('Long Street', lat: -33.92, lng: 18.42);
+      await pumpScreen(
+        tester,
+        controller: controller,
+        placesService: placesService,
+      );
 
-    await tester.enterText(find.byKey(const Key('to_input')), 'Shoprite');
-    await tester.pump(const Duration(milliseconds: 400));
+      await tester.enterText(find.byKey(const Key('to_input')), 'Shoprite');
+      await tester.pump(const Duration(milliseconds: 400));
 
-    expect(placesService.queriedOriginLats, contains(-33.92));
-    expect(placesService.queriedOriginLngs, contains(18.42));
-  });
+      expect(placesService.queriedOriginLats, contains(-33.92));
+      expect(placesService.queriedOriginLngs, contains(18.42));
+    },
+  );
 
-  testWidgets('shows a loading indicator while suggestions are being fetched',
-      (tester) async {
+  testWidgets('shows a loading indicator while suggestions are being fetched', (
+    tester,
+  ) async {
     final pending = Completer<void>();
     placesService.pendingSearch = pending;
     placesService.nextResults = _shopriteSuggestions;
-    await pumpScreen(tester, controller: controller, placesService: placesService);
+    await pumpScreen(
+      tester,
+      controller: controller,
+      placesService: placesService,
+    );
 
     await tester.enterText(find.byKey(const Key('to_input')), 'Shoprite');
     await tester.pump(const Duration(milliseconds: 300));
@@ -218,10 +266,15 @@ void main() {
     expect(find.text('Shoprite Mandalay'), findsOneWidget);
   });
 
-  testWidgets('shows a friendly empty state when no places match the query',
-      (tester) async {
+  testWidgets('shows a friendly empty state when no places match the query', (
+    tester,
+  ) async {
     placesService.nextResults = const [];
-    await pumpScreen(tester, controller: controller, placesService: placesService);
+    await pumpScreen(
+      tester,
+      controller: controller,
+      placesService: placesService,
+    );
 
     await tester.enterText(find.byKey(const Key('to_input')), 'Zzzzzzz');
     await tester.pump(const Duration(milliseconds: 400));
@@ -231,9 +284,14 @@ void main() {
     expect(find.textContaining('No matching locations'), findsOneWidget);
   });
 
-  testWidgets('passenger stepper defaults to 1 and clamps between 1 and 6',
-      (tester) async {
-    await pumpScreen(tester, controller: controller, placesService: placesService);
+  testWidgets('passenger stepper defaults to 1 and clamps between 1 and 6', (
+    tester,
+  ) async {
+    await pumpScreen(
+      tester,
+      controller: controller,
+      placesService: placesService,
+    );
 
     expect(find.text('1'), findsOneWidget);
 
@@ -255,9 +313,7 @@ void main() {
   testWidgets('close button pops the screen', (tester) async {
     await tester.pumpWidget(
       const ProviderScope(
-        child: MaterialApp(
-          home: Scaffold(body: Text('Home')),
-        ),
+        child: MaterialApp(home: Scaffold(body: Text('Home'))),
       ),
     );
 
@@ -284,25 +340,87 @@ void main() {
   });
 
   testWidgets(
-      'continue button is disabled until both fields are set, then opens the fare offer screen',
-      (tester) async {
-    await pumpScreen(tester, controller: controller, placesService: placesService);
+    'panel height stays fixed as suggestions load, populate, empty out, and clear',
+    (tester) async {
+      final pending = Completer<void>();
+      placesService.pendingSearch = pending;
+      placesService.nextResults = _shopriteSuggestions;
+      await pumpScreen(
+        tester,
+        controller: controller,
+        placesService: placesService,
+      );
 
-    final continueButtonFinder = find.byKey(const Key('continue_button'));
-    ElevatedButton continueButton() =>
-        tester.widget<ElevatedButton>(continueButtonFinder);
+      final Size initialSize = tester.getSize(
+        find.byType(DestinationEditorPanel),
+      );
 
-    expect(continueButton().onPressed, isNull);
+      // Typing enough to trigger a search (loading state) must not resize
+      // the panel.
+      await tester.enterText(find.byKey(const Key('to_input')), 'Shop');
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(const Key('suggestions_loading')), findsOneWidget);
+      expect(tester.getSize(find.byType(DestinationEditorPanel)), initialSize);
 
-    await tester.enterText(find.byKey(const Key('from_input')), 'Tennyson St 31');
-    await tester.enterText(find.byKey(const Key('to_input')), 'Shoprite Mandalay');
-    await tester.pump();
+      // Results arriving must not resize the panel either.
+      pending.complete();
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Shoprite Mandalay'), findsOneWidget);
+      expect(tester.getSize(find.byType(DestinationEditorPanel)), initialSize);
 
-    expect(continueButton().onPressed, isNotNull);
+      // An empty-result search keeps the same fixed height.
+      placesService.nextResults = const [];
+      await tester.enterText(find.byKey(const Key('to_input')), 'Zzzzzzz');
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byKey(const Key('suggestions_empty_state')), findsOneWidget);
+      expect(tester.getSize(find.byType(DestinationEditorPanel)), initialSize);
 
-    await tester.tap(continueButtonFinder);
-    await tester.pumpAndSettle();
+      // Clearing the field back to empty must keep the panel expanded at the
+      // same height rather than collapsing back toward the passenger
+      // selector.
+      await tester.enterText(find.byKey(const Key('to_input')), '');
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byKey(const Key('suggestions_empty_state')), findsNothing);
+      expect(
+        find.byKey(const Key('destination_suggestions_list')),
+        findsNothing,
+      );
+      expect(tester.getSize(find.byType(DestinationEditorPanel)), initialSize);
+    },
+  );
 
-    expect(find.text('Fare Offer Screen'), findsOneWidget);
-  });
+  testWidgets(
+    'continue button is disabled until both fields are set, then opens the fare offer screen',
+    (tester) async {
+      await pumpScreen(
+        tester,
+        controller: controller,
+        placesService: placesService,
+      );
+
+      final continueButtonFinder = find.byKey(const Key('continue_button'));
+      ElevatedButton continueButton() =>
+          tester.widget<ElevatedButton>(continueButtonFinder);
+
+      expect(continueButton().onPressed, isNull);
+
+      await tester.enterText(
+        find.byKey(const Key('from_input')),
+        'Tennyson St 31',
+      );
+      await tester.enterText(
+        find.byKey(const Key('to_input')),
+        'Shoprite Mandalay',
+      );
+      await tester.pump();
+
+      expect(continueButton().onPressed, isNotNull);
+
+      await tester.tap(continueButtonFinder);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Fare Offer Screen'), findsOneWidget);
+    },
+  );
 }
