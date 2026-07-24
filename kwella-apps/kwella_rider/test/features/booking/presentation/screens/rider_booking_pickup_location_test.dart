@@ -4,6 +4,14 @@ import 'package:geolocator/geolocator.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/rider_booking_screen.dart';
 import 'package:kwella_rider/features/location/services/kwella_location_service.dart';
+import 'package:kwella_rider/features/location/services/places_autocomplete_service.dart';
+
+class _FakePlacesAutocompleteService extends PlacesAutocompleteService {
+  _FakePlacesAutocompleteService() : super(apiKey: 'test-key');
+
+  @override
+  Future<List<PlaceSuggestion>> searchPlaces(String query) async => const [];
+}
 
 class _FakeLocationService extends KwellaLocationService {
   _FakeLocationService() : super.forTesting();
@@ -72,29 +80,23 @@ void main() {
       final controller = KwellaRiderController(locationService: fakeService);
 
       await tester.pumpWidget(
-        MaterialApp(home: RiderBookingScreen(controller: controller)),
+        MaterialApp(
+          home: RiderBookingScreen(
+            controller: controller,
+            placesService: _FakePlacesAutocompleteService(),
+          ),
+        ),
       );
       await tester.pumpAndSettle();
 
       expect(find.text('Set your pickup point'), findsOneWidget);
 
-      // The rider can still tap through to set a pickup point manually via
-      // the destination selection screen.
-      await tester.pumpWidget(
-        MaterialApp(
-          routes: {
-            '/rider/destination': (_) =>
-                const Scaffold(body: Text('Destination Screen')),
-          },
-          home: RiderBookingScreen(controller: controller),
-        ),
-      );
-      await tester.pumpAndSettle();
-
+      // The rider can still tap through to set a pickup point manually — the
+      // destination editor now expands inline rather than navigating away.
       await tester.tap(find.byKey(const Key('pickup_pill')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Destination Screen'), findsOneWidget);
+      expect(find.byKey(const Key('from_input')), findsOneWidget);
 
       controller.dispose();
     },

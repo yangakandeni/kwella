@@ -3,6 +3,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/rider_trip_state.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/rider_booking_screen.dart';
+import 'package:kwella_rider/features/location/services/places_autocomplete_service.dart';
+
+class _FakePlacesAutocompleteService extends PlacesAutocompleteService {
+  _FakePlacesAutocompleteService() : super(apiKey: 'test-key');
+
+  @override
+  Future<List<PlaceSuggestion>> searchPlaces(String query) async => const [];
+}
 
 void main() {
   testWidgets(
@@ -25,51 +33,122 @@ void main() {
   );
 
   testWidgets(
-    'tapping the search bar navigates to the destination selection screen',
+    'tapping the search bar expands the destination editor inline, without pushing a new route',
     (WidgetTester tester) async {
       final controller = KwellaRiderController();
 
       await tester.pumpWidget(
         MaterialApp(
-          routes: {
-            '/rider/destination': (_) =>
-                const Scaffold(body: Text('Destination Screen')),
-          },
-          home: RiderBookingScreen(controller: controller),
+          home: RiderBookingScreen(
+            controller: controller,
+            placesService: _FakePlacesAutocompleteService(),
+          ),
         ),
       );
+
+      expect(find.byKey(const Key('from_input')), findsNothing);
 
       await tester.tap(find.byKey(const Key('search_bar')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Destination Screen'), findsOneWidget);
+      // Same screen, same Scaffold — just an in-place expansion.
+      expect(find.byType(Scaffold), findsOneWidget);
+      expect(find.byKey(const Key('from_input')), findsOneWidget);
+      expect(find.byKey(const Key('to_input')), findsOneWidget);
+      expect(find.byKey(const Key('search_bar')), findsNothing);
 
       controller.dispose();
     },
   );
 
   testWidgets(
-    'tapping a quick destination navigates to the destination screen with it pre-filled',
+    'tapping a quick destination expands the panel with it pre-filled',
     (WidgetTester tester) async {
       final controller = KwellaRiderController();
 
       await tester.pumpWidget(
         MaterialApp(
-          routes: {
-            '/rider/destination': (context) => Scaffold(
-                  body: Text(
-                    'Destination: ${ModalRoute.of(context)!.settings.arguments}',
-                  ),
-                ),
-          },
-          home: RiderBookingScreen(controller: controller),
+          home: RiderBookingScreen(
+            controller: controller,
+            placesService: _FakePlacesAutocompleteService(),
+          ),
         ),
       );
 
       await tester.tap(find.text('Zevenwacht Mall'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Destination: Zevenwacht Mall'), findsOneWidget);
+      expect(find.byKey(const Key('to_input')), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byKey(const Key('to_input'))).controller!.text,
+        equals('Zevenwacht Mall'),
+      );
+      expect(controller.state.dropoffLocation, equals('Zevenwacht Mall'));
+
+      controller.dispose();
+    },
+  );
+
+  testWidgets(
+    'closing the expanded panel preserves edits made to the pickup location',
+    (WidgetTester tester) async {
+      final controller = KwellaRiderController();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: RiderBookingScreen(
+            controller: controller,
+            placesService: _FakePlacesAutocompleteService(),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('search_bar')));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('from_input')),
+        'Updated Pickup Rd',
+      );
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('close_button')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('from_input')), findsNothing);
+      expect(find.byKey(const Key('search_bar')), findsOneWidget);
+      expect(controller.state.pickupLocation, equals('Updated Pickup Rd'));
+
+      controller.dispose();
+    },
+  );
+
+  testWidgets(
+    'tapping the scrim outside the panel collapses it back',
+    (WidgetTester tester) async {
+      final controller = KwellaRiderController();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: RiderBookingScreen(
+            controller: controller,
+            placesService: _FakePlacesAutocompleteService(),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('search_bar')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('destination_panel_scrim')), findsOneWidget);
+
+      // Tap a point in the dimmed area above the expanded panel rather than
+      // the widget's geometric center, which the tall panel itself covers.
+      await tester.tapAt(const Offset(700, 20));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('from_input')), findsNothing);
+      expect(find.byKey(const Key('search_bar')), findsOneWidget);
 
       controller.dispose();
     },

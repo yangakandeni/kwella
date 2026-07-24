@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../location/services/places_autocomplete_service.dart';
 import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
+import '../widgets/destination_editor_panel.dart';
 import '../widgets/driver_bid_card.dart';
 import '../widgets/kwella_map_view.dart';
 import '../widgets/location_input_field.dart';
@@ -48,9 +50,10 @@ extension _ServiceCategoryLabel on _ServiceCategory {
 }
 
 class RiderBookingScreen extends ConsumerStatefulWidget {
-  const RiderBookingScreen({super.key, this.controller});
+  const RiderBookingScreen({super.key, this.controller, this.placesService});
 
   final KwellaRiderController? controller;
+  final PlacesAutocompleteService? placesService;
 
   @override
   ConsumerState<RiderBookingScreen> createState() => _RiderBookingScreenState();
@@ -65,12 +68,15 @@ const List<String> _quickDestinations = [
 
 class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     with SingleTickerProviderStateMixin {
+  static const Duration _panelExpandDuration = Duration(milliseconds: 350);
+
   late final TextEditingController _pickupController;
   late final TextEditingController _dropoffController;
   late final AnimationController _sheetAnimCtrl;
   late final Animation<double> _sheetFade;
 
   _ServiceCategory _selectedCategory = _ServiceCategory.ride;
+  bool _isDestinationPanelExpanded = false;
 
   @override
   void initState() {
@@ -105,6 +111,14 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  void _expandDestinationPanel() {
+    setState(() => _isDestinationPanelExpanded = true);
+  }
+
+  void _collapseDestinationPanel() {
+    setState(() => _isDestinationPanelExpanded = false);
+  }
 
   Widget _buildLocationStatusBadge(RiderTripState state) {
     final DriverLocation? location = state.currentDriverLocation;
@@ -177,7 +191,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
         offset: const Offset(0, -56),
         child: GestureDetector(
           key: const Key('pickup_pill'),
-          onTap: () => Navigator.pushNamed(context, '/rider/destination'),
+          onTap: _expandDestinationPanel,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
@@ -251,7 +265,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
   Widget _buildSearchBar() {
     return GestureDetector(
       key: const Key('search_bar'),
-      onTap: () => Navigator.pushNamed(context, '/rider/destination'),
+      onTap: _expandDestinationPanel,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         decoration: BoxDecoration(
@@ -276,16 +290,15 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     );
   }
 
-  Widget _buildQuickDestinations() {
+  Widget _buildQuickDestinations(KwellaRiderController controller) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: _quickDestinations.map((destination) {
         return GestureDetector(
-          onTap: () => Navigator.pushNamed(
-            context,
-            '/rider/destination',
-            arguments: destination,
-          ),
+          onTap: () {
+            controller.updateDropoffLocation(destination);
+            _expandDestinationPanel();
+          },
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
             child: Row(
@@ -617,6 +630,8 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     // The collapsed search view only applies while idle — once a trip has
     // been requested, keep the full pickup/dropoff editor visible throughout.
     final bool sheetExpanded = state.status != RiderTripStatus.idle;
+    final bool showDestinationPanel =
+        !sheetExpanded && _isDestinationPanelExpanded;
 
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
@@ -630,7 +645,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
           if (state.status != RiderTripStatus.idle)
             _buildLocationStatusBadge(state),
           // ── Floating pickup point pill ───────────────────────────────
-          if (!sheetExpanded) _buildPickupPill(state),
+          if (!sheetExpanded && !showDestinationPanel) _buildPickupPill(state),
           // ── Top safe-area overlay (menu) ─────────────────────────────
           Positioned(
             top: 0,
@@ -702,6 +717,22 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
                 ),
               ),
             ),
+          // ── Scrim behind the expanded destination panel ──────────────
+          Positioned.fill(
+            child: IgnorePointer(
+              ignoring: !showDestinationPanel,
+              child: GestureDetector(
+                key: const Key('destination_panel_scrim'),
+                onTap: _collapseDestinationPanel,
+                child: AnimatedOpacity(
+                  opacity: showDestinationPanel ? 1 : 0,
+                  duration: _panelExpandDuration,
+                  curve: Curves.easeOutCubic,
+                  child: Container(color: const Color(0x8C000000)),
+                ),
+              ),
+            ),
+          ),
           // ── Bottom booking sheet ─────────────────────────────────────
           Positioned(
             left: 0,
@@ -710,36 +741,53 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
             child: FadeTransition(
               opacity: _sheetFade,
               child: Container(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.85,
+                ),
                 decoration: const BoxDecoration(
                   color: Color(0xFF1E1E1E),
                   borderRadius:
                       BorderRadius.vertical(top: Radius.circular(20)),
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Drag handle
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 12, bottom: 4),
-                        child: Container(
-                          width: 40,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF3C3C3C),
-                            borderRadius: BorderRadius.circular(2),
+                child: SingleChildScrollView(
+                  child: AnimatedSize(
+                    duration: _panelExpandDuration,
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.bottomCenter,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Drag handle
+                        Center(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 12, bottom: 4),
+                            child: Container(
+                              width: 40,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF3C3C3C),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+                          child: sheetExpanded
+                              ? _buildExpandedEditor(context, controller, state)
+                              : showDestinationPanel
+                                  ? DestinationEditorPanel(
+                                      controller: controller,
+                                      state: state,
+                                      onClose: _collapseDestinationPanel,
+                                      placesService: widget.placesService,
+                                    )
+                                  : _buildCollapsedSheet(controller),
+                        ),
+                      ],
                     ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-                      child: sheetExpanded
-                          ? _buildExpandedEditor(context, controller, state)
-                          : _buildCollapsedSheet(),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -749,13 +797,13 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     );
   }
 
-  Widget _buildCollapsedSheet() {
+  Widget _buildCollapsedSheet(KwellaRiderController controller) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildSearchBar(),
         const SizedBox(height: 8),
-        _buildQuickDestinations(),
+        _buildQuickDestinations(controller),
       ],
     );
   }
@@ -805,13 +853,10 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
-                              Text(
-                                '${state.passengerCount} pax',
-                                style: const TextStyle(
-                                  color: Color(0xFFDFFF00),
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                              const Icon(
+                                Icons.person_rounded,
+                                color: Color(0xFFDFFF00),
+                                size: 18,
                               ),
                             ],
                           ),
