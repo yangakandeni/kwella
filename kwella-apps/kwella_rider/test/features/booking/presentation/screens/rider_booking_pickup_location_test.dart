@@ -78,11 +78,23 @@ void main() {
 
       expect(find.text('Set your pickup point'), findsOneWidget);
 
-      // The rider can still tap through to set a pickup point manually.
+      // The rider can still tap through to set a pickup point manually via
+      // the destination selection screen.
+      await tester.pumpWidget(
+        MaterialApp(
+          routes: {
+            '/rider/destination': (_) =>
+                const Scaffold(body: Text('Destination Screen')),
+          },
+          home: RiderBookingScreen(controller: controller),
+        ),
+      );
+      await tester.pumpAndSettle();
+
       await tester.tap(find.byKey(const Key('pickup_pill')));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('pickup_input')), findsOneWidget);
+      expect(find.text('Destination Screen'), findsOneWidget);
 
       controller.dispose();
     },

@@ -5,6 +5,7 @@ import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
 import '../widgets/driver_bid_card.dart';
 import '../widgets/kwella_map_view.dart';
+import '../widgets/location_input_field.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RiderBookingScreen — v2 Electric Lime Dark Mode
@@ -70,10 +71,6 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
   late final Animation<double> _sheetFade;
 
   _ServiceCategory _selectedCategory = _ServiceCategory.ride;
-
-  // Whether the booking sheet shows the full pickup/dropoff editor rather
-  // than the collapsed search-bar + quick-destinations view.
-  bool _sheetExpanded = false;
 
   @override
   void initState() {
@@ -154,70 +151,6 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     }
   }
 
-  Widget _buildLocationField({
-    required String label,
-    required TextEditingController controller,
-    required Key fieldKey,
-    required ValueChanged<String> onChanged,
-    required IconData prefixIcon,
-    required Color dotColor,
-    bool isLoading = false,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF242424),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF2C2C2C)),
-      ),
-      child: Row(
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 14),
-            child: Icon(prefixIcon, color: dotColor, size: 18),
-          ),
-          Expanded(
-            child: TextField(
-              key: fieldKey,
-              controller: controller,
-              onChanged: onChanged,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-              ),
-              decoration: InputDecoration(
-                hintText: isLoading ? 'Locating your position…' : label,
-                hintStyle: const TextStyle(
-                  color: Color(0xFF606060),
-                  fontSize: 14,
-                ),
-                border: InputBorder.none,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-                filled: false,
-              ),
-            ),
-          ),
-          if (isLoading)
-            const Padding(
-              padding: EdgeInsets.only(right: 14),
-              child: SizedBox(
-                width: 14,
-                height: 14,
-                child: TickerMode(
-                  enabled: false,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Color(0xFFDFFF00),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildHamburgerButton() {
     return GestureDetector(
       key: const Key('menu_button'),
@@ -244,7 +177,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
         offset: const Offset(0, -56),
         child: GestureDetector(
           key: const Key('pickup_pill'),
-          onTap: () => setState(() => _sheetExpanded = true),
+          onTap: () => Navigator.pushNamed(context, '/rider/destination'),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
@@ -318,7 +251,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
   Widget _buildSearchBar() {
     return GestureDetector(
       key: const Key('search_bar'),
-      onTap: () => setState(() => _sheetExpanded = true),
+      onTap: () => Navigator.pushNamed(context, '/rider/destination'),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         decoration: BoxDecoration(
@@ -343,15 +276,16 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     );
   }
 
-  Widget _buildQuickDestinations(KwellaRiderController controller) {
+  Widget _buildQuickDestinations() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: _quickDestinations.map((destination) {
         return GestureDetector(
-          onTap: () {
-            controller.updateDropoffLocation(destination);
-            setState(() => _sheetExpanded = true);
-          },
+          onTap: () => Navigator.pushNamed(
+            context,
+            '/rider/destination',
+            arguments: destination,
+          ),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
             child: Row(
@@ -680,10 +614,9 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
 
     final bool showBids = state.status == RiderTripStatus.biddingOpen;
 
-    // Once a trip has been requested the collapsed search view no longer
-    // applies — keep the full pickup/dropoff editor visible throughout.
-    final bool sheetExpanded =
-        _sheetExpanded || state.status != RiderTripStatus.idle;
+    // The collapsed search view only applies while idle — once a trip has
+    // been requested, keep the full pickup/dropoff editor visible throughout.
+    final bool sheetExpanded = state.status != RiderTripStatus.idle;
 
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
@@ -694,10 +627,11 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
             child: KwellaMapView(driverLocation: state.currentDriverLocation),
           ),
           // ── Live status badge ────────────────────────────────────────
-          _buildLocationStatusBadge(state),
+          if (state.status != RiderTripStatus.idle)
+            _buildLocationStatusBadge(state),
           // ── Floating pickup point pill ───────────────────────────────
           if (!sheetExpanded) _buildPickupPill(state),
-          // ── Top safe-area overlay (profile + notifications) ──────────
+          // ── Top safe-area overlay (menu) ─────────────────────────────
           Positioned(
             top: 0,
             left: 0,
@@ -707,32 +641,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
                 padding:
                     const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                 child: Row(
-                  children: [
-                    _buildHamburgerButton(),
-                    const Spacer(),
-                    // Profile avatar
-                    GestureDetector(
-                      onTap: () =>
-                          Navigator.pushNamed(context, '/rider/profile'),
-                      child: Container(
-                        key: const Key('profile_avatar'),
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1E1E1E),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: const Color(0xFF2C2C2C),
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.person_rounded,
-                          color: Color(0xFFA0A0A0),
-                          size: 22,
-                        ),
-                      ),
-                    ),
-                  ],
+                  children: [_buildHamburgerButton()],
                 ),
               ),
             ),
@@ -828,7 +737,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
                       padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
                       child: sheetExpanded
                           ? _buildExpandedEditor(context, controller, state)
-                          : _buildCollapsedSheet(controller),
+                          : _buildCollapsedSheet(),
                     ),
                   ],
                 ),
@@ -840,13 +749,13 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     );
   }
 
-  Widget _buildCollapsedSheet(KwellaRiderController controller) {
+  Widget _buildCollapsedSheet() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildSearchBar(),
         const SizedBox(height: 8),
-        _buildQuickDestinations(controller),
+        _buildQuickDestinations(),
       ],
     );
   }
@@ -856,42 +765,14 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     KwellaRiderController controller,
     RiderTripState state,
   ) {
-    final bool canCollapse = state.status == RiderTripStatus.idle;
     return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          if (canCollapse)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: GestureDetector(
-                                key: const Key('collapse_sheet_button'),
-                                onTap: () =>
-                                    setState(() => _sheetExpanded = false),
-                                child: Row(
-                                  children: const [
-                                    Icon(
-                                      Icons.keyboard_arrow_down_rounded,
-                                      color: Color(0xFFA0A0A0),
-                                      size: 20,
-                                    ),
-                                    SizedBox(width: 6),
-                                    Text(
-                                      'Back',
-                                      style: TextStyle(
-                                        color: Color(0xFFA0A0A0),
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
                           // ── Service category chips ─────────────────
                           _buildServiceCategoryRow(),
                           const SizedBox(height: 16),
                           // ── Location inputs ────────────────────────
-                          _buildLocationField(
+                          LocationInputField(
                             label: 'Pickup location',
                             controller: _pickupController,
                             fieldKey: const Key('pickup_input'),
@@ -902,7 +783,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
                                 PickupLocationStatus.loading,
                           ),
                           const SizedBox(height: 10),
-                          _buildLocationField(
+                          LocationInputField(
                             label: 'Where to?',
                             controller: _dropoffController,
                             fieldKey: const Key('dropoff_input'),
