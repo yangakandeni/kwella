@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../location/services/places_autocomplete_service.dart';
+import '../../../location/utils/location_display_formatter.dart';
 import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
 import '../widgets/destination_editor_panel.dart';
@@ -185,76 +186,90 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     final bool isLoading =
         state.pickupLocationStatus == PickupLocationStatus.loading;
     final bool hasPickup = state.pickupLocation.isNotEmpty;
+    final String displayLabel = isLoading
+        ? 'Locating you…'
+        : hasPickup
+            ? formatLocationLabel(state.pickupLocation)
+            : 'Set your pickup point';
     return Align(
       alignment: Alignment.center,
       child: Transform.translate(
         offset: const Offset(0, -56),
-        child: GestureDetector(
-          key: const Key('pickup_pill'),
-          onTap: _expandDestinationPanel,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A1A1A),
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x40000000),
-                  blurRadius: 10,
-                  offset: Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Pickup point',
-                      style: TextStyle(
-                        color: Color(0xFFA0A0A0),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    Text(
-                      key: const Key('pickup_pill_label'),
-                      isLoading
-                          ? 'Locating you…'
-                          : hasPickup
-                              ? state.pickupLocation
-                              : 'Set your pickup point',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 10),
-                if (isLoading)
-                  const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: TickerMode(
-                      enabled: false,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Color(0xFFDFFF00),
-                      ),
-                    ),
-                  )
-                else
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    color: Color(0xFFA0A0A0),
-                    size: 20,
+        // Caps the pill's width so a long address wraps/truncates instead of
+        // pushing the card wider — the Row/Column below are all
+        // MainAxisSize.min and would otherwise hug however wide the label is.
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.7,
+          ),
+          child: GestureDetector(
+            key: const Key('pickup_pill'),
+            onTap: _expandDestinationPanel,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x40000000),
+                    blurRadius: 10,
+                    offset: Offset(0, 4),
                   ),
-              ],
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'Pickup point',
+                          style: TextStyle(
+                            color: Color(0xFFA0A0A0),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        Text(
+                          key: const Key('pickup_pill_label'),
+                          displayLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  if (isLoading)
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: TickerMode(
+                        enabled: false,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Color(0xFFDFFF00),
+                        ),
+                      ),
+                    )
+                  else
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      color: Color(0xFFA0A0A0),
+                      size: 20,
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -750,6 +765,13 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
                       BorderRadius.vertical(top: Radius.circular(20)),
                 ),
                 child: SingleChildScrollView(
+                  // The destination panel manages its own fixed height and
+                  // internal suggestions scroll — letting this outer view
+                  // scroll too fights it for drag gestures and makes the
+                  // whole panel shift while browsing results.
+                  physics: showDestinationPanel
+                      ? const NeverScrollableScrollPhysics()
+                      : null,
                   child: AnimatedSize(
                     duration: _panelExpandDuration,
                     curve: Curves.easeOutCubic,

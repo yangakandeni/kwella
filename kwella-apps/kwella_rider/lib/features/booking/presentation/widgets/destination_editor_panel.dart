@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
 import '../../../location/services/places_autocomplete_service.dart';
+import 'autocomplete_suggestions_list.dart';
 import 'location_input_field.dart';
 import 'passenger_stepper.dart';
 
@@ -42,7 +43,7 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
 
   /// Fraction of the screen height the panel occupies once expanded. Fixed
   /// for the panel's whole lifetime so it never grows/shrinks as suggestions
-  /// come and go — only the reserved area's *contents* change.
+  /// come and go.
   static const double _panelHeightFraction = 0.72;
 
   late final TextEditingController _fromController;
@@ -54,12 +55,6 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
   bool _isLoadingSuggestions = false;
   String _lastSearchedQuery = '';
   Timer? _debounceTimer;
-
-  /// Once the rider starts editing either field, the reserved area below
-  /// switches from the passenger selector to the suggestions zone and stays
-  /// there — even if the field is cleared back to empty — for the rest of
-  /// this panel's lifetime, so clearing text never pops the layout back.
-  bool _hasActivatedSearch = false;
 
   @override
   void initState() {
@@ -88,7 +83,6 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
     final String trimmed = value.trim();
     if (trimmed.length < 3) {
       setState(() {
-        _hasActivatedSearch = true;
         _activeField = _ActiveField.none;
         _suggestions = const [];
         _isLoadingSuggestions = false;
@@ -98,7 +92,6 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
     }
 
     setState(() {
-      _hasActivatedSearch = true;
       _activeField = isPickup ? _ActiveField.from : _ActiveField.to;
     });
 
@@ -151,146 +144,6 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
     );
   }
 
-  String? _formatDistance(int? distanceMeters) {
-    if (distanceMeters == null) return null;
-    if (distanceMeters < 1000) return '$distanceMeters m';
-    return '${(distanceMeters / 1000).toStringAsFixed(1)} km';
-  }
-
-  // The reserved area below the fields is given a fixed height by the
-  // caller (see `_buildReservedArea`/`build`), so every branch here must
-  // avoid stretching to fill it — `Align` pins small states to the top and
-  // leaves the rest of the space blank instead of centering within it.
-  Widget _buildSuggestionsArea() {
-    if (_isLoadingSuggestions) {
-      return const Align(
-        alignment: Alignment.topCenter,
-        child: Padding(
-          key: Key('suggestions_loading'),
-          padding: EdgeInsets.symmetric(vertical: 16),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Color(0xFFDFFF00),
-                ),
-              ),
-              SizedBox(width: 12),
-              Text(
-                'Searching…',
-                style: TextStyle(color: Color(0xFF808080), fontSize: 13),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (_suggestions.isEmpty) {
-      if (_lastSearchedQuery.isEmpty) return const SizedBox.shrink();
-      return Align(
-        alignment: Alignment.topCenter,
-        child: Padding(
-          key: const Key('suggestions_empty_state'),
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.search_off_rounded,
-                color: Color(0xFF606060),
-                size: 18,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'No matching locations for "$_lastSearchedQuery". Try a different search.',
-                  style: const TextStyle(
-                    color: Color(0xFF808080),
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // Fills the reserved area (roughly 5-6 rows tall) and scrolls
-    // internally once there are more results than fit, rather than growing
-    // the panel.
-    return ListView.separated(
-      key: const Key('destination_suggestions_list'),
-      itemCount: _suggestions.length,
-      separatorBuilder: (_, _) =>
-          const Divider(height: 1, color: Color(0xFF2C2C2C)),
-      itemBuilder: (context, index) {
-        final PlaceSuggestion suggestion = _suggestions[index];
-        final String? distanceLabel = _formatDistance(
-          suggestion.distanceMeters,
-        );
-        return GestureDetector(
-          key: Key('suggestion_${suggestion.placeId}'),
-          behavior: HitTestBehavior.opaque,
-          onTap: () => _selectSuggestion(suggestion),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.location_on_outlined,
-                  color: Color(0xFF808080),
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        suggestion.mainText,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      if (suggestion.secondaryText.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: Text(
-                            suggestion.secondaryText,
-                            style: const TextStyle(
-                              color: Color(0xFF808080),
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                if (distanceLabel != null) ...[
-                  const SizedBox(width: 8),
-                  Text(
-                    distanceLabel,
-                    style: const TextStyle(
-                      color: Color(0xFF808080),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final RiderTripState state = widget.state;
@@ -307,9 +160,8 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
         state.pickupLocation.trim().isNotEmpty &&
         state.dropoffLocation.trim().isNotEmpty;
 
-    // Fixed for the panel's lifetime: only the reserved area's contents
-    // (below) change afterwards, so the panel itself never resizes once
-    // opened, regardless of loading/empty/populated suggestion states.
+    // Fixed for the panel's lifetime: the panel never resizes once opened,
+    // regardless of loading/empty/populated suggestion states.
     final double panelHeight =
         MediaQuery.of(context).size.height * _panelHeightFraction;
 
@@ -371,10 +223,19 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
             dotColor: const Color(0xFFFF5370),
           ),
           const SizedBox(height: 12),
-          // Reserved area: comfortably fits ~5-6 suggestion rows. Its
-          // *contents* swap between the passenger selector and the
-          // suggestions zone, but this slot's height never does.
-          Expanded(child: _buildReservedArea(state, controller)),
+          // Autocomplete results own only this slot — they can never hide
+          // or resize the passenger selector below, which stays visible
+          // throughout regardless of loading/empty/populated states.
+          Expanded(
+            child: AutocompleteSuggestionsList(
+              isLoading: _isLoadingSuggestions,
+              suggestions: _suggestions,
+              lastSearchedQuery: _lastSearchedQuery,
+              onSelect: _selectSuggestion,
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildPassengerSelectorSection(state, controller),
           const SizedBox(height: 16),
           SizedBox(
             height: 52,
@@ -404,45 +265,39 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
     );
   }
 
-  Widget _buildReservedArea(
+  Widget _buildPassengerSelectorSection(
     RiderTripState state,
     KwellaRiderController controller,
   ) {
-    if (!_hasActivatedSearch) {
-      return Align(
-        alignment: Alignment.topCenter,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Column(
+      key: const Key('passenger_selector_section'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Passengers',
-                  style: TextStyle(
-                    color: Color(0xFFA0A0A0),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const Icon(
-                  Icons.person_rounded,
-                  color: Color(0xFFDFFF00),
-                  size: 18,
-                ),
-              ],
+            const Text(
+              'Passengers',
+              style: TextStyle(
+                color: Color(0xFFA0A0A0),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
             ),
-            const SizedBox(height: 10),
-            PassengerStepper(
-              count: state.passengerCount,
-              onChanged: controller.setPassengerCount,
+            const Icon(
+              Icons.person_rounded,
+              color: Color(0xFFDFFF00),
+              size: 18,
             ),
           ],
         ),
-      );
-    }
-
-    return _buildSuggestionsArea();
+        const SizedBox(height: 10),
+        PassengerStepper(
+          count: state.passengerCount,
+          onChanged: controller.setPassengerCount,
+        ),
+      ],
+    );
   }
 }

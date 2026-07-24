@@ -67,6 +67,11 @@ class _DestinationSelectionScreenState
       backgroundColor: const Color(0xFF121212),
       body: SafeArea(
         child: SingleChildScrollView(
+          // DestinationEditorPanel is a fixed-height widget that scrolls its
+          // own suggestions list internally — this outer view existed only
+          // as an overflow safety net, and letting it scroll too fights the
+          // suggestions list for drag gestures.
+          physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
           child: DestinationEditorPanel(
             controller: controller,

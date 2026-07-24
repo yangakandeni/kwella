@@ -71,7 +71,11 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      expect(find.text('Long Street, Cape Town'), findsOneWidget);
+      // The Cape Town suffix is dropped from the display label — every trip
+      // is local, so it adds clutter (and, unformatted, was pushing the pill
+      // wider than intended) without adding information.
+      expect(find.text('Long Street'), findsOneWidget);
+      expect(find.text('Long Street, Cape Town'), findsNothing);
       expect(find.text('Locating you…'), findsNothing);
 
       controller.dispose();
