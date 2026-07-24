@@ -5,6 +5,7 @@ import '../../../location/services/places_autocomplete_service.dart';
 import '../../../location/utils/location_display_formatter.dart';
 import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
+import '../models/previous_destination.dart';
 import '../widgets/destination_editor_panel.dart';
 import '../widgets/driver_bid_card.dart';
 import '../widgets/kwella_map_view.dart';
@@ -51,30 +52,35 @@ extension _ServiceCategoryLabel on _ServiceCategory {
 }
 
 class RiderBookingScreen extends ConsumerStatefulWidget {
-  const RiderBookingScreen({super.key, this.controller, this.placesService});
+  const RiderBookingScreen({
+    super.key,
+    this.controller,
+    this.placesService,
+    this.previousDestinations = mockPreviousDestinations,
+  });
 
   final KwellaRiderController? controller;
   final PlacesAutocompleteService? placesService;
+  final List<PreviousDestination> previousDestinations;
 
   @override
   ConsumerState<RiderBookingScreen> createState() => _RiderBookingScreenState();
 }
 
-// Suggested nearby destinations shown in the collapsed booking sheet.
-const List<String> _quickDestinations = [
-  'Liberty Promenade',
-  'Zevenwacht Mall',
-  'Vangate Mall',
-];
-
 class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     with SingleTickerProviderStateMixin {
   static const Duration _panelExpandDuration = Duration(milliseconds: 350);
+
+  // Keeps the collapsed sheet's previous-destinations list compact: about
+  // six rows are visible at once, with the rest reachable by scrolling.
+  static const double _previousDestinationItemHeight = 40;
+  static const int _visiblePreviousDestinations = 5;
 
   late final TextEditingController _pickupController;
   late final TextEditingController _dropoffController;
   late final AnimationController _sheetAnimCtrl;
   late final Animation<double> _sheetFade;
+  late final ScrollController _previousDestinationsScrollController;
 
   _ServiceCategory _selectedCategory = _ServiceCategory.ride;
   bool _isDestinationPanelExpanded = false;
@@ -84,6 +90,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     super.initState();
     _pickupController = TextEditingController();
     _dropoffController = TextEditingController();
+    _previousDestinationsScrollController = ScrollController();
     _sheetAnimCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 400),
@@ -107,6 +114,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
   void dispose() {
     _pickupController.dispose();
     _dropoffController.dispose();
+    _previousDestinationsScrollController.dispose();
     _sheetAnimCtrl.dispose();
     super.dispose();
   }
@@ -306,37 +314,63 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
   }
 
   Widget _buildQuickDestinations(KwellaRiderController controller) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: _quickDestinations.map((destination) {
-        return GestureDetector(
-          onTap: () {
-            controller.updateDropoffLocation(destination);
-            _expandDestinationPanel();
+    final List<PreviousDestination> destinations = widget.previousDestinations;
+    final int visibleCount = destinations.length < _visiblePreviousDestinations
+        ? destinations.length
+        : _visiblePreviousDestinations;
+
+    return SizedBox(
+      height: _previousDestinationItemHeight * visibleCount,
+      child: Scrollbar(
+        controller: _previousDestinationsScrollController,
+        thumbVisibility: true,
+        child: ListView.builder(
+          key: const Key('previous_destinations_list'),
+          controller: _previousDestinationsScrollController,
+          physics: const ClampingScrollPhysics(),
+          itemExtent: _previousDestinationItemHeight,
+          itemCount: destinations.length,
+          itemBuilder: (context, index) {
+            final PreviousDestination destination = destinations[index];
+            return GestureDetector(
+              key: Key('previous_destination_${destination.placeId}'),
+              onTap: () {
+                controller.updateDropoffLocation(
+                  destination.description,
+                  lat: destination.lat,
+                  lng: destination.lng,
+                );
+                _expandDestinationPanel();
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.location_on_outlined,
+                      color: Color(0xFF808080),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        destination.shortName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
           },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.location_on_outlined,
-                  color: Color(0xFF808080),
-                  size: 18,
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  destination,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      }).toList(),
+        ),
+      ),
     );
   }
 
@@ -804,6 +838,8 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
                                       state: state,
                                       onClose: _collapseDestinationPanel,
                                       placesService: widget.placesService,
+                                      previousDestinations:
+                                          widget.previousDestinations,
                                     )
                                   : _buildCollapsedSheet(controller),
                         ),

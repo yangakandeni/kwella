@@ -121,8 +121,19 @@ class KwellaRiderController {
     );
   }
 
-  void updateDropoffLocation(String dropoffLocation) {
-    _emit(_state.copyWith(dropoffLocation: dropoffLocation));
+  /// Updates the dropoff point. [lat]/[lng] should be supplied when the rider
+  /// picked a Places suggestion with already-known coordinates (e.g. a
+  /// previous destination), so future routing/distance calculations don't
+  /// need a fresh Places lookup; free-text edits omit them and keep whatever
+  /// coordinate was last resolved.
+  void updateDropoffLocation(String dropoffLocation, {double? lat, double? lng}) {
+    _emit(
+      _state.copyWith(
+        dropoffLocation: dropoffLocation,
+        dropoffLat: lat,
+        dropoffLng: lng,
+      ),
+    );
   }
 
   void requestTrip() {

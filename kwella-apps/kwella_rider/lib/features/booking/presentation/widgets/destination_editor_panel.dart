@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
+import '../models/previous_destination.dart';
 import '../../../location/services/places_autocomplete_service.dart';
 import 'autocomplete_suggestions_list.dart';
 import 'location_input_field.dart';
@@ -27,12 +28,14 @@ class DestinationEditorPanel extends StatefulWidget {
     required this.state,
     required this.onClose,
     this.placesService,
+    this.previousDestinations = mockPreviousDestinations,
   });
 
   final KwellaRiderController controller;
   final RiderTripState state;
   final VoidCallback onClose;
   final PlacesAutocompleteService? placesService;
+  final List<PreviousDestination> previousDestinations;
 
   @override
   State<DestinationEditorPanel> createState() => _DestinationEditorPanelState();
@@ -62,6 +65,11 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
     _placesService = widget.placesService ?? PlacesAutocompleteService();
     _fromController = TextEditingController(text: widget.state.pickupLocation);
     _toController = TextEditingController(text: widget.state.dropoffLocation);
+    // Show previous destinations as the default suggestions on open, rather
+    // than an empty list, without touching the Places API.
+    _suggestions = widget.previousDestinations
+        .map((destination) => destination.toPlaceSuggestion())
+        .toList();
   }
 
   @override
@@ -126,7 +134,11 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
     });
 
     if (!isPickup) {
-      widget.controller.updateDropoffLocation(suggestion.description);
+      widget.controller.updateDropoffLocation(
+        suggestion.description,
+        lat: suggestion.lat,
+        lng: suggestion.lng,
+      );
       return;
     }
 

@@ -35,6 +35,8 @@ class RiderTripState {
   final double? pickupLat;
   final double? pickupLng;
   final String dropoffLocation;
+  final double? dropoffLat;
+  final double? dropoffLng;
   final String tripId;
   final List<Map<String, dynamic>> bidMetrics;
   final DriverLocation? currentDriverLocation;
@@ -48,6 +50,8 @@ class RiderTripState {
     this.pickupLat,
     this.pickupLng,
     this.dropoffLocation = '',
+    this.dropoffLat,
+    this.dropoffLng,
     this.tripId = '',
     this.bidMetrics = const [],
     this.currentDriverLocation,
@@ -64,6 +68,8 @@ class RiderTripState {
     double? pickupLat,
     double? pickupLng,
     String? dropoffLocation,
+    double? dropoffLat,
+    double? dropoffLng,
     String? tripId,
     List<Map<String, dynamic>>? bidMetrics,
     DriverLocation? currentDriverLocation,
@@ -77,6 +83,8 @@ class RiderTripState {
       pickupLat: pickupLat ?? this.pickupLat,
       pickupLng: pickupLng ?? this.pickupLng,
       dropoffLocation: dropoffLocation ?? this.dropoffLocation,
+      dropoffLat: dropoffLat ?? this.dropoffLat,
+      dropoffLng: dropoffLng ?? this.dropoffLng,
       tripId: tripId ?? this.tripId,
       bidMetrics: bidMetrics ?? this.bidMetrics,
       currentDriverLocation:

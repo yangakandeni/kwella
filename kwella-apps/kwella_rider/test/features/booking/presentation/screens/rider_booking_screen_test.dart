@@ -2,9 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/rider_trip_state.dart';
+import 'package:kwella_rider/features/booking/presentation/models/previous_destination.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/rider_booking_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/widgets/destination_editor_panel.dart';
 import 'package:kwella_rider/features/location/services/places_autocomplete_service.dart';
+
+const _previousDestinationsFixture = [
+  PreviousDestination(
+    placeId: 'previous-liberty-promenade',
+    shortName: 'Liberty Promenade',
+    description: 'Liberty Promenade, Mitchells Plain, Cape Town',
+    lat: -34.0555,
+    lng: 18.6288,
+  ),
+  PreviousDestination(
+    placeId: 'previous-zevenwacht-mall',
+    shortName: 'Zevenwacht Mall',
+    description: 'Zevenwacht Mall, Van Riebeeck Road, Kuils River',
+    lat: -33.9581,
+    lng: 18.6961,
+  ),
+];
 
 class _FakePlacesAutocompleteService extends PlacesAutocompleteService {
   _FakePlacesAutocompleteService() : super(apiKey: 'test-key');
@@ -68,36 +86,78 @@ void main() {
     },
   );
 
-  testWidgets(
-    'tapping a quick destination expands the panel with it pre-filled',
-    (WidgetTester tester) async {
-      final controller = KwellaRiderController();
+  group('previous destinations —', () {
+    testWidgets(
+      'tapping one expands the panel with its full address pre-filled, not just the short name',
+      (WidgetTester tester) async {
+        final controller = KwellaRiderController();
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: RiderBookingScreen(
-            controller: controller,
-            placesService: _FakePlacesAutocompleteService(),
+        await tester.pumpWidget(
+          MaterialApp(
+            home: RiderBookingScreen(
+              controller: controller,
+              placesService: _FakePlacesAutocompleteService(),
+              previousDestinations: _previousDestinationsFixture,
+            ),
           ),
-        ),
-      );
+        );
 
-      await tester.tap(find.text('Zevenwacht Mall'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.text('Zevenwacht Mall'));
+        await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('to_input')), findsOneWidget);
-      expect(
-        tester
-            .widget<TextField>(find.byKey(const Key('to_input')))
-            .controller!
-            .text,
-        equals('Zevenwacht Mall'),
-      );
-      expect(controller.state.dropoffLocation, equals('Zevenwacht Mall'));
+        expect(find.byKey(const Key('to_input')), findsOneWidget);
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('to_input')))
+              .controller!
+              .text,
+          equals('Zevenwacht Mall, Van Riebeeck Road, Kuils River'),
+        );
+        expect(
+          controller.state.dropoffLocation,
+          equals('Zevenwacht Mall, Van Riebeeck Road, Kuils River'),
+        );
+        expect(controller.state.dropoffLat, equals(-33.9581));
+        expect(controller.state.dropoffLng, equals(18.6961));
 
-      controller.dispose();
-    },
-  );
+        controller.dispose();
+      },
+    );
+
+    testWidgets(
+      'loads at least 10 mock destinations, showing about 6 at a time, with the rest reachable by scrolling',
+      (WidgetTester tester) async {
+        final controller = KwellaRiderController();
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: RiderBookingScreen(
+              controller: controller,
+              placesService: _FakePlacesAutocompleteService(),
+            ),
+          ),
+        );
+
+        expect(mockPreviousDestinations.length, greaterThanOrEqualTo(10));
+
+        final PreviousDestination lastDestination =
+            mockPreviousDestinations.last;
+        expect(find.text(mockPreviousDestinations.first.shortName),
+            findsOneWidget);
+        expect(find.text(lastDestination.shortName), findsNothing);
+
+        await tester.drag(
+          find.byKey(const Key('previous_destinations_list')),
+          const Offset(0, -2000),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text(lastDestination.shortName), findsOneWidget);
+
+        controller.dispose();
+      },
+    );
+  });
 
   testWidgets(
     'closing the expanded panel preserves edits made to the pickup location',

@@ -12,6 +12,8 @@ class PlaceSuggestion {
     required this.mainText,
     required this.secondaryText,
     this.distanceMeters,
+    this.lat,
+    this.lng,
   });
 
   final String placeId;
@@ -22,6 +24,13 @@ class PlaceSuggestion {
   /// Straight-line distance from the search origin, when one was supplied to
   /// [PlacesAutocompleteService.searchPlaces]. Null otherwise.
   final int? distanceMeters;
+
+  /// Known coordinates for this suggestion, when already resolved (e.g. a
+  /// previous destination). Null for fresh Places Autocomplete predictions,
+  /// which only carry a [placeId] until [PlacesAutocompleteService.getPlaceDetails]
+  /// resolves them.
+  final double? lat;
+  final double? lng;
 }
 
 /// Lat/lng of a resolved place, returned by

@@ -81,7 +81,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                         FadeTransition(
                           opacity: _fade,
                           child: const Text(
-                            'Let\'s GO.',
+                            'Let\'s GO',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               color: Color(0xFFA0A0A0),

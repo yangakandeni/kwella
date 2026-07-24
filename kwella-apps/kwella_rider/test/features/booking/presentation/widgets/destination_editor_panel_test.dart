@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/rider_trip_state.dart';
+import 'package:kwella_rider/features/booking/presentation/models/previous_destination.dart';
 import 'package:kwella_rider/features/booking/presentation/widgets/destination_editor_panel.dart';
 import 'package:kwella_rider/features/location/services/places_autocomplete_service.dart';
 
@@ -21,6 +22,7 @@ class _FakePlacesAutocompleteService extends PlacesAutocompleteService {
 
   List<PlaceSuggestion> nextResults = const [];
   Completer<void>? pendingSearch;
+  int searchCallCount = 0;
 
   @override
   Future<List<PlaceSuggestion>> searchPlaces(
@@ -28,12 +30,30 @@ class _FakePlacesAutocompleteService extends PlacesAutocompleteService {
     double? originLat,
     double? originLng,
   }) async {
+    searchCallCount++;
     if (pendingSearch != null) {
       await pendingSearch!.future;
     }
     return nextResults;
   }
 }
+
+const _previousDestinationsFixture = [
+  PreviousDestination(
+    placeId: 'previous-liberty-promenade',
+    shortName: 'Liberty Promenade',
+    description: 'Liberty Promenade, Mitchells Plain, Cape Town',
+    lat: -34.0555,
+    lng: 18.6288,
+  ),
+  PreviousDestination(
+    placeId: 'previous-zevenwacht-mall',
+    shortName: 'Zevenwacht Mall',
+    description: 'Zevenwacht Mall, Van Riebeeck Road, Kuils River',
+    lat: -33.9581,
+    lng: 18.6961,
+  ),
+];
 
 const _shopriteSuggestions = [
   PlaceSuggestion(
@@ -54,6 +74,7 @@ Future<void> pumpPanel(
   WidgetTester tester, {
   required KwellaRiderController controller,
   required PlacesAutocompleteService placesService,
+  List<PreviousDestination> previousDestinations = _previousDestinationsFixture,
 }) {
   return tester.pumpWidget(
     MaterialApp(
@@ -67,6 +88,7 @@ Future<void> pumpPanel(
               state: snapshot.data ?? controller.state,
               onClose: () {},
               placesService: placesService,
+              previousDestinations: previousDestinations,
             );
           },
         ),
@@ -107,7 +129,108 @@ void main() {
 
         expectCoreControlsVisible();
         expect(find.text('1'), findsOneWidget); // default passenger count
+      },
+    );
+  });
+
+  group('previous destinations —', () {
+    testWidgets(
+      'are shown immediately as the default suggestions, without calling the Places API',
+      (tester) async {
+        await pumpPanel(
+          tester,
+          controller: controller,
+          placesService: placesService,
+        );
+
+        expect(find.byKey(const Key('destination_suggestions_list')), findsOneWidget);
+        expect(find.text('Liberty Promenade'), findsOneWidget);
+        expect(find.text('Zevenwacht Mall'), findsOneWidget);
+        expect(placesService.searchCallCount, equals(0));
+        expectCoreControlsVisible();
+      },
+    );
+
+    testWidgets(
+      'selecting one fills the destination field with its full address and coordinates, exactly like a live autocomplete pick',
+      (tester) async {
+        await pumpPanel(
+          tester,
+          controller: controller,
+          placesService: placesService,
+        );
+
+        await tester.tap(find.text('Zevenwacht Mall'));
+        await tester.pump();
+
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('to_input')))
+              .controller!
+              .text,
+          equals('Zevenwacht Mall, Van Riebeeck Road, Kuils River'),
+        );
+        expect(
+          controller.state.dropoffLocation,
+          equals('Zevenwacht Mall, Van Riebeeck Road, Kuils River'),
+        );
+        expect(controller.state.dropoffLat, equals(-33.9581));
+        expect(controller.state.dropoffLng, equals(18.6961));
+        expect(placesService.searchCallCount, equals(0));
         expect(find.byKey(const Key('destination_suggestions_list')), findsNothing);
+        expectCoreControlsVisible();
+      },
+    );
+
+    testWidgets(
+      'typing afterwards still triggers a live Places search',
+      (tester) async {
+        placesService.nextResults = _shopriteSuggestions;
+        await pumpPanel(
+          tester,
+          controller: controller,
+          placesService: placesService,
+        );
+
+        await tester.enterText(find.byKey(const Key('to_input')), 'Shoprite');
+        await tester.pump(const Duration(milliseconds: 400));
+
+        expect(find.text('Shoprite Mandalay'), findsOneWidget);
+        expect(placesService.searchCallCount, greaterThan(0));
+        expectCoreControlsVisible();
+      },
+    );
+
+    testWidgets(
+      'scrolls through a long list of previous destinations to reach the last one',
+      (tester) async {
+        final manyDestinations = List<PreviousDestination>.generate(
+          20,
+          (i) => PreviousDestination(
+            placeId: 'previous-$i',
+            shortName: 'Destination $i',
+            description: 'Destination $i, Cape Town',
+            lat: -33.9 + i * 0.001,
+            lng: 18.5 + i * 0.001,
+          ),
+        );
+
+        await pumpPanel(
+          tester,
+          controller: controller,
+          placesService: placesService,
+          previousDestinations: manyDestinations,
+        );
+
+        expect(find.text('Destination 19'), findsNothing);
+
+        await tester.drag(
+          find.byKey(const Key('destination_suggestions_list')),
+          const Offset(0, -3000),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Destination 19'), findsOneWidget);
       },
     );
   });
