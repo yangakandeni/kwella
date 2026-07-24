@@ -65,11 +65,17 @@ class KwellaRiderController {
     _emit(_state.copyWith(passengerCount: count));
   }
 
-  void updatePickupLocation(String pickupLocation) {
+  /// Updates the pickup point. [lat]/[lng] should be supplied when the rider
+  /// picked a Places suggestion, so later autocomplete lookups (for either
+  /// field) can bias their results toward this coordinate; free-text edits
+  /// omit them and keep whatever coordinate was last resolved.
+  void updatePickupLocation(String pickupLocation, {double? lat, double? lng}) {
     _emit(
       _state.copyWith(
         pickupLocation: pickupLocation,
         pickupLocationStatus: PickupLocationStatus.resolved,
+        pickupLat: lat,
+        pickupLng: lng,
       ),
     );
   }
@@ -109,6 +115,8 @@ class KwellaRiderController {
       _state.copyWith(
         pickupLocation: label,
         pickupLocationStatus: PickupLocationStatus.resolved,
+        pickupLat: position.latitude,
+        pickupLng: position.longitude,
       ),
     );
   }

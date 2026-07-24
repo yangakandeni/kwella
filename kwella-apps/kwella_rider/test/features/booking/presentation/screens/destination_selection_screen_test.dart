@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,12 +11,35 @@ class _FakePlacesAutocompleteService extends PlacesAutocompleteService {
   _FakePlacesAutocompleteService() : super(apiKey: 'test-key');
 
   List<PlaceSuggestion> nextResults = const [];
+  PlaceLocation? nextPlaceLocation;
   final List<String> queries = [];
+  final List<double?> queriedOriginLats = [];
+  final List<double?> queriedOriginLngs = [];
+  final List<String> detailsRequestedFor = [];
+
+  /// When set, [searchPlaces] awaits this instead of resolving immediately,
+  /// so tests can deterministically observe the in-flight loading state.
+  Completer<void>? pendingSearch;
 
   @override
-  Future<List<PlaceSuggestion>> searchPlaces(String query) async {
+  Future<List<PlaceSuggestion>> searchPlaces(
+    String query, {
+    double? originLat,
+    double? originLng,
+  }) async {
     queries.add(query);
+    queriedOriginLats.add(originLat);
+    queriedOriginLngs.add(originLng);
+    if (pendingSearch != null) {
+      await pendingSearch!.future;
+    }
     return nextResults;
+  }
+
+  @override
+  Future<PlaceLocation?> getPlaceDetails(String placeId) async {
+    detailsRequestedFor.add(placeId);
+    return nextPlaceLocation;
   }
 }
 
@@ -133,6 +158,77 @@ void main() {
       equals('Shoprite Mandalay, Swartklip Road, Cape Town'),
     );
     expect(find.text('Shoprite Lentegeur'), findsNothing);
+  });
+
+  testWidgets(
+      'shows suggestions for the From field and resolves coordinates on selection',
+      (tester) async {
+    placesService.nextResults = _shopriteSuggestions;
+    placesService.nextPlaceLocation = const PlaceLocation(lat: -33.97, lng: 18.63);
+    await pumpScreen(tester, controller: controller, placesService: placesService);
+
+    await tester.enterText(find.byKey(const Key('from_input')), 'Shoprite');
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(placesService.queries, contains('Shoprite'));
+    expect(find.text('Shoprite Mandalay'), findsOneWidget);
+
+    await tester.tap(find.text('Shoprite Mandalay'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<TextField>(find.byKey(const Key('from_input'))).controller!.text,
+      equals('Shoprite Mandalay, Swartklip Road, Cape Town'),
+    );
+    expect(placesService.detailsRequestedFor, contains('place-1'));
+    expect(controller.state.pickupLat, equals(-33.97));
+    expect(controller.state.pickupLng, equals(18.63));
+  });
+
+  testWidgets('biases destination searches toward the resolved pickup coordinates',
+      (tester) async {
+    controller.updatePickupLocation('Long Street', lat: -33.92, lng: 18.42);
+    await pumpScreen(tester, controller: controller, placesService: placesService);
+
+    await tester.enterText(find.byKey(const Key('to_input')), 'Shoprite');
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(placesService.queriedOriginLats, contains(-33.92));
+    expect(placesService.queriedOriginLngs, contains(18.42));
+  });
+
+  testWidgets('shows a loading indicator while suggestions are being fetched',
+      (tester) async {
+    final pending = Completer<void>();
+    placesService.pendingSearch = pending;
+    placesService.nextResults = _shopriteSuggestions;
+    await pumpScreen(tester, controller: controller, placesService: placesService);
+
+    await tester.enterText(find.byKey(const Key('to_input')), 'Shoprite');
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byKey(const Key('suggestions_loading')), findsOneWidget);
+    expect(find.byKey(const Key('destination_suggestions_list')), findsNothing);
+
+    pending.complete();
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('suggestions_loading')), findsNothing);
+    expect(find.text('Shoprite Mandalay'), findsOneWidget);
+  });
+
+  testWidgets('shows a friendly empty state when no places match the query',
+      (tester) async {
+    placesService.nextResults = const [];
+    await pumpScreen(tester, controller: controller, placesService: placesService);
+
+    await tester.enterText(find.byKey(const Key('to_input')), 'Zzzzzzz');
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+
+    expect(find.byKey(const Key('suggestions_empty_state')), findsOneWidget);
+    expect(find.textContaining('No matching locations'), findsOneWidget);
   });
 
   testWidgets('passenger stepper defaults to 1 and clamps between 1 and 6',

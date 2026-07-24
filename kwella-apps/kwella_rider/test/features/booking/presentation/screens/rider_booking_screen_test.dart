@@ -9,7 +9,12 @@ class _FakePlacesAutocompleteService extends PlacesAutocompleteService {
   _FakePlacesAutocompleteService() : super(apiKey: 'test-key');
 
   @override
-  Future<List<PlaceSuggestion>> searchPlaces(String query) async => const [];
+  Future<List<PlaceSuggestion>> searchPlaces(
+    String query, {
+    double? originLat,
+    double? originLng,
+  }) async =>
+      const [];
 }
 
 void main() {

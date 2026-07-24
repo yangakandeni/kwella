@@ -122,5 +122,120 @@ void main() {
 
       expect(results, isEmpty);
     });
+
+    test(
+        'biases toward the supplied origin and sorts results nearest-first',
+        () async {
+      http.Request? capturedRequest;
+      final client = MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'status': 'OK',
+            'predictions': [
+              {
+                'place_id': 'place-far',
+                'description': 'Shoprite Blue Downs',
+                'distance_meters': 7400,
+              },
+              {
+                'place_id': 'place-near',
+                'description': 'Shoprite Mandalay',
+                'distance_meters': 1600,
+              },
+            ],
+          }),
+          200,
+        );
+      });
+      final service =
+          PlacesAutocompleteService(httpClient: client, apiKey: 'test-key');
+
+      final results = await service.searchPlaces(
+        'Shoprite',
+        originLat: -33.97,
+        originLng: 18.63,
+      );
+
+      expect(capturedRequest!.url.queryParameters['location'],
+          equals('-33.97,18.63'));
+      expect(capturedRequest!.url.queryParameters['origin'],
+          equals('-33.97,18.63'));
+      expect(capturedRequest!.url.queryParameters['radius'], isNotNull);
+
+      expect(results.map((r) => r.placeId), equals(['place-near', 'place-far']));
+      expect(results.first.distanceMeters, equals(1600));
+    });
+
+    test('omits location bias params when no origin is supplied', () async {
+      http.Request? capturedRequest;
+      final client = MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(jsonEncode({'status': 'OK', 'predictions': []}), 200);
+      });
+      final service =
+          PlacesAutocompleteService(httpClient: client, apiKey: 'test-key');
+
+      await service.searchPlaces('Shoprite');
+
+      expect(capturedRequest!.url.queryParameters.containsKey('location'), isFalse);
+      expect(capturedRequest!.url.queryParameters.containsKey('origin'), isFalse);
+    });
+  });
+
+  group('PlacesAutocompleteService.getPlaceDetails', () {
+    test('resolves the lat/lng of a place', () async {
+      http.Request? capturedRequest;
+      final client = MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'status': 'OK',
+            'result': {
+              'geometry': {
+                'location': {'lat': -33.97, 'lng': 18.63},
+              },
+            },
+          }),
+          200,
+        );
+      });
+      final service =
+          PlacesAutocompleteService(httpClient: client, apiKey: 'test-key');
+
+      final location = await service.getPlaceDetails('place-1');
+
+      expect(location, isNotNull);
+      expect(location!.lat, equals(-33.97));
+      expect(location.lng, equals(18.63));
+      expect(capturedRequest!.url.queryParameters['place_id'], equals('place-1'));
+    });
+
+    test('returns null and does not throw on failure', () async {
+      final client = MockClient((request) async {
+        throw Exception('network down');
+      });
+      final service =
+          PlacesAutocompleteService(httpClient: client, apiKey: 'test-key');
+
+      final location = await service.getPlaceDetails('place-1');
+
+      expect(location, isNull);
+    });
+
+    test('returns null without a network call when no API key is configured',
+        () async {
+      var callCount = 0;
+      final client = MockClient((request) async {
+        callCount++;
+        return http.Response('{}', 200);
+      });
+      final service = PlacesAutocompleteService(httpClient: client, apiKey: '');
+
+      final location = await service.getPlaceDetails('place-1');
+
+      expect(location, isNull);
+      expect(callCount, equals(0));
+    });
   });
 }

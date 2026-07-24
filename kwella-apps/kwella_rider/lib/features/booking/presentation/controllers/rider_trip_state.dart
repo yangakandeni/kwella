@@ -32,6 +32,8 @@ class RiderTripState {
   final int passengerCount;
   final String pickupLocation;
   final PickupLocationStatus pickupLocationStatus;
+  final double? pickupLat;
+  final double? pickupLng;
   final String dropoffLocation;
   final String tripId;
   final List<Map<String, dynamic>> bidMetrics;
@@ -43,6 +45,8 @@ class RiderTripState {
     this.passengerCount = 1,
     this.pickupLocation = '',
     this.pickupLocationStatus = PickupLocationStatus.loading,
+    this.pickupLat,
+    this.pickupLng,
     this.dropoffLocation = '',
     this.tripId = '',
     this.bidMetrics = const [],
@@ -57,6 +61,8 @@ class RiderTripState {
     int? passengerCount,
     String? pickupLocation,
     PickupLocationStatus? pickupLocationStatus,
+    double? pickupLat,
+    double? pickupLng,
     String? dropoffLocation,
     String? tripId,
     List<Map<String, dynamic>>? bidMetrics,
@@ -68,6 +74,8 @@ class RiderTripState {
       passengerCount: passengerCount ?? this.passengerCount,
       pickupLocation: pickupLocation ?? this.pickupLocation,
       pickupLocationStatus: pickupLocationStatus ?? this.pickupLocationStatus,
+      pickupLat: pickupLat ?? this.pickupLat,
+      pickupLng: pickupLng ?? this.pickupLng,
       dropoffLocation: dropoffLocation ?? this.dropoffLocation,
       tripId: tripId ?? this.tripId,
       bidMetrics: bidMetrics ?? this.bidMetrics,

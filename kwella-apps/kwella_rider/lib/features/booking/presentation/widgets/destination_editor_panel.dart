@@ -16,6 +16,9 @@ import 'passenger_stepper.dart';
 // latest RiderTripState snapshot.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Which location field, if any, currently owns the suggestions dropdown.
+enum _ActiveField { none, from, to }
+
 class DestinationEditorPanel extends StatefulWidget {
   const DestinationEditorPanel({
     super.key,
@@ -41,7 +44,10 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
   late final TextEditingController _toController;
   late final PlacesAutocompleteService _placesService;
 
+  _ActiveField _activeField = _ActiveField.none;
   List<PlaceSuggestion> _suggestions = const [];
+  bool _isLoadingSuggestions = false;
+  String _lastSearchedQuery = '';
   Timer? _debounceTimer;
 
   @override
@@ -60,26 +66,203 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
     super.dispose();
   }
 
-  void _onDropoffChanged(String value) {
-    widget.controller.updateDropoffLocation(value);
+  void _onFieldChanged(String value, {required bool isPickup}) {
+    if (isPickup) {
+      widget.controller.updatePickupLocation(value);
+    } else {
+      widget.controller.updateDropoffLocation(value);
+    }
+
     _debounceTimer?.cancel();
-    if (value.trim().length < 3) {
-      setState(() => _suggestions = const []);
+    final String trimmed = value.trim();
+    if (trimmed.length < 3) {
+      setState(() {
+        _activeField = _ActiveField.none;
+        _suggestions = const [];
+        _isLoadingSuggestions = false;
+        _lastSearchedQuery = '';
+      });
       return;
     }
+
+    setState(() {
+      _activeField = isPickup ? _ActiveField.from : _ActiveField.to;
+    });
+
     _debounceTimer = Timer(_debounceDelay, () async {
-      final List<PlaceSuggestion> results =
-          await _placesService.searchPlaces(value);
+      setState(() => _isLoadingSuggestions = true);
+      final List<PlaceSuggestion> results = await _placesService.searchPlaces(
+        trimmed,
+        originLat: widget.state.pickupLat,
+        originLng: widget.state.pickupLng,
+      );
       if (!mounted) return;
-      setState(() => _suggestions = results);
+      setState(() {
+        _suggestions = results;
+        _isLoadingSuggestions = false;
+        _lastSearchedQuery = trimmed;
+      });
     });
   }
 
-  void _selectSuggestion(PlaceSuggestion suggestion) {
-    _toController.text = suggestion.description;
-    widget.controller.updateDropoffLocation(suggestion.description);
+  Future<void> _selectSuggestion(PlaceSuggestion suggestion) async {
+    final bool isPickup = _activeField == _ActiveField.from;
+    final TextEditingController fieldController =
+        isPickup ? _fromController : _toController;
+
+    fieldController.text = suggestion.description;
     FocusScope.of(context).unfocus();
-    setState(() => _suggestions = const []);
+    setState(() {
+      _suggestions = const [];
+      _activeField = _ActiveField.none;
+      _lastSearchedQuery = '';
+    });
+
+    if (!isPickup) {
+      widget.controller.updateDropoffLocation(suggestion.description);
+      return;
+    }
+
+    // Resolve the picked pickup point's coordinates so subsequent Places
+    // lookups (for either field) can bias toward it.
+    widget.controller.updatePickupLocation(suggestion.description);
+    final PlaceLocation? location =
+        await _placesService.getPlaceDetails(suggestion.placeId);
+    if (!mounted || location == null) return;
+    widget.controller.updatePickupLocation(
+      suggestion.description,
+      lat: location.lat,
+      lng: location.lng,
+    );
+  }
+
+  String? _formatDistance(int? distanceMeters) {
+    if (distanceMeters == null) return null;
+    if (distanceMeters < 1000) return '$distanceMeters m';
+    return '${(distanceMeters / 1000).toStringAsFixed(1)} km';
+  }
+
+  Widget _buildSuggestionsArea() {
+    if (_isLoadingSuggestions) {
+      return const Padding(
+        key: Key('suggestions_loading'),
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Color(0xFFDFFF00),
+              ),
+            ),
+            SizedBox(width: 12),
+            Text(
+              'Searching…',
+              style: TextStyle(color: Color(0xFF808080), fontSize: 13),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_suggestions.isEmpty) {
+      if (_lastSearchedQuery.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        key: const Key('suggestions_empty_state'),
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.search_off_rounded,
+              color: Color(0xFF606060),
+              size: 18,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'No matching locations for "$_lastSearchedQuery". Try a different search.',
+                style: const TextStyle(color: Color(0xFF808080), fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 260),
+      child: ListView.separated(
+        key: const Key('destination_suggestions_list'),
+        shrinkWrap: true,
+        itemCount: _suggestions.length,
+        separatorBuilder: (_, _) => const Divider(
+          height: 1,
+          color: Color(0xFF2C2C2C),
+        ),
+        itemBuilder: (context, index) {
+          final PlaceSuggestion suggestion = _suggestions[index];
+          final String? distanceLabel =
+              _formatDistance(suggestion.distanceMeters);
+          return GestureDetector(
+            key: Key('suggestion_${suggestion.placeId}'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _selectSuggestion(suggestion),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.location_on_outlined,
+                    color: Color(0xFF808080),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          suggestion.mainText,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        if (suggestion.secondaryText.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              suggestion.secondaryText,
+                              style: const TextStyle(
+                                color: Color(0xFF808080),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (distanceLabel != null) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      distanceLabel,
+                      style: const TextStyle(
+                        color: Color(0xFF808080),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -96,110 +279,108 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
 
     final bool canContinue = state.pickupLocation.trim().isNotEmpty &&
         state.dropoffLocation.trim().isNotEmpty;
+    final bool showSuggestionsArea = _activeField != _ActiveField.none;
 
+    // NOTE: every branch below keeps the Column's children list the same
+    // length across rebuilds (toggling content via ternaries rather than
+    // inserting/removing items with `if`). The From/To fields are the same
+    // widget type at the same index each time; if the list's *shape* changed
+    // as suggestions appeared/disappeared, Flutter's unkeyed-list
+    // reconciliation could reassign an Element (and its focus/onChanged
+    // closure) to the wrong field.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'Enter your route',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            GestureDetector(
+              key: const Key('close_button'),
+              onTap: widget.onClose,
+              child: Container(
+                width: 32,
+                height: 32,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF242424),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.close_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
         LocationInputField(
           label: 'From',
           controller: _fromController,
           fieldKey: const Key('from_input'),
-          onChanged: controller.updatePickupLocation,
+          onChanged: (value) => _onFieldChanged(value, isPickup: true),
           prefixIcon: Icons.trip_origin_rounded,
           dotColor: const Color(0xFFDFFF00),
           isLoading: state.pickupLocationStatus == PickupLocationStatus.loading,
         ),
+        _activeField == _ActiveField.from
+            ? _buildSuggestionsArea()
+            : const SizedBox.shrink(),
         const SizedBox(height: 10),
         LocationInputField(
           label: 'To',
           controller: _toController,
           fieldKey: const Key('to_input'),
-          onChanged: _onDropoffChanged,
+          onChanged: (value) => _onFieldChanged(value, isPickup: false),
           prefixIcon: Icons.search_rounded,
           dotColor: const Color(0xFFFF5370),
         ),
+        _activeField == _ActiveField.to
+            ? _buildSuggestionsArea()
+            : const SizedBox.shrink(),
         const SizedBox(height: 16),
-        if (_suggestions.isNotEmpty)
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 260),
-            child: ListView.separated(
-              key: const Key('destination_suggestions_list'),
-              shrinkWrap: true,
-              itemCount: _suggestions.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 4),
-              itemBuilder: (context, index) {
-                final PlaceSuggestion suggestion = _suggestions[index];
-                return GestureDetector(
-                  key: Key('suggestion_${suggestion.placeId}'),
-                  onTap: () => _selectSuggestion(suggestion),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.location_on_outlined,
-                          color: Color(0xFF808080),
-                          size: 18,
+        showSuggestionsArea
+            ? const SizedBox.shrink()
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Passengers',
+                        style: TextStyle(
+                          color: Color(0xFFA0A0A0),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                suggestion.mainText,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              if (suggestion.secondaryText.isNotEmpty)
-                                Text(
-                                  suggestion.secondaryText,
-                                  style: const TextStyle(
-                                    color: Color(0xFF808080),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                      const Icon(
+                        Icons.person_rounded,
+                        color: Color(0xFFDFFF00),
+                        size: 18,
+                      ),
+                    ],
                   ),
-                );
-              },
-            ),
-          )
-        else
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Passengers',
-                style: TextStyle(
-                  color: Color(0xFFA0A0A0),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                ),
+                  const SizedBox(height: 10),
+                  PassengerStepper(
+                    count: state.passengerCount,
+                    onChanged: controller.setPassengerCount,
+                  ),
+                  const SizedBox(height: 16),
+                ],
               ),
-              const Icon(
-                Icons.person_rounded,
-                color: Color(0xFFDFFF00),
-                size: 18,
-              ),
-            ],
-          ),
-        if (_suggestions.isEmpty) ...[
-          const SizedBox(height: 10),
-          PassengerStepper(
-            count: state.passengerCount,
-            onChanged: controller.setPassengerCount,
-          ),
-        ],
-        const SizedBox(height: 16),
         SizedBox(
           height: 52,
           child: ElevatedButton(

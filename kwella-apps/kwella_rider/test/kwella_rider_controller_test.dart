@@ -102,6 +102,8 @@ void main() {
       expect(controller.state.pickupLocation, equals('Long Street, Cape Town'));
       expect(controller.state.pickupLocationStatus,
           equals(PickupLocationStatus.resolved));
+      expect(controller.state.pickupLat, equals(-33.9249));
+      expect(controller.state.pickupLng, equals(18.4241));
 
       controller.dispose();
     });
@@ -159,6 +161,31 @@ void main() {
 
       expect(controller.state.pickupLocationStatus,
           equals(PickupLocationStatus.resolved));
+
+      controller.dispose();
+    });
+
+    test('selecting a pickup suggestion records its coordinates', () {
+      final controller = KwellaRiderController(
+        locationService: _FakeLocationService()..permissionsGranted = false,
+      );
+
+      controller.updatePickupLocation(
+        'Shoprite Mandalay, Swartklip Road, Cape Town',
+        lat: -33.97,
+        lng: 18.63,
+      );
+
+      expect(controller.state.pickupLat, equals(-33.97));
+      expect(controller.state.pickupLng, equals(18.63));
+
+      // A later free-text edit (no coordinates supplied) keeps the last
+      // resolved coordinate rather than clearing it, so proximity biasing
+      // stays intact while the rider keeps typing.
+      controller.updatePickupLocation('Shoprite Ma');
+
+      expect(controller.state.pickupLat, equals(-33.97));
+      expect(controller.state.pickupLng, equals(18.63));
 
       controller.dispose();
     });
