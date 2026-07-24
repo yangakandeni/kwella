@@ -26,7 +26,10 @@ class _PhoneEntryScreenState extends ConsumerState<PhoneEntryScreen> {
 
   void _sendOtp() {
     if (_ctrl.text.length < 9) return;
-    ref.read(kwellaAuthNotifierProvider.notifier).requestOtp('+27${_ctrl.text}');
+    final digits = _ctrl.text.startsWith('0')
+        ? _ctrl.text.substring(1)
+        : _ctrl.text;
+    ref.read(kwellaAuthNotifierProvider.notifier).requestOtp('+27$digits');
   }
 
   @override
@@ -64,10 +67,10 @@ class _PhoneEntryScreenState extends ConsumerState<PhoneEntryScreen> {
               const SizedBox(height: 24),
               // ── Heading ─────────────────────────────────────────────────
               const Text(
-                'Enter your\nphone number',
+                'Verify your phone number',
                 style: TextStyle(
                   color: KwellaColors.textPrimary,
-                  fontSize: 32,
+                  fontSize: 25,
                   fontWeight: FontWeight.w800,
                   height: 1.2,
                   fontFamily: 'Outfit',

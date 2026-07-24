@@ -1,5 +1,5 @@
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -34,6 +34,7 @@ class _KwellaMapViewState extends State<KwellaMapView> {
   String? _mapStyle;
   bool _myLocationEnabled = false;
   GoogleMapController? _controller;
+  LatLng? _pendingCameraTarget;
 
   @override
   void initState() {
@@ -69,6 +70,34 @@ class _KwellaMapViewState extends State<KwellaMapView> {
     if (mounted) {
       setState(() => _myLocationEnabled = granted);
     }
+    if (granted) {
+      await _centerOnCurrentLocation();
+    }
+  }
+
+  /// Recenters the camera on the device's live/mocked GPS fix — without
+  /// this, the "my location" dot only ever renders wherever it falls
+  /// relative to [KwellaMapView.fallbackCenter], which is off-screen for
+  /// any fix outside Cape Town CBD (e.g. an emulator test location).
+  Future<void> _centerOnCurrentLocation() async {
+    try {
+      final Position position = await Geolocator.getCurrentPosition(
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+      final LatLng target = LatLng(position.latitude, position.longitude);
+      if (!mounted) return;
+      final GoogleMapController? controller = _controller;
+      if (controller != null) {
+        await controller.animateCamera(
+          CameraUpdate.newLatLngZoom(target, 16),
+        );
+      } else {
+        _pendingCameraTarget = target;
+      }
+    } catch (_) {
+      // Location unavailable — keep the fallback camera position.
+    }
   }
 
   Set<Marker> get _markers {
@@ -86,19 +115,59 @@ class _KwellaMapViewState extends State<KwellaMapView> {
 
   @override
   Widget build(BuildContext context) {
-    return GoogleMap(
-      key: const Key('kwella_map_view'),
-      initialCameraPosition: const CameraPosition(
-        target: KwellaMapView.fallbackCenter,
-        zoom: 15,
-      ),
-      style: _mapStyle,
-      myLocationEnabled: _myLocationEnabled,
-      myLocationButtonEnabled: false,
-      zoomControlsEnabled: false,
-      mapToolbarEnabled: false,
-      markers: _markers,
-      onMapCreated: (controller) => _controller = controller,
+    return Stack(
+      children: [
+        GoogleMap(
+          key: const Key('kwella_map_view'),
+          initialCameraPosition: const CameraPosition(
+            target: KwellaMapView.fallbackCenter,
+            zoom: 15,
+          ),
+          style: _mapStyle,
+          myLocationEnabled: _myLocationEnabled,
+          myLocationButtonEnabled: false,
+          zoomControlsEnabled: false,
+          mapToolbarEnabled: false,
+          markers: _markers,
+          onMapCreated: (controller) {
+            _controller = controller;
+            final LatLng? target = _pendingCameraTarget;
+            if (target != null) {
+              _pendingCameraTarget = null;
+              controller.animateCamera(CameraUpdate.newLatLngZoom(target, 16));
+            }
+          },
+        ),
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: GestureDetector(
+            key: const Key('recenter_button'),
+            onTap: _centerOnCurrentLocation,
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1E1E),
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFF2C2C2C)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x40000000),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.navigation_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

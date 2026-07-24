@@ -6,13 +6,21 @@ import 'package:kwella_rider/features/booking/presentation/screens/rider_booking
 
 void main() {
   testWidgets(
-    'booking screen displays bottom sheet and dispatches request ride',
+    'booking screen starts collapsed, expands on search bar tap, and dispatches request ride',
     (WidgetTester tester) async {
       final controller = KwellaRiderController();
 
       await tester.pumpWidget(
         MaterialApp(home: RiderBookingScreen(controller: controller)),
       );
+
+      // Idle state shows the collapsed search sheet, not the full editor.
+      expect(find.byKey(const Key('search_bar')), findsOneWidget);
+      expect(find.byKey(const Key('pickup_input')), findsNothing);
+      expect(find.byKey(const Key('dropoff_input')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('search_bar')));
+      await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('pickup_input')), findsOneWidget);
       expect(find.byKey(const Key('dropoff_input')), findsOneWidget);
@@ -27,6 +35,24 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(controller.state.status, equals(RiderTripStatus.searching));
+      controller.dispose();
+    },
+  );
+
+  testWidgets(
+    'tapping a quick destination prefills dropoff and expands the editor',
+    (WidgetTester tester) async {
+      final controller = KwellaRiderController();
+
+      await tester.pumpWidget(
+        MaterialApp(home: RiderBookingScreen(controller: controller)),
+      );
+
+      await tester.tap(find.text('Zevenwacht Mall'));
+      await tester.pumpAndSettle();
+
+      expect(controller.state.dropoffLocation, equals('Zevenwacht Mall'));
+      expect(find.byKey(const Key('dropoff_input')), findsOneWidget);
       controller.dispose();
     },
   );

@@ -270,6 +270,8 @@ class _OtpBox extends StatelessWidget {
           focusNode: focusNode,
           keyboardType: TextInputType.number,
           textAlign: TextAlign.center,
+          obscureText: true,
+          obscuringCharacter: '●',
           maxLength: 1,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           style: const TextStyle(

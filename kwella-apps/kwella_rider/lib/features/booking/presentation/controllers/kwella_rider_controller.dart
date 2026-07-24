@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 
+import '../../../location/services/kwella_location_service.dart';
 import 'rider_trip_state.dart';
 
 final kwellaRiderControllerProvider =
@@ -26,6 +28,10 @@ final availableBidsProvider =
     });
 
 class KwellaRiderController {
+  KwellaRiderController({KwellaLocationService? locationService})
+      : _locationService = locationService ?? KwellaLocationService.instance;
+
+  final KwellaLocationService _locationService;
   RiderTripState _state = const RiderTripState();
   final StreamController<RiderTripState> _stateController =
       StreamController.broadcast();
@@ -60,7 +66,51 @@ class KwellaRiderController {
   }
 
   void updatePickupLocation(String pickupLocation) {
-    _emit(_state.copyWith(pickupLocation: pickupLocation));
+    _emit(
+      _state.copyWith(
+        pickupLocation: pickupLocation,
+        pickupLocationStatus: PickupLocationStatus.resolved,
+      ),
+    );
+  }
+
+  /// Defaults the pickup point to the rider's current device location (or
+  /// the emulator/simulator's mocked fix during development) via
+  /// [KwellaLocationService]. Falls back to [PickupLocationStatus.unavailable]
+  /// — leaving the pickup field open for manual entry — if location access is
+  /// denied, disabled, or the lookup otherwise fails.
+  Future<void> resolvePickupLocation() async {
+    _emit(_state.copyWith(pickupLocationStatus: PickupLocationStatus.loading));
+
+    final bool granted = await _locationService.requestLocationPermissions();
+    if (!granted) {
+      _emit(
+        _state.copyWith(pickupLocationStatus: PickupLocationStatus.unavailable),
+      );
+      return;
+    }
+
+    final Position? position = await _locationService.getCurrentPosition();
+    if (position == null) {
+      _emit(
+        _state.copyWith(pickupLocationStatus: PickupLocationStatus.unavailable),
+      );
+      return;
+    }
+
+    final String? address = await _locationService.resolveAddressLabel(
+      position.latitude,
+      position.longitude,
+    );
+    final String label = address ??
+        '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
+
+    _emit(
+      _state.copyWith(
+        pickupLocation: label,
+        pickupLocationStatus: PickupLocationStatus.resolved,
+      ),
+    );
   }
 
   void updateDropoffLocation(String dropoffLocation) {

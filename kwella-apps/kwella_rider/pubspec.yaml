@@ -38,6 +38,7 @@ dependencies:
     path: ../kwella_core
   google_maps_flutter: ^2.17.1
   geolocator: ^14.0.3
+  geocoding: ^3.0.0
 
 # package_info_plus 10.2.1's iOS Package.swift depends on a local
 # "FlutterFramework" SPM package that flutter_tools only generates on
