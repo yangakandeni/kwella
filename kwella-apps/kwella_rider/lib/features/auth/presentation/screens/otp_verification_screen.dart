@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kwella_core/kwella_core.dart';
+import 'package:pinput/pinput.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kwella Rider – OTP Verification Screen
-// 6 auto-advancing digit boxes, 60-second countdown resend, success push.
+// Pinput-driven 6-digit code (visible, editable), 60-second countdown
+// resend, success push.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class OtpVerificationScreen extends ConsumerStatefulWidget {
@@ -19,13 +20,17 @@ class OtpVerificationScreen extends ConsumerStatefulWidget {
 
 class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
   static const int _codeLength = 6;
-  final List<TextEditingController> _ctrlList =
-      List.generate(_codeLength, (_) => TextEditingController());
-  final List<FocusNode> _focusList =
-      List.generate(_codeLength, (_) => FocusNode());
+  final TextEditingController _pinController = TextEditingController();
+  final FocusNode _focusNode = FocusNode();
 
   int _secondsLeft = 60;
   Timer? _timer;
+
+  /// True right after an incorrect-code retry, so Pinput renders its error
+  /// theme and error text. The wrong digits stay on screen — cleared only
+  /// once the user edits them — so the user can fix a mistyped digit
+  /// rather than retyping the whole code from scratch.
+  bool _hasError = false;
 
   @override
   void initState() {
@@ -36,12 +41,8 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    for (final c in _ctrlList) {
-      c.dispose();
-    }
-    for (final f in _focusList) {
-      f.dispose();
-    }
+    _pinController.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -57,13 +58,11 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
     });
   }
 
-  String get _otpValue => _ctrlList.map((c) => c.text).join();
-
-  bool get _isComplete => _otpValue.length == _codeLength;
+  bool get _isComplete => _pinController.text.length == _codeLength;
 
   void _verify() {
     if (!_isComplete) return;
-    ref.read(kwellaAuthNotifierProvider.notifier).verifyOtp(_otpValue);
+    ref.read(kwellaAuthNotifierProvider.notifier).verifyOtp(_pinController.text);
   }
 
   void _resend() {
@@ -73,14 +72,6 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
       ref.read(kwellaAuthNotifierProvider.notifier).requestOtp(phoneNumber);
     }
     _startTimer();
-  }
-
-  void _clearCode() {
-    for (final c in _ctrlList) {
-      c.clear();
-    }
-    _focusList.first.requestFocus();
-    setState(() {});
   }
 
   @override
@@ -95,16 +86,22 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
         return;
       }
 
-      if (next.error != null) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(next.error!)));
+      // An incorrect-but-retryable answer re-issues the challenge rather
+      // than failing outright — show it as an inline Pinput error instead
+      // of a snackbar, and leave the wrong digits in place so the user can
+      // edit just the mistyped one rather than retyping the whole code.
+      final bool isRetryableError =
+          previous?.status == KwellaAuthStatus.authenticating &&
+              next.status == KwellaAuthStatus.otpRequired &&
+              next.error != null;
+      if (isRetryableError) {
+        setState(() => _hasError = true);
+        return;
       }
 
-      // An incorrect-but-retryable answer re-issues the challenge rather
-      // than failing outright — clear the boxes so the user can retry.
-      if (previous?.status == KwellaAuthStatus.authenticating &&
-          next.status == KwellaAuthStatus.otpRequired) {
-        _clearCode();
+      if (next.status == KwellaAuthStatus.failure && next.error != null) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(next.error!)));
       }
     });
 
@@ -153,24 +150,96 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
                 ),
               ),
               const SizedBox(height: 40),
-              // ── OTP boxes ───────────────────────────────────────────────
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: List.generate(_codeLength, (i) {
-                  return _OtpBox(
-                    controller: _ctrlList[i],
-                    focusNode: _focusList[i],
-                    onChanged: (val) {
-                      if (val.length == 1 && i < _codeLength - 1) {
-                        FocusScope.of(context).requestFocus(_focusList[i + 1]);
-                      }
-                      if (val.isEmpty && i > 0) {
-                        FocusScope.of(context).requestFocus(_focusList[i - 1]);
-                      }
+              // ── OTP input ────────────────────────────────────────────────
+              SizedBox(
+                width: double.infinity,
+                child: Pinput(
+                  key: const Key('otp_pinput'),
+                  length: _codeLength,
+                  controller: _pinController,
+                  focusNode: _focusNode,
+                  autofocus: true,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  closeKeyboardWhenCompleted: false,
+                  pinAnimationType: PinAnimationType.fade,
+                  forceErrorState: _hasError,
+                  errorText: _hasError ? authState.error : null,
+                  errorTextStyle: const TextStyle(
+                    color: KwellaColors.errorRed,
+                    fontSize: 13,
+                    fontFamily: 'Outfit',
+                  ),
+                  defaultPinTheme: PinTheme(
+                    width: 48,
+                    height: 56,
+                    textStyle: const TextStyle(
+                      color: KwellaColors.textPrimary,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      fontFamily: 'Outfit',
+                    ),
+                    decoration: BoxDecoration(
+                      color: KwellaColors.elevatedCard,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: KwellaColors.borderDark),
+                    ),
+                  ),
+                  focusedPinTheme: PinTheme(
+                    width: 48,
+                    height: 56,
+                    textStyle: const TextStyle(
+                      color: KwellaColors.electricLime,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      fontFamily: 'Outfit',
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A1A00),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: KwellaColors.electricLime, width: 2),
+                    ),
+                  ),
+                  submittedPinTheme: PinTheme(
+                    width: 48,
+                    height: 56,
+                    textStyle: const TextStyle(
+                      color: KwellaColors.electricLime,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      fontFamily: 'Outfit',
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A1A00),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: KwellaColors.electricLime, width: 2),
+                    ),
+                  ),
+                  errorPinTheme: PinTheme(
+                    width: 48,
+                    height: 56,
+                    textStyle: const TextStyle(
+                      color: KwellaColors.errorRed,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      fontFamily: 'Outfit',
+                    ),
+                    decoration: BoxDecoration(
+                      color: KwellaColors.elevatedCard,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: KwellaColors.errorRed, width: 2),
+                    ),
+                  ),
+                  onChanged: (_) {
+                    if (_hasError) {
+                      setState(() => _hasError = false);
+                    } else {
                       setState(() {});
-                    },
-                  );
-                }),
+                    }
+                  },
+                  onCompleted: (_) => _verify(),
+                ),
               ),
               const SizedBox(height: 28),
               // ── Resend timer ─────────────────────────────────────────────
@@ -230,63 +299,6 @@ class _OtpVerificationScreenState extends ConsumerState<OtpVerificationScreen> {
               const SizedBox(height: 32),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Single OTP digit box ────────────────────────────────────────────────────
-
-class _OtpBox extends StatelessWidget {
-  const _OtpBox({
-    required this.controller,
-    required this.focusNode,
-    required this.onChanged,
-  });
-
-  final TextEditingController controller;
-  final FocusNode focusNode;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final bool filled = controller.text.isNotEmpty;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
-      width: 48,
-      height: 56,
-      decoration: BoxDecoration(
-        color: filled ? const Color(0xFF1A1A00) : KwellaColors.elevatedCard,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: filled ? KwellaColors.electricLime : KwellaColors.borderDark,
-          width: filled ? 2 : 1,
-        ),
-      ),
-      child: Center(
-        child: TextField(
-          controller: controller,
-          focusNode: focusNode,
-          keyboardType: TextInputType.number,
-          textAlign: TextAlign.center,
-          obscureText: true,
-          obscuringCharacter: '●',
-          maxLength: 1,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          style: const TextStyle(
-            color: KwellaColors.electricLime,
-            fontSize: 22,
-            fontWeight: FontWeight.w800,
-            fontFamily: 'Outfit',
-          ),
-          decoration: const InputDecoration(
-            counterText: '',
-            border: InputBorder.none,
-            enabledBorder: InputBorder.none,
-            focusedBorder: InputBorder.none,
-          ),
-          onChanged: onChanged,
         ),
       ),
     );

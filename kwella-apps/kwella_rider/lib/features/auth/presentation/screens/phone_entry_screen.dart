@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:kwella_core/kwella_core.dart';
 
+import '../../utils/sa_phone_number.dart';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Kwella Rider – Phone Entry Screen
 // +27 prefix chip, numeric input, "Send OTP" CTA.
@@ -24,12 +26,17 @@ class _PhoneEntryScreenState extends ConsumerState<PhoneEntryScreen> {
     super.dispose();
   }
 
+  /// The `+27` E.164 number implied by the current input, or null while the
+  /// input isn't yet a complete, valid SA number. Handles all three
+  /// accepted entry formats (local "0...", bare international "27...", or
+  /// bare subscriber) without duplicating the country code.
+  String? get _normalizedPhoneNumber =>
+      normalizeSaPhoneNumberToE164(_ctrl.text);
+
   void _sendOtp() {
-    if (_ctrl.text.length < 9) return;
-    final digits = _ctrl.text.startsWith('0')
-        ? _ctrl.text.substring(1)
-        : _ctrl.text;
-    ref.read(kwellaAuthNotifierProvider.notifier).requestOtp('+27$digits');
+    final phoneNumber = _normalizedPhoneNumber;
+    if (phoneNumber == null) return;
+    ref.read(kwellaAuthNotifierProvider.notifier).requestOtp(phoneNumber);
   }
 
   @override
@@ -131,7 +138,12 @@ class _PhoneEntryScreenState extends ConsumerState<PhoneEntryScreen> {
                         keyboardType: TextInputType.phone,
                         inputFormatters: [
                           FilteringTextInputFormatter.digitsOnly,
-                          LengthLimitingTextInputFormatter(10),
+                          // 11 raw digits covers the longest accepted entry
+                          // format: "27" country code + 9-digit subscriber
+                          // number. Capping at 10 (the local "0..." form's
+                          // length) truncated the final digit of any
+                          // international-format entry.
+                          LengthLimitingTextInputFormatter(11),
                         ],
                         style: const TextStyle(
                           color: KwellaColors.textPrimary,
@@ -157,17 +169,34 @@ class _PhoneEntryScreenState extends ConsumerState<PhoneEntryScreen> {
                   ],
                 ),
               ),
+              // ── Live normalized preview ───────────────────────────────────
+              if (_normalizedPhoneNumber != null) ...[
+                const SizedBox(height: 10),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Text(
+                    'We\'ll text ${_normalizedPhoneNumber!}',
+                    key: const Key('phone_preview_text'),
+                    style: const TextStyle(
+                      color: KwellaColors.textSecondary,
+                      fontSize: 13,
+                      fontFamily: 'Outfit',
+                    ),
+                  ),
+                ),
+              ],
               const Spacer(),
               // ── Send OTP CTA ─────────────────────────────────────────────
               AnimatedOpacity(
-                opacity: _ctrl.text.length >= 9 ? 1.0 : 0.4,
+                opacity: _normalizedPhoneNumber != null ? 1.0 : 0.4,
                 duration: const Duration(milliseconds: 200),
                 child: SizedBox(
                   height: 54,
                   child: ElevatedButton(
                     key: const Key('send_otp_button'),
-                    onPressed:
-                        _ctrl.text.length >= 9 && !loading ? _sendOtp : null,
+                    onPressed: _normalizedPhoneNumber != null && !loading
+                        ? _sendOtp
+                        : null,
                     child: loading
                         ? const SizedBox(
                             width: 22,

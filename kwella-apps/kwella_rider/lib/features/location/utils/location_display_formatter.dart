@@ -27,3 +27,28 @@ String formatLocationLabel(String rawAddress) {
   if (parts.isEmpty) return rawAddress;
   return parts.join(', ');
 }
+
+/// Splits a formatted location label (see [formatLocationLabel]) into a
+/// primary line (place/street name) and a secondary line (area/suburb), for
+/// two-line destination displays.
+///
+/// Examples:
+///   "Liberty Promenade, Mitchells Plain" -> ("Liberty Promenade", "Mitchells Plain")
+///   "Long Street" -> ("Long Street", "")
+class LocationLabelParts {
+  const LocationLabelParts(this.primary, this.secondary);
+
+  final String primary;
+  final String secondary;
+}
+
+LocationLabelParts splitLocationLabel(String formattedAddress) {
+  final int commaIndex = formattedAddress.indexOf(',');
+  if (commaIndex == -1) {
+    return LocationLabelParts(formattedAddress.trim(), '');
+  }
+  return LocationLabelParts(
+    formattedAddress.substring(0, commaIndex).trim(),
+    formattedAddress.substring(commaIndex + 1).trim(),
+  );
+}
