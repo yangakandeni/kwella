@@ -101,6 +101,19 @@ data "aws_iam_policy_document" "dynamodb_single_table" {
 
     resources = ["*"]
   }
+
+  # Grants the identity service Lambda the ability to presign PUT URLs for
+  # driver onboarding documents. Scoped to the driver-documents bucket only.
+  statement {
+    sid    = "KwellaIdentityServiceDocumentUpload"
+    effect = "Allow"
+
+    actions = [
+      "s3:PutObject",
+    ]
+
+    resources = ["${aws_s3_bucket.driver_documents.arn}/*"]
+  }
 }
 
 resource "aws_iam_role_policy" "dynamodb_access" {

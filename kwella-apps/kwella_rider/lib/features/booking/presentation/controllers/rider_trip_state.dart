@@ -41,6 +41,10 @@ class RiderTripState {
   final List<Map<String, dynamic>> bidMetrics;
   final DriverLocation? currentDriverLocation;
   final Map<String, dynamic>? latestEvent;
+  final String? driverName;
+  final String? driverRating;
+  final String? vehicleDescription;
+  final String? licensePlate;
 
   const RiderTripState({
     this.status = RiderTripStatus.idle,
@@ -56,6 +60,10 @@ class RiderTripState {
     this.bidMetrics = const [],
     this.currentDriverLocation,
     this.latestEvent,
+    this.driverName,
+    this.driverRating,
+    this.vehicleDescription,
+    this.licensePlate,
   });
 
   List<Map<String, dynamic>> get availableBids => List.unmodifiable(bidMetrics);
@@ -74,6 +82,10 @@ class RiderTripState {
     List<Map<String, dynamic>>? bidMetrics,
     DriverLocation? currentDriverLocation,
     Map<String, dynamic>? latestEvent,
+    String? driverName,
+    String? driverRating,
+    String? vehicleDescription,
+    String? licensePlate,
   }) {
     return RiderTripState(
       status: status ?? this.status,
@@ -90,6 +102,10 @@ class RiderTripState {
       currentDriverLocation:
           currentDriverLocation ?? this.currentDriverLocation,
       latestEvent: latestEvent ?? this.latestEvent,
+      driverName: driverName ?? this.driverName,
+      driverRating: driverRating ?? this.driverRating,
+      vehicleDescription: vehicleDescription ?? this.vehicleDescription,
+      licensePlate: licensePlate ?? this.licensePlate,
     );
   }
 }

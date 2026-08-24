@@ -182,11 +182,42 @@ class KwellaRiderController {
     }
 
     if (action == 'tripMatchConfirmed') {
+      final String? matchedDriverId = payload['driverId'] as String?;
+      Map<String, dynamic>? matchedBid;
+      if (matchedDriverId != null) {
+        for (final bid in _state.bidMetrics) {
+          if (bid['driverId'] == matchedDriverId) {
+            matchedBid = bid;
+            break;
+          }
+        }
+      }
+
+      final String? driverName =
+          payload['driverName'] as String? ?? matchedBid?['driverName'] as String?;
+      final dynamic ratingRaw =
+          payload['rating'] ?? matchedBid?['rating'];
+      final String? driverRating = ratingRaw != null ? '$ratingRaw' : null;
+      final String? vehicleDescription = _combineVehicleFields(
+            payload['vehicleColor'],
+            payload['vehicleModel'],
+          ) ??
+          _combineVehicleFields(
+            matchedBid?['vehicleColor'],
+            matchedBid?['vehicleModel'],
+          );
+      final String? licensePlate = payload['licensePlate'] as String? ??
+          matchedBid?['licensePlate'] as String?;
+
       _emit(
         _state.copyWith(
           status: RiderTripStatus.accepted,
           tripId: incomingTripId ?? _state.tripId,
           latestEvent: event,
+          driverName: driverName,
+          driverRating: driverRating,
+          vehicleDescription: vehicleDescription,
+          licensePlate: licensePlate,
         ),
       );
       return;
@@ -220,6 +251,13 @@ class KwellaRiderController {
       );
       return;
     }
+  }
+
+  String? _combineVehicleFields(dynamic color, dynamic model) {
+    if (color == null && model == null) {
+      return null;
+    }
+    return '${color ?? ''} ${model ?? ''}'.trim();
   }
 
   DriverLocation? _parseDriverLocationFromPayload(

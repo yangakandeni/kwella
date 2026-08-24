@@ -9,6 +9,7 @@ import 'package:kwella_core/kwella_core.dart';
 import 'features/location/presentation/controllers/kwella_telemetry_controller.dart';
 import 'features/bidding/presentation/screens/bidding_marketplace_screen.dart';
 import 'features/bidding/presentation/screens/driver_onboarding_screen.dart';
+import 'features/bidding/presentation/screens/driver_profile_setup_screen.dart';
 import 'features/bidding/presentation/screens/trip_navigation_screen.dart';
 import 'features/bidding/presentation/screens/post_trip_screen.dart';
 import 'features/earnings/presentation/screens/earnings_dashboard_screen.dart';
@@ -64,6 +65,7 @@ class KwellaDriverApp extends StatelessWidget {
       home: const BiddingMarketplaceScreen(),
       routes: {
         '/driver/onboarding': (_) => const DriverOnboardingScreen(),
+        '/driver/profile-setup': (_) => const DriverProfileSetupScreen(),
         '/driver/navigation': (_) => const TripNavigationScreen(),
         '/driver/post-trip': (_) => const PostTripScreen(),
         '/driver/earnings': (_) => const EarningsDashboardScreen(),

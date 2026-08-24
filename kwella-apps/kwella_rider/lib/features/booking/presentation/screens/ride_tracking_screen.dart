@@ -9,12 +9,11 @@ import '../widgets/kwella_map_view.dart';
 // RideTrackingScreen
 // Active ride / en-route live tracking screen.
 //
-// The driver's live position is sourced from riderTripStateProvider and
-// rendered as a real marker via KwellaMapView. Driver name/rating/vehicle/
-// plate have no backing field on RiderTripState yet (the real backend's
-// bidSelected/tripMatchConfirmed frames don't carry them either — see the
-// kwella-bidding-lifecycle-gaps notes), so they stay constructor defaults
-// until a driver-profile lookup exists.
+// The driver's live position and matched driver/vehicle details are sourced
+// from riderTripStateProvider (populated by the tripMatchConfirmed WebSocket
+// event) and rendered as a real marker via KwellaMapView. The widget's
+// constructor defaults are used only as a pre-match fallback, before that
+// event has arrived.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class RideTrackingScreen extends ConsumerStatefulWidget {
@@ -39,6 +38,11 @@ class RideTrackingScreen extends ConsumerStatefulWidget {
 }
 
 class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
+  late String _driverName = widget.driverName;
+  late String _driverRating = widget.driverRating;
+  late String _vehicleDescription = widget.vehicleDescription;
+  late String _licensePlate = widget.licensePlate;
+
   void _showCancelDialog() {
     showDialog<void>(
       context: context,
@@ -110,7 +114,7 @@ class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
             ),
             const SizedBox(height: 20),
             Text(
-              'Chat with ${widget.driverName}',
+              'Chat with $_driverName',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 17,
@@ -174,6 +178,10 @@ class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
   Widget build(BuildContext context) {
     final RiderTripState? state = ref.watch(riderTripStateProvider).asData?.value;
     final DriverLocation? driverLocation = state?.currentDriverLocation;
+    _driverName = state?.driverName ?? widget.driverName;
+    _driverRating = state?.driverRating ?? widget.driverRating;
+    _vehicleDescription = state?.vehicleDescription ?? widget.vehicleDescription;
+    _licensePlate = state?.licensePlate ?? widget.licensePlate;
 
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
@@ -240,8 +248,8 @@ class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
                         ),
                         child: Center(
                           child: Text(
-                            widget.driverName.isNotEmpty
-                                ? widget.driverName[0].toUpperCase()
+                            _driverName.isNotEmpty
+                                ? _driverName[0].toUpperCase()
                                 : 'D',
                             style: const TextStyle(
                               color: Color(0xFFDFFF00),
@@ -258,7 +266,7 @@ class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              widget.driverName,
+                              _driverName,
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 15,
@@ -275,7 +283,7 @@ class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
                                 ),
                                 const SizedBox(width: 3),
                                 Text(
-                                  '${widget.driverRating}  ·  ${widget.licensePlate}',
+                                  '$_driverRating  ·  $_licensePlate',
                                   style: const TextStyle(
                                     color: Color(0xFF808080),
                                     fontSize: 12,
@@ -417,7 +425,7 @@ class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
                                   CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  widget.vehicleDescription,
+                                  _vehicleDescription,
                                   style: const TextStyle(
                                     color: Colors.white,
                                     fontSize: 14,
@@ -425,7 +433,7 @@ class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
                                   ),
                                 ),
                                 Text(
-                                  widget.licensePlate,
+                                  _licensePlate,
                                   style: const TextStyle(
                                     color: Color(0xFFA0A0A0),
                                     fontSize: 12,

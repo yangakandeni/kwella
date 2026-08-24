@@ -1,4 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:kwella_core/kwella_core.dart';
+
+import '../../services/driver_document_upload_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kwella Driver – Onboarding Screen
@@ -7,39 +14,110 @@ import 'package:flutter/material.dart';
 
 enum _DocStatus { pending, uploaded, verified }
 
-class DriverOnboardingScreen extends StatefulWidget {
-  const DriverOnboardingScreen({super.key});
+class DriverOnboardingScreen extends ConsumerStatefulWidget {
+  const DriverOnboardingScreen({
+    super.key,
+    this.uploadService,
+    this.imagePicker,
+  });
+
+  /// Overridable for tests; defaults to a real [DriverDocumentUploadService].
+  final DriverDocumentUploadService? uploadService;
+
+  /// Overridable for tests; defaults to a real [ImagePicker].
+  final ImagePicker? imagePicker;
 
   @override
-  State<DriverOnboardingScreen> createState() => _DriverOnboardingScreenState();
+  ConsumerState<DriverOnboardingScreen> createState() =>
+      _DriverOnboardingScreenState();
 }
 
-class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
+class _DriverOnboardingScreenState
+    extends ConsumerState<DriverOnboardingScreen> {
   final List<_Document> _docs = [
     _Document(
         icon: Icons.credit_card_rounded,
         label: "Driver's Licence",
+        docType: 'DRIVERS_LICENCE',
         status: _DocStatus.verified),
     _Document(
         icon: Icons.directions_bus_rounded,
         label: 'PrDP',
+        docType: 'PRDP',
         status: _DocStatus.uploaded),
     _Document(
         icon: Icons.article_rounded,
         label: 'Vehicle Registration',
+        docType: 'VEHICLE_REGISTRATION',
         status: _DocStatus.pending),
     _Document(
         icon: Icons.local_taxi_rounded,
         label: 'CATA Sticker Photo',
+        docType: 'CATA_STICKER_PHOTO',
         status: _DocStatus.pending),
     _Document(
         icon: Icons.camera_front_rounded,
         label: 'Selfie Verification',
+        docType: 'SELFIE_VERIFICATION',
         status: _DocStatus.pending),
   ];
 
+  late final DriverDocumentUploadService _uploadService =
+      widget.uploadService ??
+          DriverDocumentUploadService(
+            tokenVault: TokenVault(),
+            onRefreshNeeded: () =>
+                ref.read(kwellaAuthNotifierProvider.notifier).refreshSession(),
+          );
+
   int get _completedSteps =>
       _docs.where((d) => d.status != _DocStatus.pending).length;
+
+  Future<void> _handleUpload(int index) async {
+    final doc = _docs[index];
+    if (doc.isUploading) return;
+
+    final picker = widget.imagePicker ?? ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.camera);
+    if (picked == null) return;
+
+    setState(() {
+      _docs[index] = doc.copyWith(isUploading: true);
+    });
+
+    try {
+      final userId = ref.read(kwellaAuthNotifierProvider).userId;
+      if (userId == null) {
+        throw StateError('You must be signed in to upload documents.');
+      }
+
+      final presigned = await _uploadService.requestPresignedUploadUrl(
+        userId: userId,
+        docType: doc.docType,
+      );
+      await _uploadService.uploadFile(
+        uploadUrl: presigned.uploadUrl,
+        file: File(picked.path),
+        contentType: 'image/jpeg',
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _docs[index] = doc.copyWith(
+          status: _DocStatus.uploaded,
+          isUploading: false,
+        );
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _docs[index] = doc.copyWith(isUploading: false);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload failed: $e')),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -104,6 +182,31 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
                 ],
               ),
             ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+              child: OutlinedButton.icon(
+                key: const Key('go_to_profile_setup_button'),
+                onPressed: () =>
+                    Navigator.pushNamed(context, '/driver/profile-setup'),
+                icon: const Icon(Icons.person_outline_rounded,
+                    color: Color(0xFFDFFF00), size: 18),
+                label: const Text(
+                  'Add your name & vehicle details',
+                  style: TextStyle(
+                    color: Color(0xFFDFFF00),
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Outfit',
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0x4DDFFF00)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
             const SizedBox(height: 20),
             Expanded(
               child: ListView.separated(
@@ -114,14 +217,8 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
                   final doc = _docs[i];
                   return _DocCard(
                     doc: doc,
-                    onUpload: doc.status == _DocStatus.pending
-                        ? () => setState(() {
-                              _docs[i] = _Document(
-                                icon: doc.icon,
-                                label: doc.label,
-                                status: _DocStatus.uploaded,
-                              );
-                            })
+                    onUpload: doc.status == _DocStatus.pending && !doc.isUploading
+                        ? () => _handleUpload(i)
                         : null,
                   );
                 },
@@ -169,11 +266,26 @@ class _DriverOnboardingScreenState extends State<DriverOnboardingScreen> {
 // ── Data model ────────────────────────────────────────────────────────────────
 
 class _Document {
-  const _Document(
-      {required this.icon, required this.label, required this.status});
+  const _Document({
+    required this.icon,
+    required this.label,
+    required this.docType,
+    required this.status,
+    this.isUploading = false,
+  });
   final IconData icon;
   final String label;
+  final String docType;
   final _DocStatus status;
+  final bool isUploading;
+
+  _Document copyWith({_DocStatus? status, bool? isUploading}) => _Document(
+        icon: icon,
+        label: label,
+        docType: docType,
+        status: status ?? this.status,
+        isUploading: isUploading ?? this.isUploading,
+      );
 }
 
 // ── Card widget ───────────────────────────────────────────────────────────────
@@ -262,8 +374,18 @@ class _DocCard extends StatelessWidget {
               ],
             ),
           ),
-          if (onUpload != null)
+          if (doc.isUploading)
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: Color(0xFFDFFF00),
+              ),
+            )
+          else if (onUpload != null)
             TextButton(
+              key: Key('upload_button_${doc.docType}'),
               onPressed: onUpload,
               child: const Text(
                 'Upload',

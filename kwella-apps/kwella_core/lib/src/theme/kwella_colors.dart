@@ -15,14 +15,14 @@ import 'package:flutter/material.dart';
 abstract final class KwellaColors {
   // ── Primary brand ────────────────────────────────────────────────────────
 
-  /// Warm premium off-white – legacy Rider app background / light surfaces.
-  static const Color communityCream = Color(0xFFFDFBF7);
+  /// CATA brand cream — Rider app background / light surfaces.
+  static const Color communityCream = Color(0xFFF4F4EA);
 
   /// High-contrast charcoal/off-black – legacy Driver app background.
   static const Color deepSlate = Color(0xFF1E2229);
 
-  /// High-visibility neon green – legacy CTA colour.
-  static const Color cataTransitGreen = Color(0xFF00E676);
+  /// CATA Transit Green — the platform's mandated brand primary.
+  static const Color cataTransitGreen = Color(0xFF1E4620);
 
   // ── Electric Lime Dark-Mode Palette (v2 design spec) ────────────────────
 

@@ -16,6 +16,11 @@ Supported actions (dispatched via the ``action_type`` field on the event):
 
   GET_PROFILE       — Read a single item by its composite key (PK + SK).
 
+  PRESIGN_DOCUMENT_UPLOAD — Generate a presigned S3 PUT URL for a driver
+                      onboarding document (license, PrDP, etc.) and persist
+                      a PENDING_UPLOAD audit record.
+                      PK = USR#<user_id>  |  SK = DOCUMENT#<doc_type>
+
 Governance compliance (KWELLA_CODE_GOVERNANCE.md):
   - Python 3.12 native syntax throughout; no legacy typing imports.
   - boto3 client is consumed via the module-level get_table() helper
@@ -31,10 +36,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+import os
+import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+import boto3
 import botocore.exceptions
 from pydantic import ValidationError
 
@@ -44,6 +52,20 @@ from models.schemas import DriverProfile, RiderProfile, VehicleAsset
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+_AWS_REGION = os.environ.get("AWS_REGION", "af-south-1")
+_DRIVER_DOCUMENTS_BUCKET = os.environ.get("DRIVER_DOCUMENTS_BUCKET")
+
+# Allow-list mirrors the 5-step checklist in the driver app's onboarding screen.
+_ALLOWED_DOC_TYPES = frozenset({
+    "DRIVERS_LICENCE",
+    "PRDP",
+    "VEHICLE_REGISTRATION",
+    "CATA_STICKER_PHOTO",
+    "SELFIE_VERIFICATION",
+})
+
+_PRESIGNED_URL_TTL_SECONDS = 300
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +176,7 @@ def _upsert_profile(payload: dict[str, Any]) -> dict[str, Any]:
         active_trip_id    (str | None, optional)
 
         # DRIVER-specific (required when role == "DRIVER")
+        name                  (str)  — Driver's full display name.
         assigned_cata_sticker (str)
         fee_holiday_balance   (str | float, optional)
         is_online             (bool, optional)
@@ -212,10 +235,12 @@ def _register_vehicle(payload: dict[str, Any]) -> dict[str, Any]:
     """Validate and write a VehicleAsset record to DynamoDB.
 
     Expected payload fields:
-        cata_sticker (str) — Unique CATA regulatory sticker identifier.
-        make         (str) — Vehicle manufacturer.
-        model        (str) — Vehicle model name.
-        owner_id     (str) — Must carry the 'USR#' prefix.
+        cata_sticker  (str) — Unique CATA regulatory sticker identifier.
+        make          (str) — Vehicle manufacturer.
+        model         (str) — Vehicle model name.
+        color         (str) — Vehicle exterior color.
+        license_plate (str) — Vehicle registration/number plate.
+        owner_id      (str) — Must carry the 'USR#' prefix.
 
     The vehicle record is stored with:
         PK        = VEH#<cata_sticker>
@@ -303,6 +328,71 @@ def _get_profile(payload: dict[str, Any]) -> dict[str, Any]:
     return _ok({"item": _serialise(item)})
 
 
+def _presign_document_upload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Generate a presigned S3 PUT URL for a driver onboarding document.
+
+    Expected payload fields:
+        user_id      (str) — Bare driver identifier (no USR# prefix required).
+        doc_type     (str) — One of DRIVERS_LICENCE, PRDP, VEHICLE_REGISTRATION,
+                             CATA_STICKER_PHOTO, SELFIE_VERIFICATION.
+        content_type (str, optional) — Defaults to "image/jpeg".
+
+    Persists a PENDING_UPLOAD audit record at PK=USR#<user_id>, SK=DOCUMENT#<doc_type>
+    and returns a short-lived (5 minute) presigned PUT URL. There is no separate
+    confirmation action — the client flips its local status once the PUT to S3
+    succeeds; human review of uploaded documents is handled out-of-band.
+
+    Returns an API Gateway response dict.
+    """
+    user_id: str | None = payload.get("user_id")
+    doc_type: str | None = payload.get("doc_type")
+    content_type: str = payload.get("content_type") or "image/jpeg"
+
+    if not user_id:
+        return _bad_request("'user_id' is required for PRESIGN_DOCUMENT_UPLOAD.")
+    if doc_type not in _ALLOWED_DOC_TYPES:
+        supported = ", ".join(sorted(_ALLOWED_DOC_TYPES))
+        return _bad_request(f"'doc_type' must be one of: {supported}.")
+    if not _DRIVER_DOCUMENTS_BUCKET:
+        logger.error("PRESIGN_DOCUMENT_UPLOAD called but DRIVER_DOCUMENTS_BUCKET is not configured.")
+        return _server_error("Document upload storage is not configured.")
+
+    extension = "jpg" if "jpeg" in content_type or "jpg" in content_type else content_type.rsplit("/", 1)[-1]
+    s3_key = f"drivers/{user_id}/{doc_type}/{uuid.uuid4()}.{extension}"
+
+    s3_client = boto3.client("s3", region_name=_AWS_REGION)
+    try:
+        upload_url = s3_client.generate_presigned_url(
+            "put_object",
+            Params={
+                "Bucket": _DRIVER_DOCUMENTS_BUCKET,
+                "Key": s3_key,
+                "ContentType": content_type,
+            },
+            ExpiresIn=_PRESIGNED_URL_TTL_SECONDS,
+        )
+    except botocore.exceptions.ClientError as exc:
+        error_code: str = exc.response["Error"]["Code"]
+        logger.error("Failed to presign document upload for user_id=%s: [%s] %s", user_id, error_code, exc)
+        return _server_error(f"Unable to generate upload URL [{error_code}].")
+
+    table = get_table()
+    try:
+        table.put_item(Item={
+            "PK": f"USR#{user_id}",
+            "SK": f"DOCUMENT#{doc_type}",
+            "s3_key": s3_key,
+            "status": "PENDING_UPLOAD",
+            "created_at": datetime.now(tz=timezone.utc).isoformat(),
+        })
+    except botocore.exceptions.ClientError as exc:
+        error_code = exc.response["Error"]["Code"]
+        logger.error("DynamoDB ClientError [%s] on PRESIGN_DOCUMENT_UPLOAD PK=USR#%s: %s", error_code, user_id, exc)
+        return _server_error(f"DynamoDB error [{error_code}]: unable to record document upload.")
+
+    return _ok({"upload_url": upload_url, "s3_key": s3_key})
+
+
 # ---------------------------------------------------------------------------
 # Action router
 # ---------------------------------------------------------------------------
@@ -311,6 +401,7 @@ _ROUTER: dict[str, Any] = {
     "UPSERT_PROFILE": _upsert_profile,
     "REGISTER_VEHICLE": _register_vehicle,
     "GET_PROFILE": _get_profile,
+    "PRESIGN_DOCUMENT_UPLOAD": _presign_document_upload,
 }
 
 
@@ -327,6 +418,7 @@ _ROUTE_KEY_MAP: dict[str, str] = {
     "POST /identity/upsert": "UPSERT_PROFILE",
     "POST /identity/vehicle": "REGISTER_VEHICLE",
     "GET /identity/profile": "GET_PROFILE",
+    "POST /identity/documents/presign": "PRESIGN_DOCUMENT_UPLOAD",
 }
 
 

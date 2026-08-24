@@ -201,6 +201,7 @@ def test_upsert_profile_driver_writes_gsi1_keys_for_vehicle_driver_map():
             "user_id": "driver-001",
             "role": "DRIVER",
             "phone": "+27841234567",
+            "name": "Thandiwe Mokoena",
             "assigned_cata_sticker": "ct-7001",   # deliberately lowercase → normaliser must uppercase
         },
     }
@@ -219,6 +220,7 @@ def test_upsert_profile_driver_writes_gsi1_keys_for_vehicle_driver_map():
     assert item["PK"] == "USR#driver-001"
     assert item["SK"] == "PROFILE"
     assert item["role"] == "DRIVER"
+    assert item["name"] == "Thandiwe Mokoena"
 
     # GSI1_PK must use the normalised (uppercase) CATA sticker as VEH# prefix.
     assert item["GSI1_PK"] == "VEH#CT-7001", (
@@ -244,6 +246,7 @@ def test_upsert_profile_driver_with_fee_holiday_balance_writes_decimal_field():
             "user_id": "driver-fee-002",
             "role": "DRIVER",
             "phone": "+27851234567",
+            "name": "Sipho Mahlangu",
             "assigned_cata_sticker": "CT-7002",
             "fee_holiday_balance": "25.00",
             "is_online": True,
@@ -289,6 +292,8 @@ def test_register_vehicle_writes_correct_gsi1_inverted_pk_for_fleet_view():
             "cata_sticker": "ct-8001",           # lowercase → normaliser uppercases it
             "make": "Toyota",
             "model": "HiAce",
+            "color": "White",
+            "license_plate": "ca 123-456",       # lowercase → normaliser uppercases it
             "owner_id": "USR#owner-fleet-001",
         },
     }
@@ -317,6 +322,10 @@ def test_register_vehicle_writes_correct_gsi1_inverted_pk_for_fleet_view():
     assert item["GSI1_SK"] == "VEH#CT-8001", (
         "GSI1_SK must be VEH#<cata_sticker> to allow range sorting within the owner's fleet."
     )
+    assert item["color"] == "White"
+    assert item["license_plate"] == "CA 123-456", (
+        f"license_plate must be normalised to uppercase; got '{item.get('license_plate')}'."
+    )
 
     # Verify the 200 response body carries the GSI key confirmations.
     body: dict[str, Any] = json.loads(response["body"])
@@ -340,6 +349,8 @@ def test_register_vehicle_duplicate_sticker_returns_400():
             "cata_sticker": "CT-DUPE-001",
             "make": "Toyota",
             "model": "HiAce",
+            "color": "Silver",
+            "license_plate": "CA 654-321",
             "owner_id": "USR#owner-001",
         },
     }
@@ -382,6 +393,33 @@ def test_upsert_profile_without_user_id_returns_400():
     body: dict[str, Any] = json.loads(response["body"])
     assert body["error"] == "ValidationError"
     assert "user_id" in body["detail"]
+
+
+@mock_aws
+def test_upsert_profile_driver_without_name_returns_400():
+    """UPSERT_PROFILE for a Driver missing the required 'name' field must
+    return 400 rather than silently persisting a nameless driver record.
+    """
+    _create_mock_table()
+    handler = _reload_identity_handler()
+
+    event: dict[str, Any] = {
+        "action_type": "UPSERT_PROFILE",
+        "payload": {
+            "user_id": "driver-no-name",
+            "role": "DRIVER",
+            "phone": "+27861234567",
+            "assigned_cata_sticker": "CT-7003",
+            # name deliberately omitted
+        },
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body: dict[str, Any] = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+    assert "name" in body["detail"]
 
 
 @mock_aws
@@ -432,6 +470,8 @@ def test_register_vehicle_without_usr_prefix_on_owner_id_raises_validation_error
             "cata_sticker": "CT-9001",
             "make": "Toyota",
             "model": "HiAce",
+            "color": "Blue",
+            "license_plate": "CA 987-654",
             "owner_id": "owner-no-prefix",   # missing USR# prefix
         },
     }
@@ -450,3 +490,99 @@ def test_register_vehicle_without_usr_prefix_on_owner_id_raises_validation_error
     assert "owner_id" in body["detail"] or "USR#" in body["detail"], (
         "The 400 detail body must reference the offending field (owner_id) or the expected prefix."
     )
+
+
+@mock_aws
+def test_register_vehicle_without_color_or_license_plate_returns_400():
+    """REGISTER_VEHICLE missing 'color' or 'license_plate' must return 400 —
+    both fields are required so the bidding engine can surface real vehicle
+    details to a rider once a bid is selected.
+    """
+    _create_mock_table()
+    handler = _reload_identity_handler()
+
+    event: dict[str, Any] = {
+        "action_type": "REGISTER_VEHICLE",
+        "payload": {
+            "cata_sticker": "CT-9002",
+            "make": "Toyota",
+            "model": "HiAce",
+            "owner_id": "USR#owner-002",
+            # color and license_plate deliberately omitted
+        },
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body: dict[str, Any] = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+
+
+# ---------------------------------------------------------------------------
+# PRESIGN_DOCUMENT_UPLOAD
+# ---------------------------------------------------------------------------
+
+@mock_aws
+def test_presign_document_upload_returns_url_and_persists_pending_record(monkeypatch):
+    """PRESIGN_DOCUMENT_UPLOAD with a valid payload must:
+
+    - Return HTTP 200 with an 'upload_url' and 's3_key'.
+    - Persist a PENDING_UPLOAD audit record at PK=USR#<user_id>, SK=DOCUMENT#<doc_type>.
+    """
+    monkeypatch.setenv("DRIVER_DOCUMENTS_BUCKET", "kwella-driver-documents-test")
+    table = _create_mock_table()
+    handler = _reload_identity_handler()
+
+    s3 = boto3.client("s3", region_name="af-south-1")
+    s3.create_bucket(
+        Bucket="kwella-driver-documents-test",
+        CreateBucketConfiguration={"LocationConstraint": "af-south-1"},
+    )
+
+    event: dict[str, Any] = {
+        "action_type": "PRESIGN_DOCUMENT_UPLOAD",
+        "payload": {
+            "user_id": "driver-001",
+            "doc_type": "PRDP",
+        },
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 200, (
+        f"Expected 200 for valid presign request, got {response['statusCode']}. "
+        f"Body: {response['body']}"
+    )
+    body: dict[str, Any] = json.loads(response["body"])
+    assert body["upload_url"].startswith("https://")
+    assert "driver-001/PRDP/" in body["s3_key"]
+
+    result = table.get_item(Key={"PK": "USR#driver-001", "SK": "DOCUMENT#PRDP"})
+    item = result.get("Item")
+    assert item is not None, "A PENDING_UPLOAD audit record must be written."
+    assert item["status"] == "PENDING_UPLOAD"
+    assert item["s3_key"] == body["s3_key"]
+
+
+@mock_aws
+def test_presign_document_upload_rejects_unknown_doc_type():
+    """PRESIGN_DOCUMENT_UPLOAD with a doc_type outside the allow-list must
+    return 400 without generating a presigned URL or touching DynamoDB.
+    """
+    _create_mock_table()
+    handler = _reload_identity_handler()
+
+    event: dict[str, Any] = {
+        "action_type": "PRESIGN_DOCUMENT_UPLOAD",
+        "payload": {
+            "user_id": "driver-001",
+            "doc_type": "PASSPORT_PHOTO",  # not in the allow-list
+        },
+    }
+
+    response = handler.lambda_handler(event, context=None)
+
+    assert response["statusCode"] == 400
+    body: dict[str, Any] = json.loads(response["body"])
+    assert body["error"] == "ValidationError"

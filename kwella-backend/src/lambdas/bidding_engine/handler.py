@@ -307,6 +307,17 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             rider_id: str | None = body.get("rider_id") or body.get("riderId")
             trip_id: str | None = body.get("tripId") or body.get("trip_id")
             bid_amount = body.get("amount") or body.get("counter_fare") or body.get("baseline_fare")
+            estimated_pickup = body.get("estimated_pickup") or body.get("estimatedPickup")
+            broadcast_pk = body.get("broadcast_pk") or body.get("broadcastPk")
+
+            bid_particulars: dict[str, Any] = {
+                "driver_id": driver_id,
+                "rider_id": rider_id,
+                "amount": bid_amount,
+                "estimated_pickup": estimated_pickup,
+                "broadcast_pk": broadcast_pk,
+                "connection_id": connection_id,
+            }
 
             logger.info(
                 "sendBid received: driverId=%s riderId=%s tripId=%s amount=%s",
@@ -408,6 +419,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     "message": "Bid received and dispatched to rider.",
                     "tripId": trip_id,
                     "driverId": driver_id,
+                    "bid_particulars": bid_particulars,
                 })
             }
 
@@ -495,12 +507,15 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             bid_item = bid_res.get("Item") or {}
             driver_conn_id: str | None = bid_item.get("driver_connection_id")
 
-            if _APIGW_ENDPOINT and driver_conn_id:
+            apigw_client: Any = None
+            if _APIGW_ENDPOINT:
                 apigw_client = boto3.client(
                     "apigatewaymanagementapi",
                     endpoint_url=_APIGW_ENDPOINT,
                     region_name=_AWS_REGION,
                 )
+
+            if apigw_client and driver_conn_id:
                 bid_won_payload = json.dumps({
                     "action": "bidSelected",
                     "tripId": trip_id,
@@ -525,6 +540,58 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 logger.warning(
                     "Could not resolve driver WebSocket connection for driverId=%s tripId=%s — skipping bidSelected push",
                     driver_id, trip_id,
+                )
+
+            # Notify the rider with the selected driver's name/rating/vehicle
+            # details, resolved from their profile and vehicle metadata. Use
+            # .get() throughout so a missing profile/vehicle degrades to None
+            # instead of raising.
+            driver_bare_id = driver_id.removeprefix("USR#").removeprefix("DRIVER#")
+            driver_profile_res = table.get_item(Key={"PK": f"USR#{driver_bare_id}", "SK": "PROFILE"})
+            driver_profile = driver_profile_res.get("Item") or {}
+
+            cata_sticker = driver_profile.get("assigned_cata_sticker")
+            vehicle_item: dict[str, Any] = {}
+            if cata_sticker:
+                vehicle_res = table.get_item(Key={"PK": f"VEH#{cata_sticker}", "SK": "METADATA"})
+                vehicle_item = vehicle_res.get("Item") or {}
+
+            raw_rating = driver_profile.get("rating")
+            driver_rating = float(raw_rating) if raw_rating is not None else None
+
+            rider_conn_id: str | None = trip_item.get("rider_connection_id")
+            if apigw_client and rider_conn_id:
+                trip_match_payload = json.dumps({
+                    "action": "tripMatchConfirmed",
+                    "tripId": trip_id,
+                    "driverId": driver_id,
+                    "riderId": rider_id,
+                    "driverName": driver_profile.get("name"),
+                    "rating": driver_rating,
+                    "vehicleMake": vehicle_item.get("make"),
+                    "vehicleModel": vehicle_item.get("model"),
+                    "vehicleColor": vehicle_item.get("color"),
+                    "licensePlate": vehicle_item.get("license_plate"),
+                    "cataSticker": cata_sticker,
+                }).encode("utf-8")
+                try:
+                    apigw_client.post_to_connection(
+                        ConnectionId=rider_conn_id,
+                        Data=trip_match_payload,
+                    )
+                    logger.info(
+                        "Dispatched tripMatchConfirmed to rider connectionId=%s for tripId=%s",
+                        rider_conn_id, trip_id,
+                    )
+                except botocore.exceptions.ClientError as notify_exc:
+                    logger.warning(
+                        "Failed to push tripMatchConfirmed to rider connectionId=%s: %s",
+                        rider_conn_id, notify_exc,
+                    )
+            else:
+                logger.warning(
+                    "Could not resolve rider WebSocket connection for tripId=%s — skipping tripMatchConfirmed push",
+                    trip_id,
                 )
 
             return {

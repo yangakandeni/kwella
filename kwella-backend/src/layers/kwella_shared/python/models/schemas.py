@@ -140,6 +140,8 @@ class DriverProfile(BaseProfile):
                    GSI1_PK: VEH#<Sticker>, GSI1_SK: DRIVER
 
     Attributes:
+        name:                  Driver's full display name, shown to riders
+                               once their bid is selected.
         assigned_cata_sticker: The unique CATA sticker identifier linking
                                this driver to their allocated 7-seater vehicle.
         fee_holiday_balance:   Cumulative ZAR amount of platform-fee waivers
@@ -150,6 +152,12 @@ class DriverProfile(BaseProfile):
         is_online:             Whether the driver is currently accepting trips.
     """
 
+    name: str = Field(
+        ...,
+        description="Driver's full display name, shown to riders on bid selection.",
+        min_length=1,
+        max_length=80,
+    )
     assigned_cata_sticker: str = Field(
         ...,
         description="CATA sticker ID linking the driver to their vehicle.",
@@ -177,6 +185,15 @@ class DriverProfile(BaseProfile):
         if not value.strip():
             raise ValueError("assigned_cata_sticker must not be blank.")
         return value.strip().upper()
+
+    @field_validator("name")
+    @classmethod
+    def name_must_be_non_blank(cls, value: str) -> str:
+        """Ensure the driver's display name is a non-whitespace string."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("name must not be blank.")
+        return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -265,11 +282,15 @@ class VehicleAsset(BaseModel):
     uniqueness natively in the DynamoDB single-table design.
 
     Attributes:
-        cata_sticker: Unique CATA regulatory sticker identifier. Acts as the
-                      VEH# PK prefix in the single-table schema.
-        make:         Vehicle manufacturer (e.g. "Toyota").
-        model:        Vehicle model name (e.g. "HiAce").
-        owner_id:     USR#<OwnerId> of the registered fleet owner.
+        cata_sticker:   Unique CATA regulatory sticker identifier. Acts as the
+                        VEH# PK prefix in the single-table schema.
+        make:           Vehicle manufacturer (e.g. "Toyota").
+        model:          Vehicle model name (e.g. "HiAce").
+        color:          Vehicle exterior color (e.g. "White"), shown to riders
+                        once a driver's bid is selected.
+        license_plate:  Vehicle registration/number plate, shown to riders
+                        once a driver's bid is selected.
+        owner_id:       USR#<OwnerId> of the registered fleet owner.
     """
 
     model_config = ConfigDict(
@@ -294,6 +315,18 @@ class VehicleAsset(BaseModel):
         description="Vehicle model name.",
         min_length=1,
         max_length=64,
+    )
+    color: str = Field(
+        ...,
+        description="Vehicle exterior color.",
+        min_length=1,
+        max_length=32,
+    )
+    license_plate: str = Field(
+        ...,
+        description="Vehicle registration/number plate.",
+        min_length=1,
+        max_length=16,
     )
     owner_id: str = Field(
         ...,
@@ -320,3 +353,16 @@ class VehicleAsset(BaseModel):
                 "(e.g. 'USR#abc-123')."
             )
         return value
+
+    @field_validator("license_plate")
+    @classmethod
+    def normalise_license_plate(cls, value: str) -> str:
+        """Strip whitespace and normalise the plate to uppercase.
+
+        No rigid format regex is enforced — South African plate formats
+        vary significantly by province, era, and personalization.
+        """
+        cleaned = value.strip().upper()
+        if not cleaned:
+            raise ValueError("license_plate must not be blank.")
+        return cleaned

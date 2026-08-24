@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from decimal import Decimal
 from typing import Any
 
 import boto3
@@ -1331,6 +1332,227 @@ def test_select_bid_missing_driver_id_returns_400():
     body = json.loads(response["body"])
     assert body["error"] == "ValidationError"
     assert "driverId" in body["detail"]
+
+
+@mock_aws
+def test_select_bid_pushes_trip_match_confirmed_to_rider_with_driver_details():
+    """selectBid must push a tripMatchConfirmed frame to the rider carrying the
+    selected driver's name/rating and vehicle make/model/color/plate/sticker,
+    in addition to (not instead of) the existing driver-facing bidSelected push.
+    """
+    table = _create_mock_table()
+
+    env_backup = {"KWELLA_APIGW_ENDPOINT": os.environ.get("KWELLA_APIGW_ENDPOINT")}
+    os.environ["KWELLA_APIGW_ENDPOINT"] = "https://example.execute-api.af-south-1.amazonaws.com/prod"
+
+    try:
+        handler = _reload_bidding_handler()
+
+        table.put_item(Item={
+            "PK": "TRIP#trip-select-3",
+            "SK": "METADATA",
+            "status": "REQUESTED",
+            "rider_id": "USR#rdr-3",
+            "rider_connection_id": "conn-rider-3",
+        })
+        table.put_item(Item={
+            "PK": "BID#trip-select-3",
+            "SK": "DRIVER#USR#drv-3",
+            "driver_connection_id": "conn-driver-winner-3",
+        })
+        table.put_item(Item={
+            "PK": "USR#drv-3",
+            "SK": "PROFILE",
+            "name": "Thabo Nkosi",
+            "rating": Decimal("4.8"),
+            "assigned_cata_sticker": "CT-1234",
+        })
+        table.put_item(Item={
+            "PK": "VEH#CT-1234",
+            "SK": "METADATA",
+            "make": "Toyota",
+            "model": "Quantum",
+            "color": "White",
+            "license_plate": "CA 111-222",
+        })
+
+        apigw_mock = Mock()
+
+        def client_factory(service_name, region_name=None, endpoint_url=None, **kwargs):
+            if service_name == "apigatewaymanagementapi":
+                return apigw_mock
+            raise RuntimeError(f"Unexpected boto3 client request: {service_name}")
+
+        with patch.object(handler, "boto3") as boto3_mock:
+            boto3_mock.client.side_effect = client_factory
+            boto3_mock.resource = boto3.resource
+
+            payload = {
+                "action": "selectBid",
+                "tripId": "trip-select-3",
+                "driverId": "USR#drv-3",
+            }
+            response = handler.lambda_handler(
+                {**_SELECT_BID_EVENT_BASE, "body": json.dumps(payload)}, context=None
+            )
+
+        assert response["statusCode"] == 200
+        assert apigw_mock.post_to_connection.call_count == 2
+
+        calls_by_connection = {
+            call.kwargs["ConnectionId"]: json.loads(call.kwargs["Data"])
+            for call in apigw_mock.post_to_connection.call_args_list
+        }
+
+        driver_push = calls_by_connection["conn-driver-winner-3"]
+        assert driver_push["action"] == "bidSelected"
+
+        rider_push = calls_by_connection["conn-rider-3"]
+        assert rider_push["action"] == "tripMatchConfirmed"
+        assert rider_push["tripId"] == "trip-select-3"
+        assert rider_push["driverId"] == "USR#drv-3"
+        assert rider_push["riderId"] == "USR#rdr-3"
+        assert rider_push["driverName"] == "Thabo Nkosi"
+        assert rider_push["rating"] == 4.8
+        assert rider_push["vehicleMake"] == "Toyota"
+        assert rider_push["vehicleModel"] == "Quantum"
+        assert rider_push["vehicleColor"] == "White"
+        assert rider_push["licensePlate"] == "CA 111-222"
+        assert rider_push["cataSticker"] == "CT-1234"
+    finally:
+        for key, value in env_backup.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+@mock_aws
+def test_select_bid_trip_match_confirmed_degrades_gracefully_when_profile_or_vehicle_missing():
+    """selectBid must not crash when the selected driver has no PROFILE record
+    or no vehicle METADATA — the rider push should still be attempted with
+    null driver/vehicle fields rather than raising.
+    """
+    table = _create_mock_table()
+
+    env_backup = {"KWELLA_APIGW_ENDPOINT": os.environ.get("KWELLA_APIGW_ENDPOINT")}
+    os.environ["KWELLA_APIGW_ENDPOINT"] = "https://example.execute-api.af-south-1.amazonaws.com/prod"
+
+    try:
+        handler = _reload_bidding_handler()
+
+        table.put_item(Item={
+            "PK": "TRIP#trip-select-4",
+            "SK": "METADATA",
+            "status": "REQUESTED",
+            "rider_id": "USR#rdr-4",
+            "rider_connection_id": "conn-rider-4",
+        })
+        table.put_item(Item={
+            "PK": "BID#trip-select-4",
+            "SK": "DRIVER#USR#drv-4",
+            "driver_connection_id": "conn-driver-winner-4",
+        })
+        # Deliberately no USR#drv-4/PROFILE and no VEH#.../METADATA seeded.
+
+        apigw_mock = Mock()
+
+        def client_factory(service_name, region_name=None, endpoint_url=None, **kwargs):
+            if service_name == "apigatewaymanagementapi":
+                return apigw_mock
+            raise RuntimeError(f"Unexpected boto3 client request: {service_name}")
+
+        with patch.object(handler, "boto3") as boto3_mock:
+            boto3_mock.client.side_effect = client_factory
+            boto3_mock.resource = boto3.resource
+
+            payload = {
+                "action": "selectBid",
+                "tripId": "trip-select-4",
+                "driverId": "USR#drv-4",
+            }
+            response = handler.lambda_handler(
+                {**_SELECT_BID_EVENT_BASE, "body": json.dumps(payload)}, context=None
+            )
+
+        assert response["statusCode"] == 200
+
+        calls_by_connection = {
+            call.kwargs["ConnectionId"]: json.loads(call.kwargs["Data"])
+            for call in apigw_mock.post_to_connection.call_args_list
+        }
+        rider_push = calls_by_connection["conn-rider-4"]
+        assert rider_push["action"] == "tripMatchConfirmed"
+        assert rider_push["driverName"] is None
+        assert rider_push["rating"] is None
+        assert rider_push["vehicleMake"] is None
+        assert rider_push["vehicleColor"] is None
+        assert rider_push["licensePlate"] is None
+        assert rider_push["cataSticker"] is None
+    finally:
+        for key, value in env_backup.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+@mock_aws
+def test_select_bid_skips_trip_match_confirmed_when_rider_has_no_connection():
+    """selectBid must skip the rider push (without error) when the trip has
+    no recorded rider_connection_id, while still notifying the driver.
+    """
+    table = _create_mock_table()
+
+    env_backup = {"KWELLA_APIGW_ENDPOINT": os.environ.get("KWELLA_APIGW_ENDPOINT")}
+    os.environ["KWELLA_APIGW_ENDPOINT"] = "https://example.execute-api.af-south-1.amazonaws.com/prod"
+
+    try:
+        handler = _reload_bidding_handler()
+
+        table.put_item(Item={
+            "PK": "TRIP#trip-select-5",
+            "SK": "METADATA",
+            "status": "REQUESTED",
+            "rider_id": "USR#rdr-5",
+            # rider_connection_id deliberately omitted
+        })
+        table.put_item(Item={
+            "PK": "BID#trip-select-5",
+            "SK": "DRIVER#USR#drv-5",
+            "driver_connection_id": "conn-driver-winner-5",
+        })
+
+        apigw_mock = Mock()
+
+        def client_factory(service_name, region_name=None, endpoint_url=None, **kwargs):
+            if service_name == "apigatewaymanagementapi":
+                return apigw_mock
+            raise RuntimeError(f"Unexpected boto3 client request: {service_name}")
+
+        with patch.object(handler, "boto3") as boto3_mock:
+            boto3_mock.client.side_effect = client_factory
+            boto3_mock.resource = boto3.resource
+
+            payload = {
+                "action": "selectBid",
+                "tripId": "trip-select-5",
+                "driverId": "USR#drv-5",
+            }
+            response = handler.lambda_handler(
+                {**_SELECT_BID_EVENT_BASE, "body": json.dumps(payload)}, context=None
+            )
+
+        assert response["statusCode"] == 200
+        assert apigw_mock.post_to_connection.call_count == 1
+        only_call = apigw_mock.post_to_connection.call_args_list[0]
+        assert only_call.kwargs["ConnectionId"] == "conn-driver-winner-5"
+    finally:
+        for key, value in env_backup.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 # ---------------------------------------------------------------------------
