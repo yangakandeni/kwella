@@ -249,6 +249,170 @@ def test_send_bid_with_malformed_json_returns_400():
     assert "JSON" in body["detail"]
 
 
+@mock_aws
+def test_send_bid_driver_bid_received_includes_driver_and_vehicle_details():
+    """sendBid must push a driverBidReceived frame to the rider carrying the
+    bidding driver's name/rating and vehicle make/model/color/plate/sticker,
+    resolved the same way selectBid resolves them for tripMatchConfirmed.
+    """
+    table = _create_mock_table()
+
+    env_backup = {"KWELLA_APIGW_ENDPOINT": os.environ.get("KWELLA_APIGW_ENDPOINT")}
+    os.environ["KWELLA_APIGW_ENDPOINT"] = "https://example.execute-api.af-south-1.amazonaws.com/prod"
+
+    try:
+        handler = _reload_bidding_handler()
+
+        # Seed a CONN# record for the rider so sendBid's connection-lookup
+        # fallback scan (SK=METADATA AND user_id=riderId) finds it — the
+        # moto-created table has no GSI1 index, so the GSI1 query path
+        # raises and falls back to this scan, same as production would if
+        # the GSI lookup missed.
+        table.put_item(Item={
+            "PK": "CONN#conn-rider-bid-1",
+            "SK": "METADATA",
+            "user_id": "USR#rdr-bid-1",
+            "connected_at": "2026-06-21T01:00:00Z",
+        })
+
+        table.put_item(Item={
+            "PK": "USR#drv-bid-1",
+            "SK": "PROFILE",
+            "name": "Lindiwe Dlamini",
+            "rating": Decimal("4.9"),
+            "assigned_cata_sticker": "CT-9999",
+        })
+        table.put_item(Item={
+            "PK": "VEH#CT-9999",
+            "SK": "METADATA",
+            "make": "Honda",
+            "model": "Fit",
+            "color": "Blue",
+            "license_plate": "CA 999-000",
+        })
+
+        apigw_mock = Mock()
+
+        def client_factory(service_name, region_name=None, endpoint_url=None, **kwargs):
+            if service_name == "apigatewaymanagementapi":
+                return apigw_mock
+            raise RuntimeError(f"Unexpected boto3 client request: {service_name}")
+
+        with patch.object(handler, "boto3") as boto3_mock:
+            boto3_mock.client.side_effect = client_factory
+            boto3_mock.resource = boto3.resource
+
+            body_payload = {
+                "driver_id": "USR#drv-bid-1",
+                "rider_id": "USR#rdr-bid-1",
+                "tripId": "trip-bid-1",
+                "amount": "75.00",
+            }
+            event = {
+                "requestContext": {
+                    "routeKey": "sendBid",
+                    "connectionId": "conn-driver-bid-1",
+                },
+                "body": json.dumps(body_payload),
+            }
+            response = handler.lambda_handler(event, context=None)
+
+        assert response["statusCode"] == 200
+        assert apigw_mock.post_to_connection.call_count == 1
+
+        call = apigw_mock.post_to_connection.call_args_list[0]
+        assert call.kwargs["ConnectionId"] == "conn-rider-bid-1"
+        push = json.loads(call.kwargs["Data"])
+
+        assert push["action"] == "driverBidReceived"
+        assert push["tripId"] == "trip-bid-1"
+        assert push["driverId"] == "USR#drv-bid-1"
+        assert push["amount"] == "75.00"
+        assert push["driver_connection_id"] == "conn-driver-bid-1"
+        assert push["driverName"] == "Lindiwe Dlamini"
+        assert push["rating"] == 4.9
+        assert push["vehicleMake"] == "Honda"
+        assert push["vehicleModel"] == "Fit"
+        assert push["vehicleColor"] == "Blue"
+        assert push["licensePlate"] == "CA 999-000"
+        assert push["cataSticker"] == "CT-9999"
+    finally:
+        for key, value in env_backup.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+@mock_aws
+def test_send_bid_driver_bid_received_degrades_gracefully_when_profile_or_vehicle_missing():
+    """sendBid must not crash when the bidding driver has no PROFILE record or
+    no vehicle METADATA — the rider push should still succeed with null
+    driver/vehicle fields rather than raising.
+    """
+    table = _create_mock_table()
+
+    env_backup = {"KWELLA_APIGW_ENDPOINT": os.environ.get("KWELLA_APIGW_ENDPOINT")}
+    os.environ["KWELLA_APIGW_ENDPOINT"] = "https://example.execute-api.af-south-1.amazonaws.com/prod"
+
+    try:
+        handler = _reload_bidding_handler()
+
+        table.put_item(Item={
+            "PK": "CONN#conn-rider-bid-2",
+            "SK": "METADATA",
+            "user_id": "USR#rdr-bid-2",
+            "connected_at": "2026-06-21T01:00:00Z",
+        })
+        # Deliberately no USR#drv-bid-2/PROFILE and no VEH#.../METADATA seeded.
+
+        apigw_mock = Mock()
+
+        def client_factory(service_name, region_name=None, endpoint_url=None, **kwargs):
+            if service_name == "apigatewaymanagementapi":
+                return apigw_mock
+            raise RuntimeError(f"Unexpected boto3 client request: {service_name}")
+
+        with patch.object(handler, "boto3") as boto3_mock:
+            boto3_mock.client.side_effect = client_factory
+            boto3_mock.resource = boto3.resource
+
+            body_payload = {
+                "driver_id": "USR#drv-bid-2",
+                "rider_id": "USR#rdr-bid-2",
+                "tripId": "trip-bid-2",
+                "amount": "60.00",
+            }
+            event = {
+                "requestContext": {
+                    "routeKey": "sendBid",
+                    "connectionId": "conn-driver-bid-2",
+                },
+                "body": json.dumps(body_payload),
+            }
+            response = handler.lambda_handler(event, context=None)
+
+        assert response["statusCode"] == 200
+
+        call = apigw_mock.post_to_connection.call_args_list[0]
+        push = json.loads(call.kwargs["Data"])
+
+        assert push["action"] == "driverBidReceived"
+        assert push["driverName"] is None
+        assert push["rating"] is None
+        assert push["vehicleMake"] is None
+        assert push["vehicleModel"] is None
+        assert push["vehicleColor"] is None
+        assert push["licensePlate"] is None
+        assert push["cataSticker"] is None
+    finally:
+        for key, value in env_backup.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 # ---------------------------------------------------------------------------
 # Error and Invalid Request Paths
 # ---------------------------------------------------------------------------

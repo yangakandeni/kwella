@@ -384,12 +384,36 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     logger.warning("CONN scan for riderId=%s failed: %s", rider_id, scan_exc)
 
             if rider_conn_id and apigw_client:
+                # Resolve the bidding driver's name/rating/vehicle details, the
+                # same way selectBid resolves them for tripMatchConfirmed. Use
+                # .get() throughout so a missing PROFILE/VEHICLE record
+                # degrades to None instead of raising.
+                driver_bare_id = (driver_id or "").removeprefix("USR#").removeprefix("DRIVER#")
+                driver_profile_res = table.get_item(Key={"PK": f"USR#{driver_bare_id}", "SK": "PROFILE"})
+                driver_profile = driver_profile_res.get("Item") or {}
+
+                cata_sticker = driver_profile.get("assigned_cata_sticker")
+                vehicle_item: dict[str, Any] = {}
+                if cata_sticker:
+                    vehicle_res = table.get_item(Key={"PK": f"VEH#{cata_sticker}", "SK": "METADATA"})
+                    vehicle_item = vehicle_res.get("Item") or {}
+
+                raw_rating = driver_profile.get("rating")
+                driver_rating = float(raw_rating) if raw_rating is not None else None
+
                 bid_notification = json.dumps({
                     "action": "driverBidReceived",
                     "tripId": trip_id,
                     "driverId": driver_id,
                     "amount": bid_amount,
                     "driver_connection_id": connection_id,
+                    "driverName": driver_profile.get("name"),
+                    "rating": driver_rating,
+                    "vehicleMake": vehicle_item.get("make"),
+                    "vehicleModel": vehicle_item.get("model"),
+                    "vehicleColor": vehicle_item.get("color"),
+                    "licensePlate": vehicle_item.get("license_plate"),
+                    "cataSticker": cata_sticker,
                 }).encode("utf-8")
                 try:
                     apigw_client.post_to_connection(

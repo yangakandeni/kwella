@@ -20,7 +20,20 @@ dev_dependencies:
     sdk: flutter
   lints: ^6.0.0
   test: ^1.25.6
-  kwella_rider_app:
-    path: ../kwella_rider_app
-  kwella_driver_app:
-    path: ../kwella_driver_app
+  kwella_rider:
+    path: ../kwella_rider
+  kwella_driver:
+    path: ../kwella_driver
+
+# kwella_driver (flutter_dotenv ^5.1.0) and kwella_rider (flutter_dotenv
+# ^6.0.1) declare non-overlapping major-version constraints on the same
+# transitive dependency. pub's version solver resolves the whole declared
+# graph up front regardless of which files are actually imported, so without
+# this override `flutter pub get` fails outright for kwella_core. Neither app
+# is actually compiled by kwella_core's test suite (see
+# test/e2e_live_bidding_integration_test.dart's top-of-file comment), so the
+# pinned version below only needs to satisfy pub's solver, not runtime
+# behavior in either app. This is a pre-existing inconsistency between the
+# two apps' own pubspec.yaml files, out of scope to fix at the source here.
+dependency_overrides:
+  flutter_dotenv: ^6.0.1
