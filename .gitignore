@@ -88,3 +88,6 @@ runner-*.log
 # Screens should be for dev reference only
 /kwella-apps/driver-app-screens/*
 /kwella-apps/rider-app-screens/*
+
+# Other
+*handover*.md
