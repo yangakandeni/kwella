@@ -4,7 +4,8 @@
 * **Name:** kwella (Township Mobility Platform)
 * **Target Vehicle Scope:** Strictly 7-seater vehicles (*amaphela*). Minibus taxis (vans) are explicitly out of scope for MVP.
 * **Trip Type:** Dedicated, private point-to-point trips only (no shared routes).
-* **Physical Hub:** Onboarding, manual document audits, and physical inspections occur at Philippi Village, Cape Town.
+* **Operating Area:** Philippi, Nyanga and Gugulethu, Cape Town — where these 7-seater amaphela operate.
+* **Verification:** Vehicle and driver verification is done via the [CarScanAI](https://www.carscan.ai/) third-party app (kwella will need to register the platform with CarScan), plus a valid license disc, driver PrDP, and a unique physical CATA sticker number. Drivers additionally require a clear criminal-record check (via CarScan or a HURU check at a participating facility, e.g. PostNet); this requirement only applies when a Rider or Owner switches to a Driver role, not to an owner who never drives. Riders upload a copy of their ID and proof of address during onboarding.
 * **UI/UX Aesthetic:** High-contrast CATA Transit Green (`#1E4620`), Community Cream (`#F4F4EA`), and Deep Slate/Obsidian Black (`#111111`) following universal e-hailing ergonomics (sliding bottom-sheet model).
 
 ## 2. Core Technological Constraints
@@ -26,11 +27,11 @@
 * **CATA Sticker Validation:** The vehicle's physical CATA sticker identifier serves as a unique `PK` prefix to enforce uniqueness natively.
 
 ## 4. Advanced Bidding & Cancellation Ledger Engine Rules
-* **Bidding Marketplace:** Premium dynamic bidding engine. Base price scales on distance + passenger count adjustments (1 to 6 passengers).
+* **Bidding Marketplace:** Premium dynamic bidding engine. The server (never the client) computes the fare as `(flat_rate x 6 seats) + variable_fare(distance, passenger_count 1-6, time_of_day)` — see `kwella-backend/src/layers/kwella_shared/python/fare_calculator.py`. The total can never fall below `flat_rate x 6 seats`, mirroring the existing "special trip" rule where a single passenger who wants to skip further pickups pays the full 6-seat flat rate. `flat_rate` is a Terraform variable / Lambda env var (`KWELLA_FLAT_RATE_ZAR`), not a hardcoded constant, since it moves with fuel-price hikes.
 * **Payment Rail:** Hybrid Model (Cash + Digital Card Pre-authorization).
 * **Algorithmic Cancellation Logic:**
     * Rider cancels late on a card trip: Auto-charge card penalty, settle driver wallet instantly.
-    * Rider cancels late on a cash trip: Rider account hits Debt Status. kwella waives its 10% platform fee for that specific driver on subsequent rides (0% Platform Fee Holiday) until the waived sum equals the cancellation penalty amount (tiered up to R30 based on driver proximity). The platform collects the balance back when the rider settles their debt to clear the account suspension.
+    * Rider cancels late on a cash trip: Rider account hits Debt Status (`is_suspended = True` + `cancellation_debt` incremented on the rider's PROFILE record, enforced by `auth_authorizer`). kwella waives its 10% platform fee for that specific driver on subsequent rides (0% Platform Fee Holiday) until the waived sum equals the cancellation penalty amount (tiered up to R30 based on driver proximity). The debt is recouped from the passenger: the rider stays locked out of the app until they settle the exact amount owed via the `SETTLE_RIDER_DEBT` ledger action (`POST /ledger/debt/settle`), which clears `is_suspended` once their running debt reaches zero.
     * Driver cancels trip: Drastic star-rating penalty deducted automatically based on proximity to pickup. Suspension kicks in if rating drops below 4.0 stars.
 
 ## 5. Engineering Governance
@@ -133,3 +134,15 @@ The following core modules are fully implemented, thoroughly tested (144+ automa
   2. If an active record is found, extracts and returns the configured `owner_id` (routing 100% of gross weekly earnings to that target).
   3. If no active ownership record exists, defaults the routing target to the active driver assigned to the vehicle by querying the GSI1 index (`GSI1_PK = VEH#<vehicle_id>`, `GSI1_SK = DRIVER`) and formatting the result as `DRIVER#<driver_id>`.
   4. If no driver profile is found, defaults to `DRIVER#UNKNOWN` as a safe fallback.
+
+## 9. Phase 20: Server-Side Fare Floor & Passenger Debt Recoupment
+
+### A. Fare Calculation Engine
+- **Module:** `kwella-backend/src/layers/kwella_shared/python/fare_calculator.py` — `calculate_trip_fare(distance_km, passenger_count, request_time, flat_rate)`.
+- **Formula:** `total_fare = (flat_rate x 6 seats) + variable_fare`, where `variable_fare` is a non-negative sum of a distance component (fraction of `flat_rate` per km), a per-extra-passenger strain surcharge, a peak-hour multiplier (06:00-09:00 / 16:00-19:00 SAST), and a night-time risk premium (22:00-05:00 SAST). The floor is enforced defensively even though `variable_fare` can never be negative.
+- **Config:** `flat_rate` is read from `KWELLA_FLAT_RATE_ZAR` (Lambda env var, wired from the Terraform `flat_rate_zar` variable, default R10.00) rather than hardcoded, since it moves with fuel-price hikes.
+- **Wiring:** `bidding_engine/handler.py`'s `requestTrip` route computes `calculated_fare` server-side from the rider's pickup/dropoff coordinates and `passenger_count` (1-6, clamped) and broadcasts that value as `base_fare` to matched drivers — the client-supplied `suggested_base_fare` is no longer trusted as the authoritative price.
+
+### B. Rider Cancellation-Debt Settlement
+- **Module:** `kwella-backend/src/lambdas/ledger_service/cancellation_handler.py` — `build_cancellation_transact_items` now writes a third transact item alongside the rider `DEBT#<trip_id>` row and the driver compensating credit: an `Update` on the rider's own `PK = USR#<rider_id>, SK = PROFILE` record setting `is_suspended = True` and incrementing `cancellation_debt` — the exact fields `auth_authorizer/handler.py` already checks to deny access.
+- **Settlement:** `settle_rider_debt()` / the new `SETTLE_RIDER_DEBT` ledger action (`POST /ledger/debt/settle`) marks the referenced `DEBT#<trip_id>` item `SETTLED`, decrements the rider's running `cancellation_debt`, and clears `is_suspended` once that running total reaches zero — a rider with multiple outstanding cancellations stays suspended until all of them are paid off.

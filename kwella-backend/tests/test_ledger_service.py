@@ -96,6 +96,12 @@ def test_process_cancellation_applies_debt_and_fee_holiday():
     assert driver_item["platform_commission_rate"] == Decimal("0.00")
     assert driver_item["platform_commission_amount"] == Decimal("0.00")
 
+    # The rider must be locked out (README.md §3B Option B) until they settle
+    # the debt — this is the same PK/SK the auth_authorizer Lambda reads.
+    rider_profile = table.get_item(Key={"PK": "USR#rider-1", "SK": "PROFILE"})["Item"]
+    assert rider_profile["is_suspended"] is True
+    assert rider_profile["cancellation_debt"] == Decimal("25.50")
+
 
 @mock_aws
 def test_process_cancellation_rejects_penalty_amount_exceeding_max_cap():
@@ -311,3 +317,127 @@ def test_apply_trip_fee_retries_on_collision_and_succeeds(mocker):
     assert body["actual_fee_charged"] == 0.0
     assert body["remaining_fee_holiday_balance"] == 15.0
     assert call_count == 2  # Proves a retry occurred and succeeded
+
+
+# ---------------------------------------------------------------------------
+# SETTLE_RIDER_DEBT
+# ---------------------------------------------------------------------------
+
+@mock_aws
+def test_settle_rider_debt_clears_debt_and_lifts_suspension():
+    """SETTLE_RIDER_DEBT must mark the DEBT# item SETTLED, zero out the
+    rider's cancellation_debt, and clear is_suspended once the balance
+    reaches zero (README.md §3B: recouped from the passenger).
+    """
+    table = _create_mock_table()
+    handler = _reload_ledger_handler()
+
+    table.put_item(Item={
+        "PK": "USER#rider-1",
+        "SK": "DEBT#trip-1",
+        "amount": Decimal("25.50"),
+        "status": "PENDING_SETTLEMENT",
+        "reason": "LATE_CANCELLATION",
+    })
+    table.put_item(Item={
+        "PK": "USR#rider-1",
+        "SK": "PROFILE",
+        "is_suspended": True,
+        "cancellation_debt": Decimal("25.50"),
+    })
+
+    event = {
+        "action_type": "SETTLE_RIDER_DEBT",
+        "payload": {"rider_id": "rider-1", "trip_id": "trip-1"},
+    }
+
+    response = handler.lambda_handler(event, None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["remaining_debt"] == 0.0
+    assert body["is_suspended"] is False
+
+    debt_item = table.get_item(Key={"PK": "USER#rider-1", "SK": "DEBT#trip-1"})["Item"]
+    assert debt_item["status"] == "SETTLED"
+
+    rider_profile = table.get_item(Key={"PK": "USR#rider-1", "SK": "PROFILE"})["Item"]
+    assert rider_profile["cancellation_debt"] == Decimal("0.00")
+    assert rider_profile["is_suspended"] is False
+
+
+@mock_aws
+def test_settle_rider_debt_keeps_suspension_when_other_debts_remain():
+    """A rider with two outstanding debts must stay suspended after settling
+    only one of them.
+    """
+    table = _create_mock_table()
+    handler = _reload_ledger_handler()
+
+    table.put_item(Item={
+        "PK": "USER#rider-1", "SK": "DEBT#trip-1",
+        "amount": Decimal("15.00"), "status": "PENDING_SETTLEMENT",
+    })
+    table.put_item(Item={
+        "PK": "USER#rider-1", "SK": "DEBT#trip-2",
+        "amount": Decimal("30.00"), "status": "PENDING_SETTLEMENT",
+    })
+    table.put_item(Item={
+        "PK": "USR#rider-1", "SK": "PROFILE",
+        "is_suspended": True, "cancellation_debt": Decimal("45.00"),
+    })
+
+    event = {
+        "action_type": "SETTLE_RIDER_DEBT",
+        "payload": {"rider_id": "rider-1", "trip_id": "trip-1"},
+    }
+
+    response = handler.lambda_handler(event, None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["remaining_debt"] == 30.0
+    assert body["is_suspended"] is True
+
+    rider_profile = table.get_item(Key={"PK": "USR#rider-1", "SK": "PROFILE"})["Item"]
+    assert rider_profile["is_suspended"] is True
+    assert rider_profile["cancellation_debt"] == Decimal("30.00")
+
+
+@mock_aws
+def test_settle_rider_debt_rejects_unknown_or_already_settled_debt():
+    _create_mock_table()
+    handler = _reload_ledger_handler()
+
+    event = {
+        "action_type": "SETTLE_RIDER_DEBT",
+        "payload": {"rider_id": "rider-1", "trip_id": "trip-does-not-exist"},
+    }
+
+    response = handler.lambda_handler(event, None)
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+
+
+@mock_aws
+def test_settle_rider_debt_supports_http_route_key_and_camelcase_payload():
+    table = _create_mock_table()
+    handler = _reload_ledger_handler()
+
+    table.put_item(Item={
+        "PK": "USER#rider-1", "SK": "DEBT#trip-1",
+        "amount": Decimal("15.00"), "status": "PENDING_SETTLEMENT",
+    })
+    table.put_item(Item={
+        "PK": "USR#rider-1", "SK": "PROFILE",
+        "is_suspended": True, "cancellation_debt": Decimal("15.00"),
+    })
+
+    event = {
+        "routeKey": "POST /ledger/debt/settle",
+        "body": json.dumps({"riderId": "rider-1", "tripId": "trip-1"}),
+    }
+
+    response = handler.lambda_handler(event, None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["is_suspended"] is False

@@ -42,6 +42,7 @@ import boto3
 import botocore.exceptions
 from decimal import Decimal
 
+from fare_calculator import calculate_trip_fare
 from geofence_utils import calculate_distance, is_inside_geofence
 
 # Initialize Logger
@@ -1367,7 +1368,16 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             pickup_lon = payload.get("pickup_longitude")
             dropoff_lat = payload.get("dropoff_latitude")
             dropoff_lon = payload.get("dropoff_longitude")
-            suggested_fare = payload.get("suggested_base_fare")
+
+            # Passenger count drives the passenger-scaled bidding formula
+            # (README.md §3A). Clamp defensively into the 1-6 seat range;
+            # calculate_trip_fare() also clamps, but we log using the raw
+            # client value first for observability.
+            raw_passenger_count = payload.get("passenger_count") or payload.get("passengerCount") or 1
+            try:
+                passenger_count = int(raw_passenger_count)
+            except (TypeError, ValueError):
+                passenger_count = 1
 
             # Validate required fields.
             required_fields = {
@@ -1441,6 +1451,19 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             # Generate a stable trip identifier for this dispatch cycle.
             trip_id = f"TRP#{uuid.uuid4()}"
 
+            # Server-side fare calculation (README.md §3A): the client-supplied
+            # fare is never trusted as the broadcast price. The floor
+            # (flat_rate x 6 seats) plus the distance/passenger/time-of-day
+            # variable component is computed here so every driver bids against
+            # the same authoritative number.
+            trip_distance_km = calculate_distance(
+                pickup_lat, pickup_lon, dropoff_lat, dropoff_lon
+            ) / 1000.0
+            calculated_fare = calculate_trip_fare(
+                distance_km=trip_distance_km,
+                passenger_count=passenger_count,
+            )
+
             # Persist TRIP METADATA: stores destination coords for geofence evaluation
             # and rider identity/connection so handlers can push back to them.
             table.put_item(
@@ -1451,7 +1474,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     "pickup_longitude": str(pickup_lon),
                     "destination_latitude": str(dropoff_lat),
                     "destination_longitude": str(dropoff_lon),
-                    "suggested_fare": str(suggested_fare),
+                    "passenger_count": passenger_count,
+                    "calculated_fare": str(calculated_fare),
                     "status": "ACCEPTED",
                     "rider_id": rider_id or "",
                     "rider_connection_id": connection_id,
@@ -1467,7 +1491,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "rider_id": rider_id,
                 "pickup_location": [pickup_lat, pickup_lon],
                 "dropoff_location": [dropoff_lat, dropoff_lon],
-                "base_fare": suggested_fare,
+                "passenger_count": passenger_count,
+                "base_fare": str(calculated_fare),
                 "expires_in_seconds": _RIDE_OFFER_TTL_SECONDS,
             }
             offer_data = json.dumps(offer_payload).encode("utf-8")
@@ -1559,7 +1584,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         _send_fcm_push_via_sns(
                             fcm_token=fcm_token,
                             trip_id=trip_id,
-                            base_fare=suggested_fare,
+                            base_fare=calculated_fare,
                         )
 
             logger.info(
@@ -1575,6 +1600,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     "status": "TripBroadcast",
                     "tripId": trip_id,
                     "matched_drivers": matched_driver_ids,
+                    "passenger_count": passenger_count,
+                    "calculated_fare": str(calculated_fare),
                 }),
             }
 

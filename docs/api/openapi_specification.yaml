@@ -38,7 +38,9 @@ info:
     ---
     **Platform Context:**
     - Target vehicle scope: 7-seater *amaphela* (minibus taxis are out of MVP scope)
-    - Physical hub: Philippi Village, Cape Town
+    - Operating area: Philippi, Nyanga and Gugulethu, Cape Town
+    - Vehicle/driver verification: CarScanAI (https://www.carscan.ai/), plus a HURU
+      criminal-record check for drivers where required
     - Cloud region: `af-south-1` (AWS Cape Town)
     - Runtime: Python 3.12 on AWS Lambda, DynamoDB single-table (`kwella-core-production`)
   contact:

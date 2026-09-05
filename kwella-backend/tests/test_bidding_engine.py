@@ -1118,7 +1118,7 @@ def test_request_trip_offline_driver_triggers_sns_fallback_push():
         assert gcm_message["priority"] == "high"
         assert gcm_message["data"]["action"] == "rideOfferAvailable"
         assert gcm_message["data"]["tripId"] == body["tripId"]
-        assert gcm_message["data"]["base_fare"] == str(_REQUEST_TRIP_PAYLOAD["suggested_base_fare"])
+        assert gcm_message["data"]["base_fare"] == body["calculated_fare"]
         assert gcm_message["data"]["click_action"] == "FLUTTER_NOTIFICATION_CLICK"
     finally:
         for key, value in env_backup.items():
@@ -1176,6 +1176,61 @@ def test_request_trip_with_no_active_drivers_returns_empty_matched_list():
     body = json.loads(response["body"])
     assert body["status"] == "TripBroadcast"
     assert body["matched_drivers"] == []
+
+
+@mock_aws
+def test_request_trip_ignores_client_fare_and_computes_server_side_floor():
+    """requestTrip must never trust the client's `suggested_base_fare`; the
+    broadcast `calculated_fare` must be server-computed and can never fall
+    below `flat_rate x 6 seats` (README.md §3A), even for a near-zero-distance
+    trip with a lowball client-supplied fare.
+    """
+    from decimal import Decimal
+
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {
+        **_REQUEST_TRIP_PAYLOAD,
+        # Pickup == dropoff → ~0 km distance, so the only floor is flat_rate x 6.
+        "dropoff_latitude": _RIDER_PICKUP_LAT,
+        "dropoff_longitude": _RIDER_PICKUP_LON,
+        "suggested_base_fare": 1.0,  # Deliberately lowball; must be ignored.
+        "passenger_count": 1,
+    }
+    event = {**_REQUEST_TRIP_EVENT_BASE, "body": json.dumps(payload)}
+
+    response = handler.lambda_handler(event, context=None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+
+    flat_rate = Decimal(os.environ.get("KWELLA_FLAT_RATE_ZAR", "10.00"))
+    floor_fare = flat_rate * 6
+    assert Decimal(body["calculated_fare"]) >= floor_fare
+    assert Decimal(body["calculated_fare"]) != Decimal("1.0")
+
+
+@mock_aws
+def test_request_trip_scales_fare_with_passenger_count():
+    """A 6-passenger request must broadcast a strictly higher fare than a
+    1-passenger request for the same route (README.md §3A passenger scaling).
+    """
+    from decimal import Decimal
+
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    def _request(passenger_count: int) -> Decimal:
+        payload = {**_REQUEST_TRIP_PAYLOAD, "passenger_count": passenger_count}
+        event = {**_REQUEST_TRIP_EVENT_BASE, "body": json.dumps(payload)}
+        response = handler.lambda_handler(event, context=None)
+        assert response["statusCode"] == 200
+        return Decimal(json.loads(response["body"])["calculated_fare"])
+
+    fare_for_one = _request(1)
+    fare_for_six = _request(6)
+
+    assert fare_for_six > fare_for_one
 
 
 # ---------------------------------------------------------------------------

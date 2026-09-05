@@ -40,7 +40,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 # Shared-layer imports
 from database.client import get_table
-from cancellation_handler import CancellationLedgerPayload, process_cancellation
+from cancellation_handler import (
+    CancellationLedgerPayload,
+    DebtSettlementPayload,
+    RiderDebtNotFoundError,
+    process_cancellation,
+    settle_rider_debt,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -182,6 +188,19 @@ def _process_cancellation(payload: CancellationLedgerPayload) -> dict[str, Any]:
         return _server_error(f"DynamoDB transactional update failed: {error_code}")
 
 
+def _settle_rider_debt(payload: DebtSettlementPayload) -> dict[str, Any]:
+    """Delegate rider cancellation-debt settlement to the dedicated module."""
+    try:
+        return _ok(settle_rider_debt(payload))
+    except RiderDebtNotFoundError as exc:
+        return _bad_request(str(exc))
+    except botocore.exceptions.ClientError as exc:
+        error_code = exc.response["Error"]["Code"]
+        if error_code == "TransactionCanceledException":
+            return _bad_request("Debt settlement failed: debt already settled or amount mismatch.")
+        return _server_error(f"DynamoDB transactional update failed: {error_code}")
+
+
 def _apply_trip_fee(payload: ApplyTripFeePayload) -> dict[str, Any]:
     """Process standard 10% platform fee. If Driver's fee_holiday_balance > 0,
     deduct the fee from that balance atomically using optimistic concurrency.
@@ -262,6 +281,7 @@ def _apply_trip_fee(payload: ApplyTripFeePayload) -> dict[str, Any]:
 _ROUTER = {
     "PROCESS_CANCELLATION": lambda payload: _process_cancellation(CancellationLedgerPayload(**payload)),
     "APPLY_TRIP_FEE": lambda payload: _apply_trip_fee(ApplyTripFeePayload(**payload)),
+    "SETTLE_RIDER_DEBT": lambda payload: _settle_rider_debt(DebtSettlementPayload(**payload)),
 }
 
 # ---------------------------------------------------------------------------
@@ -275,6 +295,7 @@ _ROUTER = {
 _ROUTE_KEY_MAP: dict[str, str] = {
     "post /ledger/cancellation": "PROCESS_CANCELLATION",
     "post /ledger/trip-fee": "APPLY_TRIP_FEE",
+    "post /ledger/debt/settle": "SETTLE_RIDER_DEBT",
     "ledger_cancellation": "PROCESS_CANCELLATION",
 }
 
@@ -338,6 +359,23 @@ def _normalise_cancellation_payload(raw: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _normalise_debt_settlement_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """Translate camelCase HTTP client keys to the snake_case keys expected by
+    DebtSettlementPayload.
+
+    Mapping::
+
+        riderId → rider_id
+        tripId  → trip_id
+    """
+    out = dict(raw)
+    if "riderId" in out and "rider_id" not in out:
+        out["rider_id"] = out.pop("riderId")
+    if "tripId" in out and "trip_id" not in out:
+        out["trip_id"] = out.pop("tripId")
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Lambda entrypoint
 # ---------------------------------------------------------------------------
@@ -388,6 +426,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         "headers": {"Content-Type": "application/json"},
                         "body": "Missing mandatory transaction markers",
                     }
+            elif action_type == "SETTLE_RIDER_DEBT":
+                payload = _normalise_debt_settlement_payload(raw_payload)
             else:
                 payload = raw_payload
 

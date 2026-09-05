@@ -473,6 +473,14 @@ resource "aws_apigatewayv2_route" "ledger_trip_fee" {
   authorizer_id      = aws_apigatewayv2_authorizer.kwella_lambda_authorizer.id
 }
 
+resource "aws_apigatewayv2_route" "ledger_debt_settle" {
+  api_id             = aws_apigatewayv2_api.kwella_http_api.id
+  route_key          = "POST /ledger/debt/settle"
+  target             = "integrations/${aws_apigatewayv2_integration.ledger_service.id}"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.kwella_lambda_authorizer.id
+}
+
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------

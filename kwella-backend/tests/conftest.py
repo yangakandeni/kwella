@@ -47,6 +47,18 @@ for _path in (_LAYER_PYTHON, _LAMBDAS):
     if _path_str not in sys.path:
         sys.path.insert(0, _path_str)
 
+# Each Lambda function is deployed with its own directory flattened to the
+# zip root (e.g. ledger_service/handler.py, ledger_service/cancellation_handler.py
+# both land at the root), so sibling modules resolve via bare imports
+# (`from cancellation_handler import ...`) in production. Locally, mirror
+# that by also adding each individual lambda's own directory to sys.path.
+if _LAMBDAS.is_dir():
+    for _lambda_dir in _LAMBDAS.iterdir():
+        if _lambda_dir.is_dir() and not _lambda_dir.name.startswith(("_", ".")):
+            _lambda_dir_str = str(_lambda_dir)
+            if _lambda_dir_str not in sys.path:
+                sys.path.insert(0, _lambda_dir_str)
+
 # ---------------------------------------------------------------------------
 # Default environment variables for moto-intercepted boto3 calls
 # ---------------------------------------------------------------------------

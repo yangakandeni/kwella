@@ -1,4 +1,4 @@
-# Kwella Developer Guide & Commands
+# kwella Developer Guide & Commands
 
 ## Core Commands
 * **Python Backend Test:** `pytest kwella-backend/tests/test_bidding_engine.py`

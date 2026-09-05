@@ -6,7 +6,7 @@
 
 ---
 
-**Project:** Kwella
+**Project:** kwella
 **Generated:** 2026-07-19 23:35:55
 **Category:** Ride Hailing / Transportation
 **Design Dials:** Variance 7/10 (Balanced / Modern) | Motion 6/10 (Standard) | Density 7/10 (Standard)
