@@ -151,7 +151,7 @@ python3 -m py_compile kwella-backend/src/lambdas/bidding_engine/handler.py
 ```bash
 cd kwella-backend/terraform
 terraform init
-terraform plan -var-file=staging.tfvars
+terraform plan -var-file=production.tfvars
 ```
 
 ### E. Admin Dashboard (Next.js)
