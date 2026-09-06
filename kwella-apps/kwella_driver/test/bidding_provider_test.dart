@@ -1,67 +1,8 @@
-import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kwella_driver/features/bidding/models/bidding_state.dart';
 import 'package:kwella_driver/features/bidding/providers/bidding_provider.dart';
-import 'package:kwella_driver/features/bidding/services/kwella_websocket_service.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
-class FakeKwellaWebSocketService implements KwellaWebSocketService {
-  final StreamController<Map<String, dynamic>> _controller =
-      StreamController<Map<String, dynamic>>.broadcast();
-  
-  bool connectCalled = false;
-  bool disposeCalled = false;
-  bool hasListeners = false;
-
-  FakeKwellaWebSocketService() {
-    _controller.onListen = () => hasListeners = true;
-    _controller.onCancel = () => hasListeners = false;
-  }
-
-  @override
-  void connect() {
-    connectCalled = true;
-  }
-
-  @override
-  Stream<Map<String, dynamic>> get stream => _controller.stream;
-
-  @override
-  Stream<Map<String, dynamic>> get bidStream => _controller.stream;
-
-  @override
-  bool get isConnected => connectCalled && !disposeCalled;
-
-  @override
-  Future<void> sendDriverBid({
-    required String driverId,
-    required String riderId,
-    required double amount,
-    required String estimatedPickup,
-    required String broadcastPk,
-  }) async {
-    // No-op for this fake
-  }
-
-  @override
-  void dispose() {
-    disposeCalled = true;
-    _controller.close();
-  }
-
-  /// Stub sink — the bidding provider never calls sink.add(), so a no-op
-  /// implementation is sufficient to satisfy the interface.
-  @override
-  WebSocketSink get sink => _NoOpSink();
-
-  void emit(Map<String, dynamic> data) {
-    _controller.add(data);
-  }
-
-  void emitError(Object error) {
-    _controller.addError(error);
-  }
-}
+import 'support/fake_kwella_websocket_service.dart';
 
 void main() {
   late FakeKwellaWebSocketService fakeWsService;
@@ -186,25 +127,4 @@ void main() {
     notifier.dispose();
     expect(fakeWsService.hasListeners, isFalse);
   });
-}
-
-// ---------------------------------------------------------------------------
-// Minimal no-op WebSocketSink — only used to satisfy the interface in tests
-// that never exercise sink.add().
-// ---------------------------------------------------------------------------
-class _NoOpSink implements WebSocketSink {
-  @override
-  void add(dynamic data) {}
-
-  @override
-  Future<void> close([int? closeCode, String? closeReason]) async {}
-
-  @override
-  void addError(Object error, [StackTrace? stackTrace]) {}
-
-  @override
-  Future<void> get done async {}
-
-  @override
-  Future<void> addStream(Stream<dynamic> stream) => stream.drain<void>();
 }

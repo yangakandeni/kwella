@@ -30,6 +30,16 @@ class TelemetryState {
   /// The net earnings of the last completed trip.
   final double? lastNetEarnings;
 
+  /// The trip id of the currently active trip once a bid has been selected
+  /// by the rider (populated from the `bidSelected` server push), or [null]
+  /// when there is no active trip.
+  final String? activeTripId;
+
+  /// The bid amount most recently submitted via [submitBid], retained so it
+  /// can be echoed back as `final_bid_amount` when [confirmArrival] fires at
+  /// the end of the trip. [null] when no bid has been submitted yet.
+  final double? pendingBidAmount;
+
   const TelemetryState({
     required this.isTracking,
     required this.isWithinGeofenceRadius,
@@ -37,6 +47,8 @@ class TelemetryState {
     this.offerSecondsRemaining = 0,
     this.dailyEarningsTotal = 0.0,
     this.lastNetEarnings,
+    this.activeTripId,
+    this.pendingBidAmount,
   });
 
   TelemetryState copyWith({
@@ -47,6 +59,8 @@ class TelemetryState {
     int? offerSecondsRemaining,
     double? dailyEarningsTotal,
     Object? lastNetEarnings = _sentinel,
+    Object? activeTripId = _sentinel,
+    Object? pendingBidAmount = _sentinel,
   }) {
     return TelemetryState(
       isTracking: isTracking ?? this.isTracking,
@@ -61,6 +75,12 @@ class TelemetryState {
       lastNetEarnings: identical(lastNetEarnings, _sentinel)
           ? this.lastNetEarnings
           : lastNetEarnings as double?,
+      activeTripId: identical(activeTripId, _sentinel)
+          ? this.activeTripId
+          : activeTripId as String?,
+      pendingBidAmount: identical(pendingBidAmount, _sentinel)
+          ? this.pendingBidAmount
+          : pendingBidAmount as double?,
     );
   }
 
@@ -74,7 +94,9 @@ class TelemetryState {
           activeOffer == other.activeOffer &&
           offerSecondsRemaining == other.offerSecondsRemaining &&
           dailyEarningsTotal == other.dailyEarningsTotal &&
-          lastNetEarnings == other.lastNetEarnings;
+          lastNetEarnings == other.lastNetEarnings &&
+          activeTripId == other.activeTripId &&
+          pendingBidAmount == other.pendingBidAmount;
 
   @override
   int get hashCode => Object.hash(
@@ -84,6 +106,8 @@ class TelemetryState {
     offerSecondsRemaining,
     dailyEarningsTotal,
     lastNetEarnings,
+    activeTripId,
+    pendingBidAmount,
   );
 
   @override
@@ -94,7 +118,9 @@ class TelemetryState {
       'activeOffer: $activeOffer, '
       'offerSecondsRemaining: $offerSecondsRemaining, '
       'dailyEarningsTotal: $dailyEarningsTotal, '
-      'lastNetEarnings: $lastNetEarnings)';
+      'lastNetEarnings: $lastNetEarnings, '
+      'activeTripId: $activeTripId, '
+      'pendingBidAmount: $pendingBidAmount)';
 }
 
 // Sentinel object used to distinguish "not passed" from explicit null in copyWith.
@@ -275,6 +301,14 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
           );
           _handleIncomingRideOffer(data);
         }
+
+        // --- Bid selection: bidSelected push -------------------------------
+        if (action == 'bidSelected') {
+          debugPrint(
+            '[KwellaTelemetryController] bidSelected received: $data',
+          );
+          state = state.copyWith(activeTripId: data['tripId'] as String?);
+        }
       },
       onError: (Object error) {
         debugPrint(
@@ -288,25 +322,61 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
     );
   }
 
-  /// Dispatches a manual arrival confirmation event over the WebSocket channel
-  /// and resets the local geofence alert state.
+  /// Dispatches a pickup-arrival confirmation event (`driverArrived`) over
+  /// the WebSocket channel and resets the local geofence alert state.
+  ///
+  /// This transitions the trip status `ACCEPTED` → `ARRIVED` on the backend.
+  Future<void> driverArrived({required String driverId}) async {
+    final payload = jsonEncode({
+      'action': 'driverArrived',
+      'tripId': state.activeTripId,
+      'driverId': driverId,
+    });
+
+    debugPrint(
+      '[KwellaTelemetryController] Dispatching driverArrived: $payload',
+    );
+    _wsService.sink.add(payload);
+
+    state = state.copyWith(isWithinGeofenceRadius: false);
+  }
+
+  /// Dispatches a `startTrip` event over the WebSocket channel once the
+  /// driver begins the trip with the passenger onboard.
+  ///
+  /// This transitions the trip status `ARRIVED` → `IN_PROGRESS` on the
+  /// backend.
+  Future<void> startTrip({required String driverId}) async {
+    final payload = jsonEncode({
+      'action': 'startTrip',
+      'driverId': driverId,
+      'tripId': state.activeTripId,
+    });
+
+    debugPrint('[KwellaTelemetryController] Dispatching startTrip: $payload');
+    _wsService.sink.add(payload);
+  }
+
+  /// Dispatches a destination-arrival confirmation event (`confirmArrival`)
+  /// over the WebSocket channel, including the required [finalBidAmount].
+  ///
+  /// This transitions the trip status `IN_PROGRESS` → `COMPLETED` on the
+  /// backend and triggers payout.
   Future<void> confirmArrival({
     required String driverId,
-    required String tripId,
+    required double finalBidAmount,
   }) async {
     final payload = jsonEncode({
       'action': 'confirmArrival',
       'driverId': driverId,
-      'tripId': tripId,
-      'timestamp': DateTime.now().toUtc().toIso8601String(),
+      'tripId': state.activeTripId,
+      'final_bid_amount': finalBidAmount,
     });
 
     debugPrint(
       '[KwellaTelemetryController] Dispatching confirmArrival: $payload',
     );
     _wsService.sink.add(payload);
-
-    state = state.copyWith(isWithinGeofenceRadius: false);
   }
 
   /// Dispatches a counter-bid or base fare acceptance bid over the WebSocket channel
@@ -319,15 +389,40 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
     final payload = jsonEncode({
       'action': 'sendBid',
       'driverId': driverId,
+      'riderId': state.activeOffer?.riderId,
       'tripId': tripId,
-      'bid_amount': bidAmount,
+      'amount': bidAmount,
     });
 
     debugPrint('[KwellaTelemetryController] Dispatching submitBid: $payload');
     _wsService.sink.add(payload);
 
     _cancelOfferCountdown();
-    state = state.copyWith(activeOffer: null, offerSecondsRemaining: 0);
+    state = state.copyWith(
+      activeOffer: null,
+      offerSecondsRemaining: 0,
+      pendingBidAmount: bidAmount,
+    );
+  }
+
+  /// Dispatches a `submitRating` event over the WebSocket channel to rate
+  /// the rider at the end of a trip. No push is sent to the other party.
+  Future<void> submitRating({
+    required String driverId,
+    required int rating,
+  }) async {
+    final payload = jsonEncode({
+      'action': 'submitRating',
+      'driverId': driverId,
+      'tripId': state.activeTripId,
+      'rating': rating,
+      'target': 'RIDER',
+    });
+
+    debugPrint(
+      '[KwellaTelemetryController] Dispatching submitRating: $payload',
+    );
+    _wsService.sink.add(payload);
   }
 
   /// Handles a user tap on the push notification banner by hydrating an active

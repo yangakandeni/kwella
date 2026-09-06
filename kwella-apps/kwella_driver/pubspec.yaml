@@ -49,6 +49,14 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # Used only by test/support/pre_authenticated_session.dart to seed the
+  # global FlutterSecureStoragePlatform.instance with an in-memory test
+  # double (TestFlutterSecureStoragePlatform, shipped by flutter_secure_storage
+  # itself) — TokenVault has no constructor injection seam in the screens
+  # under test, so this is the officially supported way to seed the storage
+  # they read from without touching production code.
+  flutter_secure_storage: ^10.3.1
+  flutter_secure_storage_platform_interface: ^2.0.1
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

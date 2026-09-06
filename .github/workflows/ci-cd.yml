@@ -10,6 +10,7 @@
 # Job execution order:
 #   Job 1 → backend_quality_gate   (Python 3.12 / pytest + moto + pydantic)
 #   Job 2 → terraform_quality_gate (Terraform 1.6.x / validate)
+#   Job 3 → flutter_quality_gate   (Flutter 3.44.x / analyze + test, per app)
 # =============================================================================
 
 name: kwella CI/CD Engine Pipeline
@@ -136,3 +137,54 @@ jobs:
       #    type consistency without making any provider API calls.
       - name: Terraform Validate
         run: terraform validate
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Flutter Apps Quality Gate
+  # ---------------------------------------------------------------------------
+  flutter_quality_gate:
+    name: "Flutter — ${{ matrix.app }} Quality Gate"
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [kwella_core, kwella_rider, kwella_driver]
+
+    defaults:
+      run:
+        working-directory: kwella-apps/${{ matrix.app }}
+
+    steps:
+      # ── 1. Checkout source tree ─────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Provision the pinned Flutter SDK ─────────────────────────────
+      - name: Set up Flutter 3.44.x
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.8"
+          channel: "stable"
+          cache: true
+
+      # ── 3. Fetch dependencies ───────────────────────────────────────────
+      - name: flutter pub get
+        run: flutter pub get
+
+      # ── 4. Static analysis ───────────────────────────────────────────────
+      - name: flutter analyze
+        run: flutter analyze
+
+      # ── 5. Unit/widget test suite ────────────────────────────────────────
+      - name: flutter test
+        run: flutter test
+
+      # ── 6. Isolated E2E suite (mocked backend, no device required) ──────
+      #    Lives under test/e2e/ rather than a top-level integration_test/
+      #    directory — the installed Flutter SDK hard-routes that name to
+      #    device-based testing (package:integration_test), which these
+      #    suites deliberately avoid. kwella_core has no test/e2e/ directory
+      #    (it's a shared package with no screens of its own) — skip there.
+      - name: flutter test test/e2e
+        if: matrix.app != 'kwella_core'
+        run: flutter test test/e2e

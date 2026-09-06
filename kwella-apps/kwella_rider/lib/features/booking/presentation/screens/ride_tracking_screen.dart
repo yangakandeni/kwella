@@ -42,6 +42,7 @@ class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
   late String _driverRating = widget.driverRating;
   late String _vehicleDescription = widget.vehicleDescription;
   late String _licensePlate = widget.licensePlate;
+  bool _navigatedToRating = false;
 
   void _showCancelDialog() {
     showDialog<void>(
@@ -174,8 +175,29 @@ class _RideTrackingScreenState extends ConsumerState<RideTrackingScreen> {
     );
   }
 
+  void _navigateToRatingScreenOnce() {
+    if (_navigatedToRating) return;
+    _navigatedToRating = true;
+    // Defer the push until after the current frame so it doesn't happen
+    // mid-build (this is triggered from ref.listen inside build below).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        Navigator.pushNamed(context, '/rider/rating');
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<RiderTripState>>(riderTripStateProvider, (
+      previous,
+      next,
+    ) {
+      if (next.asData?.value.status == RiderTripStatus.completed) {
+        _navigateToRatingScreenOnce();
+      }
+    });
+
     final RiderTripState? state = ref.watch(riderTripStateProvider).asData?.value;
     final DriverLocation? driverLocation = state?.currentDriverLocation;
     _driverName = state?.driverName ?? widget.driverName;

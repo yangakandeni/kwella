@@ -27,12 +27,19 @@ class ActiveRideOffer {
   /// compares against this field to decide whether to auto-dismiss.
   final DateTime expiresAt;
 
+  /// The unique server-assigned rider identifier who requested this trip, or
+  /// [null] when the source payload did not include one. Required by the
+  /// backend's `sendBid` route to notify the rider of an incoming bid — see
+  /// `kwella-backend/src/lambdas/bidding_engine/handler.py`.
+  final String? riderId;
+
   const ActiveRideOffer({
     required this.tripId,
     required this.pickupLocation,
     required this.dropoffLocation,
     required this.baseFare,
     required this.expiresAt,
+    this.riderId,
   });
 
   /// Deserialises an [ActiveRideOffer] from the `rideOfferAvailable` WebSocket
@@ -56,6 +63,7 @@ class ActiveRideOffer {
       dropoffLocation: json['dropoffLocation'] as String,
       baseFare: (json['baseFare'] as num).toDouble(),
       expiresAt: DateTime.parse(json['expiresAt'] as String).toUtc(),
+      riderId: json['rider_id'] as String? ?? json['riderId'] as String?,
     );
   }
 
@@ -142,6 +150,7 @@ class ActiveRideOffer {
     'dropoffLocation': dropoffLocation,
     'baseFare': baseFare,
     'expiresAt': expiresAt.toIso8601String(),
+    'riderId': riderId,
   };
 
   @override
@@ -153,11 +162,18 @@ class ActiveRideOffer {
           pickupLocation == other.pickupLocation &&
           dropoffLocation == other.dropoffLocation &&
           baseFare == other.baseFare &&
-          expiresAt == other.expiresAt;
+          expiresAt == other.expiresAt &&
+          riderId == other.riderId;
 
   @override
-  int get hashCode =>
-      Object.hash(tripId, pickupLocation, dropoffLocation, baseFare, expiresAt);
+  int get hashCode => Object.hash(
+    tripId,
+    pickupLocation,
+    dropoffLocation,
+    baseFare,
+    expiresAt,
+    riderId,
+  );
 
   @override
   String toString() =>
@@ -166,5 +182,6 @@ class ActiveRideOffer {
       'pickupLocation: $pickupLocation, '
       'dropoffLocation: $dropoffLocation, '
       'baseFare: $baseFare, '
-      'expiresAt: $expiresAt)';
+      'expiresAt: $expiresAt, '
+      'riderId: $riderId)';
 }

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:kwella_core/kwella_core.dart';
 
 import '../../../location/services/kwella_location_service.dart';
 import 'rider_trip_state.dart';
@@ -28,14 +29,19 @@ final availableBidsProvider =
     });
 
 class KwellaRiderController {
-  KwellaRiderController({KwellaLocationService? locationService})
-      : _locationService = locationService ?? KwellaLocationService.instance;
+  KwellaRiderController({
+    KwellaLocationService? locationService,
+    KwellaWebSocketGateway? gateway,
+  })  : _locationService = locationService ?? KwellaLocationService.instance,
+        _gateway = gateway ?? KwellaWebSocketGateway();
 
   final KwellaLocationService _locationService;
+  final KwellaWebSocketGateway _gateway;
+  String? _riderId;
+  StreamSubscription<String>? _gatewaySubscription;
   RiderTripState _state = const RiderTripState();
   final StreamController<RiderTripState> _stateController =
       StreamController.broadcast();
-  StreamSink<String>? _webSocketSink;
 
   Stream<RiderTripState> get stateStream => _stateController.stream;
   RiderTripState get state => _state;
@@ -43,12 +49,30 @@ class KwellaRiderController {
       stateStream.map((state) => state.availableBids);
 
   void dispose() {
-    _webSocketSink = null;
+    _gatewaySubscription?.cancel();
+    _gatewaySubscription = null;
     _stateController.close();
   }
 
-  void connectWebSocketSink(StreamSink<String> sink) {
-    _webSocketSink = sink;
+  /// Opens the real-time WebSocket connection to the bidding engine and
+  /// starts forwarding decoded incoming frames into
+  /// [handleIncomingWebSocketEvent]. Must be called (with a valid
+  /// [riderId]/[accessToken]) before [requestTrip], [selectBid], or
+  /// [submitRating] can actually reach the backend.
+  Future<void> connect({
+    required String riderId,
+    required String accessToken,
+  }) async {
+    _riderId = riderId;
+    await _gateway.connect(accessToken);
+    _gatewaySubscription = _gateway.dataStream.listen((raw) {
+      try {
+        handleIncomingWebSocketEvent(jsonDecode(raw) as Map<String, dynamic>);
+      } catch (_) {
+        // Malformed/unknown frame — ignore, matches existing tolerant
+        // behavior elsewhere in this app.
+      }
+    });
   }
 
   void _emit(RiderTripState nextState) {
@@ -137,8 +161,16 @@ class KwellaRiderController {
   }
 
   void requestTrip() {
+    _pushWebSocketMessage({
+      'action': 'requestTrip',
+      'riderId': _riderId,
+      'pickup_latitude': _state.pickupLat,
+      'pickup_longitude': _state.pickupLng,
+      'dropoff_latitude': _state.dropoffLat,
+      'dropoff_longitude': _state.dropoffLng,
+      'passenger_count': _state.passengerCount,
+    });
     _emit(_state.copyWith(status: RiderTripStatus.searching));
-    // Live WebSocket lookup loop should begin here in the rider booking flow.
   }
 
   void selectBid(String driverId) {
@@ -150,9 +182,23 @@ class KwellaRiderController {
     _emit(_state.copyWith(status: RiderTripStatus.accepted));
   }
 
+  /// Sets the rider's chosen payment method (e.g. `'CASH'`, `'CARD'`).
+  void setPaymentMethod(String method) {
+    _emit(_state.copyWith(paymentMethod: method));
+  }
+
+  /// Sends the rider's post-trip star rating for the driver.
+  void submitRating(int rating) {
+    _pushWebSocketMessage({
+      'action': 'submitRating',
+      'tripId': _state.tripId,
+      'rating': rating,
+      'target': 'DRIVER',
+    });
+  }
+
   void _pushWebSocketMessage(Map<String, dynamic> payload) {
-    final String message = jsonEncode(payload);
-    _webSocketSink?.add(message);
+    _gateway.send(jsonEncode(payload));
   }
 
   void handleIncomingWebSocketEvent(Map<String, dynamic> payload) {

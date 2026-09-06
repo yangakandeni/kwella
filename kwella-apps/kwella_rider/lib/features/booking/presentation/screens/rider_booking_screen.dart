@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:kwella_core/kwella_core.dart';
 
 import '../../../location/services/places_autocomplete_service.dart';
 import '../../../location/utils/location_display_formatter.dart';
@@ -108,6 +109,27 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
     final KwellaRiderController controller =
         widget.controller ?? ref.read(kwellaRiderControllerProvider);
     controller.resolvePickupLocation();
+
+    if (widget.controller == null) {
+      _connectRiderWebSocket(controller);
+    }
+  }
+
+  /// Opens the rider's real-time WebSocket connection using the currently
+  /// authenticated Cognito session, if one exists. No-ops gracefully (rather
+  /// than crashing) when the rider isn't authenticated yet or no access
+  /// token is available — e.g. cold-starting before sign-in has completed.
+  void _connectRiderWebSocket(KwellaRiderController controller) {
+    final KwellaAuthState authState = ref.read(kwellaAuthNotifierProvider);
+    final String? riderId = authState.userId;
+    if (authState.status != KwellaAuthStatus.authenticated || riderId == null) {
+      return;
+    }
+
+    TokenVault().readAccessToken().then((accessToken) {
+      if (accessToken == null) return;
+      controller.connect(riderId: riderId, accessToken: accessToken);
+    });
   }
 
   @override
@@ -568,7 +590,13 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
             ),
           ),
           SizedBox(
-            height: 200,
+            // DriverBidCard's real content (avatar/name/rating row, divider,
+            // vehicle description, license + CATA sticker rows, and the
+            // accept button) overflows a 200px slot by ~49px — a
+            // pre-existing bug (unrelated to this task) that went unnoticed
+            // because no prior test rendered a real card inside this
+            // carousel and interacted with it. 260px comfortably fits it.
+            height: 260,
             child: bidsAsync.when(
               data: (bids) {
                 if (bids.isEmpty) {
@@ -840,6 +868,15 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
                                       placesService: widget.placesService,
                                       previousDestinations:
                                           widget.previousDestinations,
+                                      // The primary booking flow collects a
+                                      // payment method before the fare
+                                      // offer — the panel's own default
+                                      // (straight to fare-offer) is kept
+                                      // only for the standalone
+                                      // DestinationSelectionScreen deep-link
+                                      // route, which doesn't opt into this.
+                                      onContinue: () => Navigator.pushNamed(
+                                          context, '/rider/payment-method'),
                                     )
                                   : _buildCollapsedSheet(controller),
                         ),
@@ -956,7 +993,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
                                         return;
                                       }
                                       Navigator.pushNamed(
-                                          context, '/rider/fare-offer');
+                                          context, '/rider/payment-method');
                                     },
                               child: state.status ==
                                       RiderTripStatus.searching

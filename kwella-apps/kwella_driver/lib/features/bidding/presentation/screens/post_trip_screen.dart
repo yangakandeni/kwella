@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../location/presentation/controllers/kwella_telemetry_controller.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kwella Driver – Post Trip Screen
 // Fare earned badge, rating row, submit CTA.
 // ─────────────────────────────────────────────────────────────────────────────
 
-class PostTripScreen extends StatefulWidget {
+class PostTripScreen extends ConsumerStatefulWidget {
   const PostTripScreen({
     super.key,
     this.fareEarned = 120.0,
@@ -18,10 +21,10 @@ class PostTripScreen extends StatefulWidget {
   final String? tripId;
 
   @override
-  State<PostTripScreen> createState() => _PostTripScreenState();
+  ConsumerState<PostTripScreen> createState() => _PostTripScreenState();
 }
 
-class _PostTripScreenState extends State<PostTripScreen>
+class _PostTripScreenState extends ConsumerState<PostTripScreen>
     with SingleTickerProviderStateMixin {
   int _starRating = 0;
   late final AnimationController _fareCtrl;
@@ -45,7 +48,12 @@ class _PostTripScreenState extends State<PostTripScreen>
   }
 
   void _submit() {
-    // In production: send submitRating WebSocket action
+    if (_starRating > 0) {
+      ref.read(telemetryControllerProvider.notifier).submitRating(
+            driverId: 'USR#drv-12345',
+            rating: _starRating,
+          );
+    }
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 

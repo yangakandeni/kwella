@@ -8,6 +8,8 @@ import 'features/auth/presentation/screens/welcome_screen.dart';
 import 'features/auth/presentation/screens/phone_entry_screen.dart';
 import 'features/auth/presentation/screens/otp_verification_screen.dart';
 import 'features/booking/presentation/screens/destination_selection_screen.dart';
+import 'features/booking/presentation/screens/payment_method_screen.dart';
+import 'features/booking/presentation/screens/rate_driver_screen.dart';
 import 'features/booking/presentation/screens/rider_booking_screen.dart';
 import 'features/booking/presentation/screens/ride_fare_offer_screen.dart';
 import 'features/booking/presentation/screens/ride_tracking_screen.dart';
@@ -46,8 +48,10 @@ class KwellaRiderApp extends StatelessWidget {
               initialDropoff:
                   ModalRoute.of(context)?.settings.arguments as String?,
             ),
+        '/rider/payment-method': (_) => const PaymentMethodScreen(),
         '/rider/fare-offer': (_) => const RideFareOfferScreen(),
         '/rider/tracking': (_) => const RideTrackingScreen(),
+        '/rider/rating': (_) => const RateDriverScreen(),
         '/rider/profile': (_) => const RiderProfileScreen(),
       },
     );

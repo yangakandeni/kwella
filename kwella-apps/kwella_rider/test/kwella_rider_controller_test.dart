@@ -1,8 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/rider_trip_state.dart';
 import 'package:kwella_rider/features/location/services/kwella_location_service.dart';
+
+import 'support/fake_websocket_gateway.dart';
 
 // ---------------------------------------------------------------------------
 // Test double — subclasses KwellaLocationService and overrides its
@@ -57,6 +61,135 @@ void main() {
       expect(controller.state.status, equals(RiderTripStatus.biddingOpen));
       expect(controller.state.bidMetrics, isNotEmpty);
       expect(controller.state.bidMetrics.first['bidAmount'], equals(120));
+
+      controller.dispose();
+    });
+
+    test('connect() opens the gateway and forwards decoded incoming frames',
+        () async {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      await controller.connect(riderId: 'rider-1', accessToken: 'token-abc');
+
+      expect(fakeGateway.connected, isTrue);
+      expect(fakeGateway.lastAccessToken, equals('token-abc'));
+
+      fakeGateway.simulateIncomingFrame(jsonEncode({
+        'action': 'driverBidReceived',
+        'tripId': 'trip-99',
+        'bidMetrics': [
+          {'bidAmount': 80, 'driverId': 'driver-9'},
+        ],
+      }));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.state.status, equals(RiderTripStatus.biddingOpen));
+      expect(controller.state.tripId, equals('trip-99'));
+
+      controller.dispose();
+      await fakeGateway.disconnect();
+    });
+
+    test('connect() tolerates malformed incoming frames without throwing',
+        () async {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      await controller.connect(riderId: 'rider-1', accessToken: 'token-abc');
+      fakeGateway.simulateIncomingFrame('not valid json');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.state.status, equals(RiderTripStatus.idle));
+
+      controller.dispose();
+      await fakeGateway.disconnect();
+    });
+
+    test('requestTrip() sends a requestTrip frame before flipping to searching',
+        () {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      controller.updatePickupLocation('Pickup', lat: -33.9, lng: 18.4);
+      controller.updateDropoffLocation('Dropoff', lat: -34.0, lng: 18.5);
+      controller.setPassengerCount(2);
+      controller.requestTrip();
+
+      expect(fakeGateway.sentPayloads, hasLength(1));
+      expect(fakeGateway.sentPayloads.single, equals({
+        'action': 'requestTrip',
+        'riderId': null,
+        'pickup_latitude': -33.9,
+        'pickup_longitude': 18.4,
+        'dropoff_latitude': -34.0,
+        'dropoff_longitude': 18.5,
+        'passenger_count': 2,
+      }));
+      expect(controller.state.status, equals(RiderTripStatus.searching));
+
+      controller.dispose();
+    });
+
+    test('requestTrip() includes the riderId set via connect()', () async {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+      await controller.connect(riderId: 'rider-42', accessToken: 'token');
+
+      controller.requestTrip();
+
+      expect(fakeGateway.sentPayloads.single['riderId'], equals('rider-42'));
+
+      controller.dispose();
+      await fakeGateway.disconnect();
+    });
+
+    test('selectBid() sends a selectBid frame through the gateway', () {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      controller.handleIncomingWebSocketEvent({
+        'action': 'driverBidReceived',
+        'tripId': 'trip-5',
+      });
+      controller.selectBid('driver-7');
+
+      expect(fakeGateway.sentPayloads.single, equals({
+        'action': 'selectBid',
+        'tripId': 'trip-5',
+        'driverId': 'driver-7',
+      }));
+      expect(controller.state.status, equals(RiderTripStatus.accepted));
+
+      controller.dispose();
+    });
+
+    test('submitRating() sends a submitRating frame through the gateway', () {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      controller.handleIncomingWebSocketEvent({
+        'action': 'driverBidReceived',
+        'tripId': 'trip-5',
+      });
+      controller.submitRating(5);
+
+      expect(fakeGateway.sentPayloads.single, equals({
+        'action': 'submitRating',
+        'tripId': 'trip-5',
+        'rating': 5,
+        'target': 'DRIVER',
+      }));
+
+      controller.dispose();
+    });
+
+    test('setPaymentMethod() updates the state', () {
+      final controller = KwellaRiderController();
+
+      expect(controller.state.paymentMethod, equals('CASH'));
+      controller.setPaymentMethod('CARD');
+      expect(controller.state.paymentMethod, equals('CARD'));
 
       controller.dispose();
     });

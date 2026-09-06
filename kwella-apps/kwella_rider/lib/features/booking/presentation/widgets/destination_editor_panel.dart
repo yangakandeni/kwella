@@ -29,6 +29,7 @@ class DestinationEditorPanel extends StatefulWidget {
     required this.onClose,
     this.placesService,
     this.previousDestinations = mockPreviousDestinations,
+    this.onContinue,
   });
 
   final KwellaRiderController controller;
@@ -36,6 +37,14 @@ class DestinationEditorPanel extends StatefulWidget {
   final VoidCallback onClose;
   final PlacesAutocompleteService? placesService;
   final List<PreviousDestination> previousDestinations;
+
+  /// Invoked instead of the default fare-offer navigation when the rider
+  /// taps `continue_button`, letting callers interpose a step (e.g.
+  /// RiderBookingScreen's inline usage routes through `/rider/payment-method`
+  /// first). Defaults to `null`, preserving the original direct-to-fare-offer
+  /// behavior for callers that don't need the extra step (e.g.
+  /// DestinationSelectionScreen's standalone deep-link route).
+  final VoidCallback? onContinue;
 
   @override
   State<DestinationEditorPanel> createState() => _DestinationEditorPanelState();
@@ -264,7 +273,9 @@ class _DestinationEditorPanelState extends State<DestinationEditorPanel> {
                 elevation: 0,
               ),
               onPressed: canContinue
-                  ? () => Navigator.pushNamed(context, '/rider/fare-offer')
+                  ? () => widget.onContinue != null
+                      ? widget.onContinue!()
+                      : Navigator.pushNamed(context, '/rider/fare-offer')
                   : null,
               child: const Text(
                 'Continue',

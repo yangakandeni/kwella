@@ -45,6 +45,7 @@ class RiderTripState {
   final String? driverRating;
   final String? vehicleDescription;
   final String? licensePlate;
+  final String paymentMethod;
 
   const RiderTripState({
     this.status = RiderTripStatus.idle,
@@ -64,6 +65,7 @@ class RiderTripState {
     this.driverRating,
     this.vehicleDescription,
     this.licensePlate,
+    this.paymentMethod = 'CASH',
   });
 
   List<Map<String, dynamic>> get availableBids => List.unmodifiable(bidMetrics);
@@ -86,6 +88,7 @@ class RiderTripState {
     String? driverRating,
     String? vehicleDescription,
     String? licensePlate,
+    String? paymentMethod,
   }) {
     return RiderTripState(
       status: status ?? this.status,
@@ -106,6 +109,7 @@ class RiderTripState {
       driverRating: driverRating ?? this.driverRating,
       vehicleDescription: vehicleDescription ?? this.vehicleDescription,
       licensePlate: licensePlate ?? this.licensePlate,
+      paymentMethod: paymentMethod ?? this.paymentMethod,
     );
   }
 }

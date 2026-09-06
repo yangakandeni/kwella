@@ -141,6 +141,7 @@ Map<String, dynamic> _makeRideOfferPayload({
   String dropoffLocation = 'V&A Waterfront',
   double baseFare = 45.50,
   DateTime? expiresAt,
+  String? riderId = 'USR#rider-001',
 }) {
   final expiry =
       expiresAt ?? DateTime.now().toUtc().add(const Duration(seconds: 15));
@@ -151,6 +152,7 @@ Map<String, dynamic> _makeRideOfferPayload({
     'dropoffLocation': dropoffLocation,
     'baseFare': baseFare,
     'expiresAt': expiry.toIso8601String(),
+    'rider_id': riderId,
   };
 }
 
@@ -353,11 +355,20 @@ void main() {
     );
 
     test(
-      'confirmArrival sends confirmArrival action and resets geofence radius state',
+      'driverArrived sends driverArrived action and resets geofence radius state',
       () async {
         locationService.fakeStream = const Stream<Position>.empty();
 
         await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        // Rider's bid is selected, activating the trip.
+        wsService.feedMessage({
+          'action': 'bidSelected',
+          'tripId': 'trip-abc-123',
+          'driverId': 'USR#drv-12345',
+          'riderId': 'USR#rider-001',
+        });
+        await Future<void>.delayed(Duration.zero);
 
         // Set arrived status
         wsService.feedMessage({
@@ -366,11 +377,8 @@ void main() {
         await Future<void>.delayed(Duration.zero);
         expect(controller.state.isWithinGeofenceRadius, isTrue);
 
-        // Confirm arrival
-        await controller.confirmArrival(
-          driverId: 'USR#drv-12345',
-          tripId: 'trip-abc-123',
-        );
+        // Confirm pickup arrival.
+        await controller.driverArrived(driverId: 'USR#drv-12345');
 
         // Assert state reset
         expect(controller.state.isWithinGeofenceRadius, isFalse);
@@ -380,10 +388,41 @@ void main() {
         final decoded =
             jsonDecode(wsService.capturedPayloads.first)
                 as Map<String, dynamic>;
+        expect(decoded['action'], equals('driverArrived'));
+        expect(decoded['driverId'], equals('USR#drv-12345'));
+        expect(decoded['tripId'], equals('trip-abc-123'));
+      },
+    );
+
+    test(
+      'confirmArrival sends confirmArrival action with the required final_bid_amount',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        // Rider's bid is selected, activating the trip.
+        wsService.feedMessage({
+          'action': 'bidSelected',
+          'tripId': 'trip-abc-123',
+          'driverId': 'USR#drv-12345',
+          'riderId': 'USR#rider-001',
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        await controller.confirmArrival(
+          driverId: 'USR#drv-12345',
+          finalBidAmount: 150.0,
+        );
+
+        expect(wsService.capturedPayloads.length, equals(1));
+        final decoded =
+            jsonDecode(wsService.capturedPayloads.first)
+                as Map<String, dynamic>;
         expect(decoded['action'], equals('confirmArrival'));
         expect(decoded['driverId'], equals('USR#drv-12345'));
         expect(decoded['tripId'], equals('trip-abc-123'));
-        expect(decoded.containsKey('timestamp'), isTrue);
+        expect(decoded['final_bid_amount'], closeTo(150.0, 0.001));
       },
     );
 
@@ -717,12 +756,13 @@ void main() {
           jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
       expect(decoded['action'], equals('sendBid'));
       expect(decoded['driverId'], equals('USR#drv-12345'));
+      expect(decoded['riderId'], equals('USR#rider-001'));
       expect(decoded['tripId'], equals('TRIP#bid-001'));
-      expect(decoded['bid_amount'], closeTo(135.0, 0.001));
+      expect(decoded['amount'], closeTo(135.0, 0.001));
     });
 
     test(
-      'submitBid with base fare amount dispatches bid_amount equal to baseFare',
+      'submitBid with base fare amount dispatches amount equal to baseFare',
       () async {
         locationService.fakeStream = const Stream<Position>.empty();
         await controller.startDriverTracking(driverId: 'USR#drv-12345');
@@ -741,12 +781,12 @@ void main() {
         final decoded =
             jsonDecode(wsService.capturedPayloads.first)
                 as Map<String, dynamic>;
-        expect(decoded['bid_amount'], closeTo(90.0, 0.001));
+        expect(decoded['amount'], closeTo(90.0, 0.001));
       },
     );
 
     test(
-      'submitBid with +R30 counter dispatches bid_amount equal to baseFare + 30',
+      'submitBid with +R30 counter dispatches amount equal to baseFare + 30',
       () async {
         locationService.fakeStream = const Stream<Position>.empty();
         await controller.startDriverTracking(driverId: 'USR#drv-12345');
@@ -765,7 +805,7 @@ void main() {
         final decoded =
             jsonDecode(wsService.capturedPayloads.first)
                 as Map<String, dynamic>;
-        expect(decoded['bid_amount'], closeTo(230.0, 0.001));
+        expect(decoded['amount'], closeTo(230.0, 0.001));
       },
     );
 
@@ -790,6 +830,9 @@ void main() {
       // Both offer and countdown must be reset after submission.
       expect(controller.state.activeOffer, isNull);
       expect(controller.state.offerSecondsRemaining, equals(0));
+      // The submitted amount is retained so confirmArrival can echo it back
+      // as the required final_bid_amount later in the trip lifecycle.
+      expect(controller.state.pendingBidAmount, equals(60.0));
     });
 
     test('submitBid payload contains all required JSON keys', () async {
@@ -809,9 +852,34 @@ void main() {
           jsonDecode(wsService.capturedPayloads.first) as Map<String, dynamic>;
       expect(decoded.containsKey('action'), isTrue);
       expect(decoded.containsKey('driverId'), isTrue);
+      expect(decoded.containsKey('riderId'), isTrue);
       expect(decoded.containsKey('tripId'), isTrue);
-      expect(decoded.containsKey('bid_amount'), isTrue);
+      expect(decoded.containsKey('amount'), isTrue);
     });
+
+    test(
+      'submitBid includes riderId null when the offer has no rider_id',
+      () async {
+        locationService.fakeStream = const Stream<Position>.empty();
+        await controller.startDriverTracking(driverId: 'USR#drv-12345');
+
+        wsService.feedMessage(
+          _makeRideOfferPayload(tripId: 'TRIP#bid-no-rider', riderId: null),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        await controller.submitBid(
+          driverId: 'USR#drv-12345',
+          tripId: 'TRIP#bid-no-rider',
+          bidAmount: 50.0,
+        );
+
+        final decoded =
+            jsonDecode(wsService.capturedPayloads.first)
+                as Map<String, dynamic>;
+        expect(decoded['riderId'], isNull);
+      },
+    );
   });
 }
 

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,55 +5,8 @@ import 'package:kwella_driver/features/bidding/models/bidding_state.dart';
 import 'package:kwella_driver/features/bidding/presentation/screens/bidding_marketplace_screen.dart';
 import 'package:kwella_driver/features/bidding/providers/bidding_provider.dart';
 import 'package:kwella_driver/features/bidding/services/kwella_websocket_service.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
-class FakeKwellaWebSocketService implements KwellaWebSocketService {
-  final StreamController<Map<String, dynamic>> _controller =
-      StreamController<Map<String, dynamic>>.broadcast();
-
-  bool connectCalled = false;
-  bool disposeCalled = false;
-  bool hasListeners = false;
-
-  FakeKwellaWebSocketService() {
-    _controller.onListen = () => hasListeners = true;
-    _controller.onCancel = () => hasListeners = false;
-  }
-
-  @override
-  void connect() {
-    connectCalled = true;
-  }
-
-  @override
-  Stream<Map<String, dynamic>> get stream => _controller.stream;
-
-  @override
-  Stream<Map<String, dynamic>> get bidStream => _controller.stream;
-
-  @override
-  bool get isConnected => connectCalled && !disposeCalled;
-
-  @override
-  Future<void> sendDriverBid({
-    required String driverId,
-    required String riderId,
-    required double amount,
-    required String estimatedPickup,
-    required String broadcastPk,
-  }) async {
-    // No-op
-  }
-
-  @override
-  void dispose() {
-    disposeCalled = true;
-    _controller.close();
-  }
-
-  @override
-  WebSocketSink get sink => _NoOpSink();
-}
+import '../../../../support/fake_kwella_websocket_service.dart';
 
 class MockBiddingNotifier extends BiddingNotifier {
   // BiddingNotifier no longer auto-connects at construction, so no override
@@ -179,24 +131,4 @@ void main() {
     expect(find.text('Connection Failure'), findsOneWidget);
     expect(find.text('WebSocket connection dropped'), findsOneWidget);
   });
-}
-
-// ---------------------------------------------------------------------------
-// Minimal no-op WebSocketSink for interface satisfaction.
-// ---------------------------------------------------------------------------
-class _NoOpSink implements WebSocketSink {
-  @override
-  void add(dynamic data) {}
-
-  @override
-  Future<void> close([int? closeCode, String? closeReason]) async {}
-
-  @override
-  void addError(Object error, [StackTrace? stackTrace]) {}
-
-  @override
-  Future<void> get done async {}
-
-  @override
-  Future<void> addStream(Stream<dynamic> stream) => stream.drain<void>();
 }

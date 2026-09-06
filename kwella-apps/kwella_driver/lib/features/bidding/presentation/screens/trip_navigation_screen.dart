@@ -22,6 +22,14 @@ class _TripNavigationScreenState extends ConsumerState<TripNavigationScreen>
   bool _arrived = false;
 
   @override
+  void initState() {
+    super.initState();
+    ref
+        .read(telemetryControllerProvider.notifier)
+        .startTrip(driverId: 'USR#drv-12345');
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
@@ -334,10 +342,13 @@ class _TripNavigationScreenState extends ConsumerState<TripNavigationScreen>
       _slideProgress = 1.0;
     });
     final notifier = ref.read(telemetryControllerProvider.notifier);
+    final pendingBidAmount =
+        ref.read(telemetryControllerProvider).pendingBidAmount ?? 0.0;
     notifier.confirmArrival(
       driverId: 'USR#drv-12345',
-      tripId: 'trip-arrived-123',
+      finalBidAmount: pendingBidAmount,
     );
+    Navigator.of(context).pushNamed('/driver/post-trip');
   }
 }
 

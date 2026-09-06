@@ -903,10 +903,7 @@ class _BiddingMarketplaceScreenState
                 const SizedBox(height: 20),
                 _SlideToConfirmButton(
                   onConfirm: () async {
-                    await controller.confirmArrival(
-                      driverId: 'USR#drv-12345',
-                      tripId: 'trip-arrived-123',
-                    );
+                    await controller.driverArrived(driverId: 'USR#drv-12345');
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
@@ -924,6 +921,7 @@ class _BiddingMarketplaceScreenState
                               borderRadius: BorderRadius.circular(12)),
                         ),
                       );
+                      Navigator.of(context).pushNamed('/driver/navigation');
                     }
                   },
                 ),
