@@ -1,0 +1,51 @@
+{
+  "_comment": "Use with: python3 server.py --role rider --scenario scenarios/rider_mode.json. Personas here are DRIVERS bidding against the real rider app. Coordinates are Cape Town CBD, near the pickup/dropoff used by scripts/simulate_marketplace_trip.py.",
+  "offerTimeoutSeconds": 15,
+  "resurfaceDelaySeconds": 20,
+  "driveIntervalSeconds": 1.2,
+  "driveSteps": 6,
+  "personas": [
+    {
+      "id": "driver-alice",
+      "name": "Alice (cheap + fast)",
+      "latitude": -33.9235,
+      "longitude": 18.4225,
+      "behavior": "auto",
+      "bidOffset": 10,
+      "etaMinutes": 3,
+      "vehicleMake": "Toyota",
+      "vehicleModel": "Corolla",
+      "vehicleColor": "White",
+      "licensePlate": "CA123456",
+      "rating": 4.9
+    },
+    {
+      "id": "driver-bruno",
+      "name": "Bruno (ignores offers)",
+      "latitude": -33.926,
+      "longitude": 18.421,
+      "behavior": "ignore",
+      "bidOffset": 20,
+      "etaMinutes": 6,
+      "vehicleMake": "VW",
+      "vehicleModel": "Polo",
+      "vehicleColor": "Blue",
+      "licensePlate": "CA654321",
+      "rating": 4.6
+    },
+    {
+      "id": "driver-carla",
+      "name": "Carla (manual control)",
+      "latitude": -33.921,
+      "longitude": 18.4255,
+      "behavior": "manual",
+      "bidOffset": 45,
+      "etaMinutes": 4,
+      "vehicleMake": "Hyundai",
+      "vehicleModel": "Grand i10",
+      "vehicleColor": "Red",
+      "licensePlate": "CA789012",
+      "rating": 4.7
+    }
+  ]
+}

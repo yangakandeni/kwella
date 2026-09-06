@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Kwella Mock Orchestrator</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a24; --border: #2a2e3a; --text: #e6e8ef; --muted: #8b90a3;
+    --accent: #4f8cff; --good: #34c98f; --warn: #e8b93f; --bad: #ef5f6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 -apple-system, Segoe UI, sans-serif; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .pill { padding: 2px 8px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border); }
+  .pill.role { background: #22263a; }
+  .pill.connected { background: rgba(52,201,143,0.15); color: var(--good); border-color: var(--good); }
+  .pill.disconnected { background: rgba(239,95,107,0.15); color: var(--bad); border-color: var(--bad); }
+  main { display: grid; grid-template-columns: 320px 1fr 380px; gap: 0; height: calc(100vh - 45px); }
+  section { padding: 12px; overflow-y: auto; border-right: 1px solid var(--border); }
+  section:last-child { border-right: none; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 4px 0 10px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+  .card h3 { margin: 0 0 6px; font-size: 13px; }
+  .row { display: flex; justify-content: space-between; gap: 6px; margin: 2px 0; color: var(--muted); }
+  .row b { color: var(--text); font-weight: 500; }
+  .status-tag { font-size: 10px; padding: 1px 6px; border-radius: 8px; text-transform: uppercase; }
+  .status-idle { background: #2a2e3a; }
+  .status-bidding { background: rgba(232,185,63,0.2); color: var(--warn); }
+  .status-selected { background: rgba(52,201,143,0.2); color: var(--good); }
+  .status-rejected { background: rgba(239,95,107,0.2); color: var(--bad); }
+  .status-enroute, .status-arrived { background: rgba(79,140,255,0.2); color: var(--accent); }
+  .btns { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  button { background: #22263a; color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+  button.danger { background: rgba(239,95,107,0.15); border-color: var(--bad); color: var(--bad); }
+  select, input { background: #0f1117; color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; font-size: 11px; }
+  #log { font-family: ui-monospace, monospace; font-size: 11px; }
+  .log-line { padding: 3px 4px; border-bottom: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; }
+  .log-line .ts { color: var(--muted); margin-right: 6px; }
+  .log-kind-error { color: var(--bad); }
+  .log-kind-offer { color: var(--warn); }
+  .log-kind-push { color: var(--accent); }
+  .log-kind-action { color: var(--good); }
+  .net-controls label { display: block; margin-top: 8px; color: var(--muted); }
+  .net-controls input[type=range] { width: 100%; }
+  form.inline { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+  form.inline input { width: 70px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kwella Mock Orchestrator</h1>
+  <span class="pill role" id="rolePill">role: -</span>
+  <span class="pill disconnected" id="connPill">real app: disconnected</span>
+</header>
+<main>
+  <section id="personaPanel">
+    <h2 id="personaHeading">Personas</h2>
+    <div id="personaList"></div>
+    <h2>Add persona</h2>
+    <div class="card">
+      <form class="inline" id="addPersonaForm">
+        <input name="id" placeholder="id" required style="width:90px" />
+        <input name="name" placeholder="name" style="width:90px" />
+        <input name="latitude" placeholder="lat" required />
+        <input name="longitude" placeholder="lon" required />
+        <input name="bidOffset" placeholder="bid offset" value="0" />
+        <select name="behavior"><option value="auto">auto</option><option value="manual">manual</option><option value="ignore">ignore</option></select>
+        <button class="primary" type="submit">Add</button>
+      </form>
+    </div>
+    <h2>Network conditions</h2>
+    <div class="card net-controls">
+      <label>Latency: <span id="latencyVal">0</span> ms
+        <input type="range" id="latencyRange" min="0" max="5000" step="50" value="0" />
+      </label>
+      <label>Drop rate: <span id="dropVal">0</span>%
+        <input type="range" id="dropRange" min="0" max="100" step="5" value="0" />
+      </label>
+    </div>
+  </section>
+
+  <section id="tripPanel">
+    <h2>Trips</h2>
+    <div id="tripList"></div>
+    <h2>Trigger a rider request (driver-mode)</h2>
+    <div class="card">
+      <form class="inline" id="requestTripForm">
+        <select name="personaId" id="riderPersonaSelect"></select>
+        <input name="pickupLat" placeholder="pickup lat" value="-33.9249" />
+        <input name="pickupLon" placeholder="pickup lon" value="18.4241" />
+        <input name="dropoffLat" placeholder="dropoff lat" value="-33.9258" />
+        <input name="dropoffLon" placeholder="dropoff lon" value="18.4231" />
+        <button class="primary" type="submit">Request Trip</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="logPanel">
+    <h2>Event log</h2>
+    <div id="log"></div>
+  </section>
+</main>
+<script>
+const ws = new WebSocket(`ws://${location.host}/control`);
+let latestState = null;
+
+ws.onmessage = (evt) => {
+  const msg = JSON.parse(evt.data);
+  if (msg.type === 'state') { latestState = msg.state; render(); }
+  else if (msg.type === 'log') { appendLog(msg.entry); }
+};
+
+function send(cmd, params = {}) {
+  ws.send(JSON.stringify({ type: 'command', cmd, params }));
+}
+
+function statusClass(s) { return 'status-' + (s || 'idle'); }
+
+function render() {
+  if (!latestState) return;
+  document.getElementById('rolePill').textContent = `role under test: ${latestState.role}`;
+  const connPill = document.getElementById('connPill');
+  if (latestState.realEntityId) {
+    connPill.textContent = `real app: ${latestState.realEntityId}`;
+    connPill.className = 'pill connected';
+  } else {
+    connPill.textContent = 'real app: disconnected';
+    connPill.className = 'pill disconnected';
+  }
+
+  document.getElementById('personaHeading').textContent =
+    `Personas (${latestState.personaRole}s controlled by this dashboard)`;
+
+  const list = document.getElementById('personaList');
+  list.innerHTML = '';
+  const riderSelect = document.getElementById('riderPersonaSelect');
+  riderSelect.innerHTML = '';
+
+  for (const p of latestState.personas) {
+    if (p.role === 'rider') {
+      const opt = document.createElement('option');
+      opt.value = p.id; opt.textContent = `${p.name} (${p.id})`;
+      riderSelect.appendChild(opt);
+    }
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    const trip = p.activeTripId ? latestState.trips.find(t => t.id === p.activeTripId) : null;
+    card.innerHTML = `
+      <h3>${p.name} <span class="status-tag ${statusClass(p.status)}">${p.status}</span></h3>
+      <div class="row"><span>id</span><b>${p.id}</b></div>
+      <div class="row"><span>behavior</span>
+        <select data-persona="${p.id}" class="behaviorSelect">
+          <option value="auto" ${p.behavior==='auto'?'selected':''}>auto</option>
+          <option value="manual" ${p.behavior==='manual'?'selected':''}>manual</option>
+          <option value="ignore" ${p.behavior==='ignore'?'selected':''}>ignore</option>
+        </select>
+      </div>
+      <div class="row"><span>pos</span><b>${p.latitude.toFixed(4)}, ${p.longitude.toFixed(4)}</b></div>
+      ${trip ? `<div class="row"><span>trip</span><b>${trip.id.slice(-6)} (${trip.status})</b></div>` : ''}
+      <div class="btns">
+        ${p.role === 'driver' ? driverButtons(p, trip) : riderButtons(p, trip)}
+        <button class="danger" data-action="remove" data-persona="${p.id}">Remove</button>
+      </div>
+    `;
+    list.appendChild(card);
+  }
+
+  document.querySelectorAll('.behaviorSelect').forEach(el => {
+    el.onchange = () => send('setPersonaBehavior', { personaId: el.dataset.persona, behavior: el.value });
+  });
+  document.querySelectorAll('[data-action="remove"]').forEach(el => {
+    el.onclick = () => send('removePersona', { personaId: el.dataset.persona });
+  });
+
+  const tripList = document.getElementById('tripList');
+  tripList.innerHTML = '';
+  for (const t of latestState.trips) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <h3>${t.id.slice(-8)} <span class="status-tag ${statusClass(t.status.toLowerCase())}">${t.status}</span></h3>
+      <div class="row"><span>rider</span><b>${t.riderId || '-'}</b></div>
+      <div class="row"><span>selected driver</span><b>${t.selectedDriverId || '-'}</b></div>
+      <div class="row"><span>bids</span><b>${t.bids.map(b => `${b.driverId}: R${b.amount}`).join(', ') || 'none'}</b></div>
+      <div class="btns">
+        ${t.bids.map(b => `<button data-select-trip="${t.id}" data-select-driver="${b.driverId}">Select ${b.driverId}</button>`).join('')}
+      </div>
+    `;
+    tripList.appendChild(card);
+  }
+  document.querySelectorAll('[data-select-trip]').forEach(el => {
+    el.onclick = () => send('selectBid', { tripId: el.dataset.selectTrip, driverId: el.dataset.selectDriver });
+  });
+}
+
+function driverButtons(p, trip) {
+  const tripId = p.activeTripId;
+  let btns = '';
+  if (p.status === 'bidding' || p.status === 'idle') {
+    btns += `<button data-action="sendBid" data-persona="${p.id}">Send bid now</button>`;
+    btns += `<button data-action="decline" data-persona="${p.id}">Decline offer</button>`;
+  }
+  if (trip && trip.status === 'ACCEPTED') btns += `<button data-action="arrived" data-persona="${p.id}">Mark arrived</button>`;
+  if (trip && trip.status === 'ARRIVED') btns += `<button data-action="startTrip" data-persona="${p.id}">Start trip</button>`;
+  if (trip && trip.status === 'IN_PROGRESS') btns += `<button data-action="confirmArrival" data-persona="${p.id}">Confirm arrival (settle)</button>`;
+  return btns;
+}
+
+function riderButtons(p, trip) {
+  return '';
+}
+
+document.getElementById('personaList').addEventListener('click', (evt) => {
+  const el = evt.target.closest('[data-action]');
+  if (!el || !el.dataset.persona) return;
+  const personaId = el.dataset.persona;
+  const persona = latestState.personas.find(p => p.id === personaId);
+  const tripId = persona && persona.activeTripId;
+  switch (el.dataset.action) {
+    case 'sendBid': {
+      const trip = latestState.trips.find(t => t.id === tripId);
+      const amount = trip ? Number(trip.baseFare) + Number(persona.bidOffset) : 0;
+      send('sendBid', { personaId, tripId, amount, etaMinutes: persona.etaMinutes });
+      break;
+    }
+    case 'decline':
+      send('declineOffer', { personaId, tripId });
+      break;
+    case 'arrived':
+      send('driverStep', { personaId, step: 'arrived' });
+      break;
+    case 'startTrip':
+      send('driverStep', { personaId, step: 'startTrip' });
+      break;
+    case 'confirmArrival': {
+      const trip = latestState.trips.find(t => t.id === tripId);
+      const bid = trip && trip.bids.find(b => b.driverId === personaId);
+      send('driverStep', { personaId, step: 'confirmArrival', finalBidAmount: bid ? bid.amount : trip.baseFare });
+      break;
+    }
+  }
+});
+
+document.getElementById('addPersonaForm').addEventListener('submit', (evt) => {
+  evt.preventDefault();
+  const f = new FormData(evt.target);
+  send('addPersona', {
+    id: f.get('id'), name: f.get('name') || f.get('id'),
+    latitude: parseFloat(f.get('latitude')), longitude: parseFloat(f.get('longitude')),
+    bidOffset: parseFloat(f.get('bidOffset') || '0'), behavior: f.get('behavior'),
+  });
+  evt.target.reset();
+});
+
+document.getElementById('requestTripForm').addEventListener('submit', (evt) => {
+  evt.preventDefault();
+  const f = new FormData(evt.target);
+  send('triggerRequestTrip', {
+    personaId: f.get('personaId'),
+    pickupLat: parseFloat(f.get('pickupLat')), pickupLon: parseFloat(f.get('pickupLon')),
+    dropoffLat: parseFloat(f.get('dropoffLat')), dropoffLon: parseFloat(f.get('dropoffLon')),
+  });
+});
+
+document.getElementById('latencyRange').addEventListener('input', (evt) => {
+  document.getElementById('latencyVal').textContent = evt.target.value;
+  send('setNetwork', { latencyMs: parseInt(evt.target.value, 10) });
+});
+document.getElementById('dropRange').addEventListener('input', (evt) => {
+  const pct = parseInt(evt.target.value, 10);
+  document.getElementById('dropVal').textContent = pct;
+  send('setNetwork', { dropRate: pct / 100 });
+});
+
+function appendLog(entry) {
+  const log = document.getElementById('log');
+  const line = document.createElement('div');
+  line.className = `log-line log-kind-${entry.kind}`;
+  const time = new Date(entry.ts * 1000).toLocaleTimeString();
+  line.innerHTML = `<span class="ts">${time}</span>${escapeHtml(entry.message)}`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+  while (log.children.length > 500) log.removeChild(log.firstChild);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+</script>
+</body>
+</html>

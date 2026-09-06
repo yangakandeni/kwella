@@ -127,12 +127,34 @@ class KwellaEnvironment {
     httpApiEndpoint: kStagingHttpApiEndpoint,
   );
 
-  /// Selects [staging] or [production] based on the `KWELLA_ENV` compile-time
-  /// define (e.g. `flutter run --dart-define=KWELLA_ENV=staging`). Defaults
-  /// to [production] so release builds are unaffected.
-  static const KwellaEnvironment current =
-      _kEnvironmentName == 'staging' ? staging : production;
+  /// Points at the local mock orchestration server
+  /// (`scripts/mock_orchestrator/server.py`) instead of any real AWS stack —
+  /// for manual E2E testing on an Android emulator with no live backend.
+  /// The mock server doesn't verify tokens, so the Cognito/HTTP fields are
+  /// left at their production values; only [webSocketEndpointUrl] matters.
+  static const KwellaEnvironment local = KwellaEnvironment(
+    webSocketEndpointUrl: 'ws://$_kMockHost:$_kMockPort',
+  );
+
+  /// Selects [local], [staging], or [production] based on the `KWELLA_ENV`
+  /// compile-time define (e.g. `flutter run --dart-define=KWELLA_ENV=local`).
+  /// Defaults to [production] so release builds are unaffected.
+  static const KwellaEnvironment current = _kEnvironmentName == 'local'
+      ? local
+      : _kEnvironmentName == 'staging'
+          ? staging
+          : production;
 }
 
 const String _kEnvironmentName =
     String.fromEnvironment('KWELLA_ENV', defaultValue: 'production');
+
+/// Android emulators reach the host machine's loopback via the alias
+/// `10.0.2.2`. Override with `--dart-define=KWELLA_MOCK_HOST=<lan-ip>` when
+/// testing on a physical device on the same LAN as the mock server.
+const String _kMockHost =
+    String.fromEnvironment('KWELLA_MOCK_HOST', defaultValue: '10.0.2.2');
+
+/// Must match the mock server's `--app-port` (default 8788).
+const int _kMockPort =
+    int.fromEnvironment('KWELLA_MOCK_PORT', defaultValue: 8788);

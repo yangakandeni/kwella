@@ -1,0 +1,29 @@
+{
+  "_comment": "Use with: python3 server.py --role driver --scenario scenarios/driver_mode.json. Personas here are RIDERS. Trigger a request for one from the dashboard's 'Trigger a rider request' form. Fire two in quick succession against the same real driver app to test concurrent-offer handling.",
+  "offerTimeoutSeconds": 15,
+  "resurfaceDelaySeconds": 20,
+  "riderAutoSelectWindowSeconds": 4,
+  "personas": [
+    {
+      "id": "rider-nomsa",
+      "name": "Nomsa",
+      "latitude": -33.9249,
+      "longitude": 18.4241,
+      "behavior": "auto"
+    },
+    {
+      "id": "rider-jason",
+      "name": "Jason",
+      "latitude": -33.9201,
+      "longitude": 18.4267,
+      "behavior": "auto"
+    },
+    {
+      "id": "rider-priya",
+      "name": "Priya (manual selection)",
+      "latitude": -33.9273,
+      "longitude": 18.4198,
+      "behavior": "manual"
+    }
+  ]
+}
