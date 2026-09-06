@@ -93,6 +93,35 @@ def _get_trip(state: OrchestratorState, trip_id: str | None) -> Trip:
     return trip
 
 
+def _match_and_push_offer(
+    state: OrchestratorState, pickup: tuple[float, float], offer_payload: dict[str, Any]
+) -> tuple[list[str], list[tuple[str, dict[str, Any]]]]:
+    """Finds drivers within `_TRIP_MATCH_RADIUS_M` of `pickup` and queues
+    `offer_payload` as a push to each. Shared by `request_trip` (initial
+    broadcast) and `update_fare` (re-broadcast at the new fare)."""
+    pickup_lat, pickup_lon = pickup
+    matched_driver_ids: list[str] = []
+    pushes: list[tuple[str, dict[str, Any]]] = []
+
+    for persona in state.personas.values():
+        if persona.role != "driver":
+            continue
+        distance_m = _haversine_m(persona.latitude, persona.longitude, pickup_lat, pickup_lon)
+        if distance_m > _TRIP_MATCH_RADIUS_M:
+            continue
+        matched_driver_ids.append(persona.id)
+        pushes.append((persona.id, dict(offer_payload)))
+
+    # The real app under test (when it's a driver) also receives the offer
+    # if it's registered and within range — but we have no live coordinate
+    # for it beyond what updateLocation last reported, so always include it.
+    if state.role == "driver" and state.real_entity_id:
+        matched_driver_ids.append(state.real_entity_id)
+        pushes.append((state.real_entity_id, dict(offer_payload)))
+
+    return matched_driver_ids, pushes
+
+
 def request_trip(state: OrchestratorState, payload: dict[str, Any], sender_id: str | None):
     rider_id = payload.get("riderId") or sender_id
     pickup_lat = payload.get("pickup_latitude")
@@ -129,8 +158,6 @@ def request_trip(state: OrchestratorState, payload: dict[str, Any], sender_id: s
     )
     state.trips[trip_id] = trip
 
-    matched_driver_ids: list[str] = []
-    pushes: list[tuple[str, dict[str, Any]]] = []
     offer_payload = {
         "action": "rideOfferAvailable",
         "tripId": trip_id,
@@ -141,22 +168,7 @@ def request_trip(state: OrchestratorState, payload: dict[str, Any], sender_id: s
         "base_fare": str(calculated_fare),
         "expires_in_seconds": RIDE_OFFER_TTL_SECONDS,
     }
-
-    for persona in state.personas.values():
-        if persona.role != "driver":
-            continue
-        distance_m = _haversine_m(persona.latitude, persona.longitude, pickup_lat, pickup_lon)
-        if distance_m > _TRIP_MATCH_RADIUS_M:
-            continue
-        matched_driver_ids.append(persona.id)
-        pushes.append((persona.id, dict(offer_payload)))
-
-    # The real app under test (when it's a driver) also receives the offer
-    # if it's registered and within range — but we have no live coordinate
-    # for it beyond what updateLocation last reported, so always include it.
-    if state.role == "driver" and state.real_entity_id:
-        matched_driver_ids.append(state.real_entity_id)
-        pushes.append((state.real_entity_id, dict(offer_payload)))
+    matched_driver_ids, pushes = _match_and_push_offer(state, trip.pickup, offer_payload)
 
     response = {
         "status": "TripBroadcast",
@@ -270,6 +282,43 @@ def select_bid(state: OrchestratorState, payload: dict[str, Any], sender_id: str
         )
 
     response = {"status": "BidSelected", "tripId": trip_id, "driverId": driver_id, "riderId": trip.rider_id}
+    return response, pushes
+
+
+def update_fare(state: OrchestratorState, payload: dict[str, Any], sender_id: str | None):
+    trip_id = payload.get("tripId") or payload.get("trip_id")
+    trip = _get_trip(state, trip_id)
+
+    # Same late-request guard select_bid uses: once a driver has won (or the
+    # trip has otherwise moved past BROADCASTING) there's no offer left to
+    # re-price.
+    if trip.status != TripStatus.BROADCASTING:
+        raise ContractError("Trip no longer available", error="TripNoLongerAvailable")
+
+    new_fare = payload.get("new_fare") or payload.get("newFare")
+    try:
+        new_fare_f = float(new_fare)
+    except (TypeError, ValueError):
+        raise ContractError("Field 'new_fare' must be numeric.") from None
+
+    if new_fare_f <= trip.base_fare:
+        raise ContractError("New fare must exceed the current base fare.")
+
+    trip.base_fare = new_fare_f
+
+    offer_payload = {
+        "action": "rideOfferAvailable",
+        "tripId": trip_id,
+        "rider_id": trip.rider_id,
+        "pickup_location": list(trip.pickup),
+        "dropoff_location": list(trip.dropoff),
+        "passenger_count": trip.passenger_count,
+        "base_fare": str(new_fare_f),
+        "expires_in_seconds": RIDE_OFFER_TTL_SECONDS,
+    }
+    _matched_driver_ids, pushes = _match_and_push_offer(state, trip.pickup, offer_payload)
+
+    response = {"status": "FareUpdated", "tripId": trip_id, "base_fare": str(new_fare_f)}
     return response, pushes
 
 
@@ -421,6 +470,7 @@ DISPATCH = {
     "requestTrip": request_trip,
     "sendBid": send_bid,
     "selectBid": select_bid,
+    "updateFare": update_fare,
     "driverArrived": driver_arrived,
     "updateLocation": update_location,
     "startTrip": start_trip,

@@ -38,9 +38,10 @@
 //
 // Known, pre-existing, out-of-scope gaps this suite documents rather than
 // works around or fixes:
-//   - There is no decline-a-specific-bid or cancel-active-search UI in
-//     rider_booking_screen.dart today, so this suite doesn't cover that —
-//     flagged as a known product gap, out of scope for this task.
+//   - Declining a bid and cancelling an active search (both now covered
+//     below via ActiveSearchScreen) are client-local only — no backend
+//     route exists for either, by deliberate choice (see the plan's
+//     Context section): lower risk than inventing more backend surface.
 //   - `handleIncomingWebSocketEvent`'s `driverBidReceived` branch only reads
 //     a wrapped `bidMetrics` list field, not the flat
 //     {action, tripId, driverId, amount, driverName, ...} shape the backend's
@@ -61,11 +62,13 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:kwella_core/kwella_core.dart';
 import 'package:kwella_rider/features/auth/presentation/screens/otp_verification_screen.dart';
 import 'package:kwella_rider/features/auth/presentation/screens/phone_entry_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/rider_trip_state.dart';
+import 'package:kwella_rider/features/booking/presentation/screens/active_search_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/payment_method_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/rate_driver_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/ride_fare_offer_screen.dart';
@@ -84,6 +87,18 @@ final Finder _pinInputField = find.descendant(
   of: find.byKey(const Key('otp_pinput')),
   matching: find.byType(EditableText),
 );
+
+/// Advances past a route's page-transition animation. Not pumpAndSettle:
+/// several screens on this trip's stack have infinite/pulsing animations
+/// (the "Finding drivers…" spinner, DriverBidCard's pulsing accept button)
+/// that never let pumpAndSettle converge. 600ms comfortably covers both a
+/// plain push's default ~300ms transition and pushNamedAndRemoveUntil's
+/// slightly longer compound push-and-remove settle (empirically ~500-600ms).
+Future<void> _pumpPastTransition(WidgetTester tester) async {
+  for (int i = 0; i < 6; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
 
 void main() {
   late FakeWebSocketGateway fakeGateway;
@@ -290,6 +305,9 @@ void main() {
       // ── 4. Request the trip ─────────────────────────────────────────────
       await tester.ensureVisible(find.byKey(const Key('find_drivers_button')));
       await tester.tap(find.byKey(const Key('find_drivers_button')));
+      // Not pumpAndSettle: the destination (ActiveSearchScreen) has an
+      // indeterminate "Finding drivers…" CircularProgressIndicator, which
+      // never settles.
       await tester.pump();
       await tester.pump();
 
@@ -303,40 +321,137 @@ void main() {
       expect(requestTripFrame['passenger_count'], equals(1));
       expect(controller.state.status, equals(RiderTripStatus.searching));
 
-      // `_findDrivers` pops straight back to the booking screen (popUntil
-      // '/rider/home'), skipping payment-method entirely.
-      // Safe to fully settle here (no infinite/repeating animation is on
-      // screen yet — DriverBidCard's pulsing accept button doesn't exist
-      // until the bid frame below arrives) so the pop transition's overlay
-      // doesn't linger and absorb the next tap.
-      await tester.pumpAndSettle();
-      expect(find.byKey(const Key('payment_continue_button')), findsNothing);
-      expect(find.byKey(const Key('search_bar')), findsNothing);
+      // `_findDrivers` now pushes a dedicated ActiveSearchScreen (replacing
+      // the old pop-back-to-booking-screen behavior).
+      await _pumpPastTransition(tester);
+      expect(find.byType(ActiveSearchScreen), findsOneWidget);
+      expect(find.byKey(const Key('active_search_offer_value')), findsOneWidget);
 
-      // ── 5. Bidding: push a driverBidReceived frame ──────────────────────
+      // ── 4b. TripBroadcast sets the real server fare, then raise it ──────
       fakeGateway.simulateIncomingFrame(jsonEncode({
-        'action': 'driverBidReceived',
+        'status': 'TripBroadcast',
         'tripId': tripId,
-        'bidMetrics': [
-          {
-            'driverId': driverId,
-            'driverName': 'Sipho M.',
-            'rating': 4.8,
-            'vehicleColor': 'White',
-            'vehicleModel': 'Toyota Quantum',
-            'licensePlate': 'CA 123-456',
-            'cataSticker': 'M02356',
-            'bidAmount': 55,
-          },
-        ],
+        'matched_drivers': 2,
+        'passenger_count': 1,
+        'calculated_fare': '60',
       }));
       await tester.pump();
       await tester.pump();
 
+      expect(controller.state.tripId, equals(tripId));
+      expect(controller.state.offeredFare, equals(60.0));
+
+      await tester.tap(find.byKey(const Key('active_search_increase_fare_button')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('raise_fare_button')));
+      await tester.pump();
+
+      final Map<String, dynamic> updateFareFrame = fakeGateway.sentPayloads
+          .singleWhere((m) => m['action'] == 'updateFare');
+      expect(updateFareFrame['tripId'], equals(tripId));
+      expect(updateFareFrame['riderId'], equals(riderId));
+      expect(updateFareFrame['new_fare'], equals(65.0));
+      expect(controller.state.offeredFare, equals(65.0));
+
+      fakeGateway.simulateIncomingFrame(jsonEncode({
+        'status': 'FareUpdated',
+        'tripId': tripId,
+        'base_fare': '65',
+      }));
+      await tester.pump();
+      await tester.pump();
+      expect(controller.state.offeredFare, equals(65.0));
+
+      // ── 4c. nearbyDriverUpdate populates idle-driver markers on the map ──
+      fakeGateway.simulateIncomingFrame(jsonEncode({
+        'action': 'nearbyDriverUpdate',
+        'driverId': 'driver-idle-1',
+        'latitude': -33.93,
+        'longitude': 18.45,
+        'status': 'idle',
+      }));
+      await tester.pump();
+      await tester.pump();
+
+      expect(controller.state.nearbyDrivers['driver-idle-1'], isNotNull);
+      // Scoped to ActiveSearchScreen's own map: earlier routes
+      // (RideFareOfferScreen, RiderBookingScreen, ...) stay mounted offstage
+      // (MaterialPageRoute's default maintainState) and each has its own
+      // KwellaMapView carrying the same non-unique `kwella_map_view` key.
+      final GoogleMap activeSearchMap = tester.widget<GoogleMap>(
+        find.descendant(
+          of: find.byType(ActiveSearchScreen),
+          matching: find.byKey(const Key('kwella_map_view')),
+        ),
+      );
+      expect(
+        activeSearchMap.markers
+            .any((m) => m.markerId == const MarkerId('nearby_driver-idle-1')),
+        isTrue,
+      );
+
+      // ── 5. Bidding: push a driverBidReceived frame ──────────────────────
+      Map<String, dynamic> bidFrame() => {
+            'action': 'driverBidReceived',
+            'tripId': tripId,
+            'bidMetrics': [
+              {
+                'driverId': driverId,
+                'driverName': 'Sipho M.',
+                'rating': 4.8,
+                'vehicleColor': 'White',
+                'vehicleModel': 'Toyota Quantum',
+                'licensePlate': 'CA 123-456',
+                'cataSticker': 'M02356',
+                'bidAmount': 55,
+                'etaMinutes': 6,
+              },
+            ],
+          };
+
+      // RiderBookingScreen (and every other earlier route) stays mounted
+      // offstage (MaterialPageRoute's default maintainState) and reacts to
+      // the same shared controller/state — its own bid carousel renders a
+      // second DriverBidCard the instant status flips to biddingOpen, so
+      // every DriverBidCard-related finder below is scoped to
+      // ActiveSearchScreen's own subtree to disambiguate.
+      Finder onActiveSearchScreen(Finder matching) => find.descendant(
+            of: find.byType(ActiveSearchScreen),
+            matching: matching,
+          );
+
+      fakeGateway.simulateIncomingFrame(jsonEncode(bidFrame()));
+      await tester.pump();
+      await tester.pump();
+
       expect(controller.state.status, equals(RiderTripStatus.biddingOpen));
-      expect(find.byKey(const Key('driver_name')), findsOneWidget);
-      expect(find.text('Sipho M.'), findsOneWidget);
-      expect(find.byKey(const Key('accept_button')), findsOneWidget);
+      expect(onActiveSearchScreen(find.byKey(const Key('driver_name'))),
+          findsOneWidget);
+      expect(onActiveSearchScreen(find.text('Sipho M.')), findsOneWidget);
+      expect(onActiveSearchScreen(find.byKey(const Key('accept_button'))),
+          findsOneWidget);
+      expect(onActiveSearchScreen(find.text('6 min away')), findsOneWidget);
+
+      // ── 5b. Decline the bid — client-local only, no wire call — then a
+      // fresh bid arrives and the sheet shows it again ────────────────────
+      final Finder declineButton =
+          onActiveSearchScreen(find.byKey(const Key('decline_button')));
+      await tester.ensureVisible(declineButton);
+      await tester.tap(declineButton);
+      await tester.pump();
+
+      expect(controller.state.bidMetrics, isEmpty);
+      expect(find.byKey(const Key('active_search_offer_value')), findsOneWidget);
+      expect(
+        fakeGateway.sentPayloads.where((m) => m['action'] == 'declineBid'),
+        isEmpty,
+      );
+
+      fakeGateway.simulateIncomingFrame(jsonEncode(bidFrame()));
+      await tester.pump();
+      await tester.pump();
+      expect(onActiveSearchScreen(find.byKey(const Key('accept_button'))),
+          findsOneWidget);
 
       // ── 6. Accept the bid ────────────────────────────────────────────────
       // A coordinate-based tap on `accept_button` (DriverBidCard's
@@ -347,15 +462,16 @@ void main() {
       // ElevatedButton's onPressed and invoking it directly exercises the
       // exact same DriverBidCard.onAccept -> controller.selectBid wiring a
       // tap would, without depending on that per-frame geometry timing.
-      await tester.ensureVisible(find.byKey(const Key('accept_button')));
+      final Finder activeSearchAcceptButton =
+          onActiveSearchScreen(find.byKey(const Key('accept_button')));
+      await tester.ensureVisible(activeSearchAcceptButton);
       final ElevatedButton acceptButton = tester.widget<ElevatedButton>(
         find.descendant(
-          of: find.byKey(const Key('accept_button')),
+          of: activeSearchAcceptButton,
           matching: find.byType(ElevatedButton),
         ),
       );
       acceptButton.onPressed!();
-      await tester.pump();
       await tester.pump();
 
       final Map<String, dynamic> selectBidFrame =
@@ -363,6 +479,11 @@ void main() {
       expect(selectBidFrame['tripId'], equals(tripId));
       expect(selectBidFrame['driverId'], equals(driverId));
       expect(controller.state.status, equals(RiderTripStatus.accepted));
+
+      // ActiveSearchScreen auto-navigates to /rider/tracking via a
+      // post-frame callback once accepted.
+      await _pumpPastTransition(tester);
+      expect(find.byKey(const Key('cancel_ride_button')), findsOneWidget);
 
       fakeGateway.simulateIncomingFrame(jsonEncode({
         'action': 'tripMatchConfirmed',
@@ -386,11 +507,7 @@ void main() {
       expect(controller.state.vehicleDescription, equals('White Quantum'));
       expect(controller.state.licensePlate, equals('CA 123-456'));
 
-      // ── 7. Trip lifecycle: navigate to tracking, push live updates ─────
-      await tester.tap(find.text('Track →'));
-      await tester.pump();
-      await tester.pump();
-      expect(find.byKey(const Key('cancel_ride_button')), findsOneWidget);
+      // ── 7. Trip lifecycle: already on tracking, push live updates ──────
 
       const List<List<double>> driverPath = [
         [-33.94, 18.50],
@@ -463,6 +580,86 @@ void main() {
       expect(submitRatingFrame['tripId'], equals(tripId));
       expect(submitRatingFrame['rating'], equals(5));
       expect(submitRatingFrame['target'], equals('DRIVER'));
+    },
+  );
+
+  testWidgets(
+    'cancelling an active search from ActiveSearchScreen resets state and '
+    'lands back on /rider/home',
+    (WidgetTester tester) async {
+      // Abbreviated setup — auth -> booking -> payment -> fare offer -> Find
+      // Drivers — mirrors steps 1-4 of the main lifecycle test above without
+      // re-asserting every intermediate step, since those are already
+      // covered there; this scenario only needs to reach ActiveSearchScreen.
+      await tester.pumpWidget(buildApp());
+
+      await tester.enterText(
+        find.byKey(const Key('phone_input')),
+        '0717662280',
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send_otp_button')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+      await tester.pump(const Duration(milliseconds: 10));
+      await tester.pump();
+
+      await tester.enterText(_pinInputField, '123456');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+      await tester.pump();
+
+      await controller.connect(riderId: riderId, accessToken: accessToken);
+
+      await tester.tap(find.byKey(const Key('search_bar')));
+      await tester.pump();
+
+      controller.updatePickupLocation(
+        '23 West Drive, Khayelitsha, Cape Town',
+        lat: pickupLat,
+        lng: pickupLng,
+      );
+      controller.updateDropoffLocation(
+        'Zevenwacht Mall, Van Riebeeck Road, Kuils River',
+        lat: dropoffLat,
+        lng: dropoffLng,
+      );
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('continue_button')));
+      await tester.pump();
+      await tester.pump();
+
+      await tester.tap(find.byKey(const Key('payment_continue_button')));
+      await tester.pump();
+      await tester.pump();
+
+      await tester.ensureVisible(find.byKey(const Key('find_drivers_button')));
+      await tester.tap(find.byKey(const Key('find_drivers_button')));
+      await _pumpPastTransition(tester);
+
+      expect(find.byType(ActiveSearchScreen), findsOneWidget);
+
+      fakeGateway.simulateIncomingFrame(jsonEncode({
+        'action': 'driverBidReceived',
+        'tripId': tripId,
+        'bidMetrics': [
+          {'driverId': driverId, 'driverName': 'Sipho M.', 'bidAmount': 55},
+        ],
+      }));
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('cancel_request_button')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('cancel_request_button')));
+      await _pumpPastTransition(tester);
+
+      expect(controller.state.status, equals(RiderTripStatus.idle));
+      expect(controller.state.bidMetrics, isEmpty);
+      // pushNamedAndRemoveUntil('/rider/home', ...) clears the whole stack
+      // back to RiderBookingScreen.
+      expect(find.byKey(const Key('search_bar')), findsOneWidget);
+      expect(find.byType(ActiveSearchScreen), findsNothing);
     },
   );
 }

@@ -7,6 +7,7 @@ import '../../../location/utils/location_display_formatter.dart';
 import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
 import '../widgets/kwella_map_view.dart';
+import 'active_search_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Kwella Rider – Ride Offer Screen
@@ -103,15 +104,15 @@ class _RideFareOfferScreenState extends ConsumerState<RideFareOfferScreen> {
   }
 
   void _findDrivers(KwellaRiderController controller) {
-    controller.requestTrip();
-    // The stack here is booking -> payment-method -> fare-offer, so a single
-    // pop would only surface payment-method. Pop it too so the searching
-    // state renders immediately on the booking screen.
-    final navigator = Navigator.of(context);
-    navigator.pop();
-    if (navigator.canPop()) {
-      navigator.pop();
-    }
+    controller.requestTrip(autoAccept: _autoAccept);
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => ActiveSearchScreen(
+          controller: widget.controller,
+          directionsService: _directionsService,
+        ),
+      ),
+    );
   }
 
   @override

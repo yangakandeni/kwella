@@ -194,6 +194,215 @@ void main() {
       controller.dispose();
     });
 
+    test('raiseFare() sends an updateFare frame and optimistically updates offeredFare',
+        () {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      controller.handleIncomingWebSocketEvent({
+        'status': 'TripBroadcast',
+        'tripId': 'trip-5',
+        'matched_drivers': 3,
+        'passenger_count': 1,
+        'calculated_fare': '60',
+      });
+
+      controller.raiseFare(75.0);
+
+      expect(fakeGateway.sentPayloads.last, equals({
+        'action': 'updateFare',
+        'tripId': 'trip-5',
+        'riderId': null,
+        'new_fare': 75.0,
+      }));
+      expect(controller.state.offeredFare, equals(75.0));
+
+      controller.dispose();
+    });
+
+    test('declineBid() removes a specific bid from bidMetrics without a wire call',
+        () {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      controller.handleIncomingWebSocketEvent({
+        'action': 'driverBidReceived',
+        'tripId': 'trip-5',
+        'bidMetrics': [
+          {'driverId': 'driver-1', 'bidAmount': 100},
+          {'driverId': 'driver-2', 'bidAmount': 90},
+        ],
+      });
+
+      controller.declineBid('driver-1');
+
+      expect(controller.state.bidMetrics, hasLength(1));
+      expect(controller.state.bidMetrics.single['driverId'], equals('driver-2'));
+      expect(fakeGateway.sentPayloads, isEmpty);
+
+      controller.dispose();
+    });
+
+    test('cancelSearch() resets state to idle with no wire call', () {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      controller.requestTrip();
+      controller.handleIncomingWebSocketEvent({
+        'action': 'driverBidReceived',
+        'bidMetrics': [
+          {'driverId': 'driver-1', 'bidAmount': 100},
+        ],
+      });
+
+      controller.cancelSearch();
+
+      expect(controller.state.status, equals(RiderTripStatus.idle));
+      expect(controller.state.bidMetrics, isEmpty);
+      // Only the earlier requestTrip() frame was ever sent — cancelSearch()
+      // itself makes no wire call.
+      expect(fakeGateway.sentPayloads, hasLength(1));
+
+      controller.dispose();
+    });
+
+    test('requestTrip(autoAccept: true) auto-selects the first incoming bid',
+        () {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      controller.requestTrip(autoAccept: true);
+      expect(controller.state.autoAcceptEnabled, isTrue);
+
+      controller.handleIncomingWebSocketEvent({
+        'action': 'driverBidReceived',
+        'tripId': 'trip-5',
+        'bidMetrics': [
+          {'driverId': 'driver-1', 'bidAmount': 100},
+          {'driverId': 'driver-2', 'bidAmount': 90},
+        ],
+      });
+
+      expect(controller.state.status, equals(RiderTripStatus.accepted));
+      final Map<String, dynamic> selectBidFrame = fakeGateway.sentPayloads
+          .singleWhere((m) => m['action'] == 'selectBid');
+      expect(selectBidFrame['driverId'], equals('driver-1'));
+      expect(selectBidFrame['tripId'], equals('trip-5'));
+
+      controller.dispose();
+    });
+
+    test('requestTrip() without autoAccept leaves incoming bids for manual selection',
+        () {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      controller.requestTrip();
+      expect(controller.state.autoAcceptEnabled, isFalse);
+
+      controller.handleIncomingWebSocketEvent({
+        'action': 'driverBidReceived',
+        'tripId': 'trip-5',
+        'bidMetrics': [
+          {'driverId': 'driver-1', 'bidAmount': 100},
+        ],
+      });
+
+      expect(controller.state.status, equals(RiderTripStatus.biddingOpen));
+      expect(
+        fakeGateway.sentPayloads.where((m) => m['action'] == 'selectBid'),
+        isEmpty,
+      );
+
+      controller.dispose();
+    });
+
+    test('handles TripBroadcast status by setting tripId and offeredFare from calculated_fare',
+        () {
+      final controller = KwellaRiderController();
+
+      controller.handleIncomingWebSocketEvent({
+        'status': 'TripBroadcast',
+        'tripId': 'trip-42',
+        'matched_drivers': 4,
+        'passenger_count': 2,
+        'calculated_fare': '87.5',
+      });
+
+      expect(controller.state.tripId, equals('trip-42'));
+      expect(controller.state.offeredFare, equals(87.5));
+
+      controller.dispose();
+    });
+
+    test('handles TripBroadcast status when calculated_fare arrives as a number',
+        () {
+      final controller = KwellaRiderController();
+
+      controller.handleIncomingWebSocketEvent({
+        'status': 'TripBroadcast',
+        'tripId': 'trip-42',
+        'calculated_fare': 87.5,
+      });
+
+      expect(controller.state.offeredFare, equals(87.5));
+
+      controller.dispose();
+    });
+
+    test('handles FareUpdated status by reconciling offeredFare from base_fare',
+        () {
+      final controller = KwellaRiderController();
+
+      controller.handleIncomingWebSocketEvent({
+        'status': 'FareUpdated',
+        'tripId': 'trip-42',
+        'base_fare': '95',
+      });
+
+      expect(controller.state.offeredFare, equals(95.0));
+
+      controller.dispose();
+    });
+
+    test('upserts nearbyDriverUpdate frames into nearbyDrivers keyed by driverId',
+        () {
+      final controller = KwellaRiderController();
+
+      controller.handleIncomingWebSocketEvent({
+        'action': 'nearbyDriverUpdate',
+        'driverId': 'driver-idle-1',
+        'latitude': -33.9,
+        'longitude': 18.4,
+        'status': 'idle',
+      });
+
+      expect(controller.state.nearbyDrivers, hasLength(1));
+      expect(
+        controller.state.nearbyDrivers['driver-idle-1']?.latitude,
+        equals(-33.9),
+      );
+      expect(
+        controller.state.nearbyDrivers['driver-idle-1']?.longitude,
+        equals(18.4),
+      );
+
+      controller.handleIncomingWebSocketEvent({
+        'action': 'nearbyDriverUpdate',
+        'driverId': 'driver-idle-2',
+        'latitude': -34.0,
+        'longitude': 18.5,
+        'status': 'idle',
+      });
+
+      expect(controller.state.nearbyDrivers, hasLength(2));
+      // The first driver's entry survives the second driver's update — the
+      // map is upserted, not replaced wholesale.
+      expect(controller.state.nearbyDrivers['driver-idle-1'], isNotNull);
+
+      controller.dispose();
+    });
+
     test('parses liveDriverLocation events and updates driver coordinates', () {
       final controller = KwellaRiderController();
 

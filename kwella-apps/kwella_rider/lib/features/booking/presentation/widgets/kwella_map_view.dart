@@ -38,12 +38,19 @@ class KwellaMapView extends StatefulWidget {
     this.pickupLocation,
     this.dropoffLocation,
     this.routePoints,
+    this.nearbyDrivers,
   });
 
   final DriverLocation? driverLocation;
   final LatLng? pickupLocation;
   final LatLng? dropoffLocation;
   final List<LatLng>? routePoints;
+
+  /// Idle nearby drivers broadcast by the mock orchestrator's
+  /// `nearbyDriverUpdate` frames, keyed by driverId — rendered as their own
+  /// marker set, distinct from [driverLocation] (the rider's matched
+  /// driver).
+  final Map<String, DriverLocation>? nearbyDrivers;
 
   /// Cape Town CBD — used only until the device location fix resolves.
   static const LatLng fallbackCenter = LatLng(-33.9249, 18.4241);
@@ -233,6 +240,22 @@ class _KwellaMapViewState extends State<KwellaMapView> {
           anchor: const Offset(0.5, 0.5),
         ),
       );
+    }
+
+    final Map<String, DriverLocation>? nearby = widget.nearbyDrivers;
+    if (nearby != null) {
+      for (final entry in nearby.entries) {
+        markers.add(
+          Marker(
+            markerId: MarkerId('nearby_${entry.key}'),
+            position: LatLng(entry.value.latitude, entry.value.longitude),
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+              BitmapDescriptor.hueAzure,
+            ),
+            anchor: const Offset(0.5, 0.5),
+          ),
+        );
+      }
     }
 
     return markers;

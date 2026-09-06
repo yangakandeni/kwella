@@ -160,7 +160,7 @@ class KwellaRiderController {
     );
   }
 
-  void requestTrip() {
+  void requestTrip({bool autoAccept = false}) {
     _pushWebSocketMessage({
       'action': 'requestTrip',
       'riderId': _riderId,
@@ -170,7 +170,12 @@ class KwellaRiderController {
       'dropoff_longitude': _state.dropoffLng,
       'passenger_count': _state.passengerCount,
     });
-    _emit(_state.copyWith(status: RiderTripStatus.searching));
+    _emit(
+      _state.copyWith(
+        status: RiderTripStatus.searching,
+        autoAcceptEnabled: autoAccept,
+      ),
+    );
   }
 
   void selectBid(String driverId) {
@@ -180,6 +185,38 @@ class KwellaRiderController {
       'driverId': driverId,
     });
     _emit(_state.copyWith(status: RiderTripStatus.accepted));
+  }
+
+  /// Sends a mid-search `updateFare` request (the server-validated route the
+  /// backend now exposes) and optimistically reflects the new fare locally
+  /// — reconciled for real once the `FareUpdated` confirmation frame lands.
+  void raiseFare(double newFare) {
+    _pushWebSocketMessage({
+      'action': 'updateFare',
+      'tripId': _state.tripId,
+      'riderId': _riderId,
+      'new_fare': newFare,
+    });
+    _emit(_state.copyWith(offeredFare: newFare));
+  }
+
+  /// Removes a specific bid from the local sheet. No backend route exists
+  /// for declining a specific bid yet (documented, deliberate scope
+  /// decision) — this only affects what's rendered locally.
+  void declineBid(String driverId) {
+    _emit(
+      _state.copyWith(
+        bidMetrics:
+            _state.bidMetrics.where((b) => b['driverId'] != driverId).toList(),
+      ),
+    );
+  }
+
+  /// Resets trip state back to idle. No backend route exists for cancelling
+  /// an active search yet (documented, deliberate scope decision) — this
+  /// only resets local state.
+  void cancelSearch() {
+    _emit(_state.copyWith(status: RiderTripStatus.idle, bidMetrics: const []));
   }
 
   /// Sets the rider's chosen payment method (e.g. `'CASH'`, `'CARD'`).
@@ -224,6 +261,48 @@ class KwellaRiderController {
           latestEvent: event,
         ),
       );
+      if (_state.autoAcceptEnabled && newBidMetrics.isNotEmpty) {
+        final String? firstDriverId =
+            newBidMetrics.first['driverId'] as String?;
+        if (firstDriverId != null) {
+          selectBid(firstDriverId);
+        }
+      }
+      return;
+    }
+
+    if (status == 'TripBroadcast') {
+      // `copyWith` already falls back to the current value when a nullable
+      // arg is null, so an unparsable fare simply leaves offeredFare as-is.
+      _emit(
+        _state.copyWith(
+          tripId: incomingTripId ?? _state.tripId,
+          offeredFare: _parseFare(payload['calculated_fare']),
+        ),
+      );
+      return;
+    }
+
+    if (status == 'FareUpdated') {
+      _emit(
+        _state.copyWith(
+          tripId: incomingTripId ?? _state.tripId,
+          offeredFare: _parseFare(payload['base_fare']),
+        ),
+      );
+      return;
+    }
+
+    if (action == 'nearbyDriverUpdate') {
+      final String? nearbyDriverId = payload['driverId'] as String?;
+      final DriverLocation? nearbyLocation =
+          _parseDriverLocationFromPayload(payload);
+      if (nearbyDriverId != null && nearbyLocation != null) {
+        final Map<String, DriverLocation> nextNearbyDrivers =
+            Map<String, DriverLocation>.from(_state.nearbyDrivers);
+        nextNearbyDrivers[nearbyDriverId] = nearbyLocation;
+        _emit(_state.copyWith(nearbyDrivers: nextNearbyDrivers));
+      }
       return;
     }
 
@@ -297,6 +376,20 @@ class KwellaRiderController {
       );
       return;
     }
+  }
+
+  /// Parses a fare value that may arrive as a numeric-looking string (the
+  /// backend's `str(calculated_fare)` convention) or as a plain number.
+  /// Returns `null` for anything else, so callers can fall back to the
+  /// current state.
+  double? _parseFare(dynamic value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+    if (value is String) {
+      return double.tryParse(value);
+    }
+    return null;
   }
 
   String? _combineVehicleFields(dynamic color, dynamic model) {

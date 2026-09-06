@@ -10,6 +10,7 @@ import 'features/auth/presentation/screens/otp_verification_screen.dart';
 import 'features/booking/presentation/screens/destination_selection_screen.dart';
 import 'features/booking/presentation/screens/payment_method_screen.dart';
 import 'features/booking/presentation/screens/rate_driver_screen.dart';
+import 'features/booking/presentation/screens/active_search_screen.dart';
 import 'features/booking/presentation/screens/rider_booking_screen.dart';
 import 'features/booking/presentation/screens/ride_fare_offer_screen.dart';
 import 'features/booking/presentation/screens/ride_tracking_screen.dart';
@@ -50,6 +51,7 @@ class KwellaRiderApp extends StatelessWidget {
             ),
         '/rider/payment-method': (_) => const PaymentMethodScreen(),
         '/rider/fare-offer': (_) => const RideFareOfferScreen(),
+        '/rider/active-search': (_) => const ActiveSearchScreen(),
         '/rider/tracking': (_) => const RideTrackingScreen(),
         '/rider/rating': (_) => const RateDriverScreen(),
         '/rider/profile': (_) => const RiderProfileScreen(),

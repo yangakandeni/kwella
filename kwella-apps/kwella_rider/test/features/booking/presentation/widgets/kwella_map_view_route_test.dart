@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:kwella_rider/features/booking/presentation/controllers/rider_trip_state.dart';
 import 'package:kwella_rider/features/booking/presentation/widgets/kwella_map_view.dart';
 
 GoogleMap _mapWidget(WidgetTester tester) =>
@@ -123,6 +124,34 @@ void main() {
         _mapWidget(tester).initialCameraPosition.target,
         equals(KwellaMapView.fallbackCenter),
       );
+    });
+  });
+
+  group('KwellaMapView nearby drivers', () {
+    testWidgets(
+        'renders a marker for each nearby driver at its given coordinates',
+        (WidgetTester tester) async {
+      const Map<String, DriverLocation> nearbyDrivers = {
+        'driver-idle-1': DriverLocation(latitude: -33.91, longitude: 18.42),
+        'driver-idle-2': DriverLocation(latitude: -33.95, longitude: 18.44),
+      };
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: KwellaMapView(nearbyDrivers: nearbyDrivers),
+          ),
+        ),
+      );
+
+      final Set<Marker> markers = _mapWidget(tester).markers;
+      final Marker driver1Marker = markers
+          .singleWhere((m) => m.markerId == const MarkerId('nearby_driver-idle-1'));
+      final Marker driver2Marker = markers
+          .singleWhere((m) => m.markerId == const MarkerId('nearby_driver-idle-2'));
+
+      expect(driver1Marker.position, const LatLng(-33.91, 18.42));
+      expect(driver2Marker.position, const LatLng(-33.95, 18.44));
     });
   });
 

@@ -19,6 +19,9 @@ Supported WebSocket route keys (dispatched by API Gateway WebSocket proxy):
   submitRating      — Persist a 1-5 star rating against the counterparty's profile record.
   requestTrip       — Rider-initiated spatial matching: scan active driver TELEMETRY records,
                       filter by 5000 m proximity, and broadcast rideOfferAvailable offers.
+  updateFare        — Rider-initiated fare raise while still searching: validates the new fare
+                      exceeds the current one and that no driver has been selected yet, persists
+                      it, and re-broadcasts rideOfferAvailable to matched drivers.
 
 Governance compliance (KWELLA_CODE_GOVERNANCE.md):
   - Python 3.12 native syntax and type hints; no legacy typing imports (e.g. List, Dict).
@@ -192,6 +195,148 @@ def _extract_auth_params(event: dict[str, Any]) -> str | None:
                 return v
 
     return None
+
+
+def _dispatch_ride_offer_to_matched_drivers(
+    table: Any,
+    apigw_client: Any,
+    trip_id: str,
+    pickup_lat: float,
+    pickup_lon: float,
+    passenger_count: int,
+    base_fare: Any,
+    rider_id: str | None = None,
+    dropoff_lat: float | None = None,
+    dropoff_lon: float | None = None,
+) -> list[str]:
+    """Scan active driver TELEMETRY records, filter to those within
+    _TRIP_MATCH_RADIUS_M metres of the pickup point, and dispatch a
+    rideOfferAvailable push (WebSocket, falling back to FCM via SNS when the
+    driver's connection is stale/offline) to each matched driver.
+
+    Shared by requestTrip (initial broadcast) and updateFare (re-broadcast
+    with a raised fare) so the scan/filter/dispatch logic is defined once.
+    Returns the list of matched driver ids (namespace-stripped).
+    """
+    scan_response = table.scan(
+        FilterExpression="SK = :sk",
+        ExpressionAttributeValues={":sk": "TELEMETRY"},
+        ConsistentRead=True,
+    )
+    driver_records: list[dict[str, Any]] = scan_response.get("Items", [])
+
+    # Handle DynamoDB pagination for large fleets.
+    while "LastEvaluatedKey" in scan_response:
+        scan_response = table.scan(
+            FilterExpression="SK = :sk",
+            ExpressionAttributeValues={":sk": "TELEMETRY"},
+            ExclusiveStartKey=scan_response["LastEvaluatedKey"],
+            ConsistentRead=True,
+        )
+        driver_records.extend(scan_response.get("Items", []))
+
+    matched_driver_ids: list[str] = []
+
+    offer_payload = {
+        "action": "rideOfferAvailable",
+        "tripId": trip_id,
+        "rider_id": rider_id,
+        "pickup_location": [pickup_lat, pickup_lon],
+        "dropoff_location": [dropoff_lat, dropoff_lon],
+        "passenger_count": passenger_count,
+        "base_fare": str(base_fare),
+        "expires_in_seconds": _RIDE_OFFER_TTL_SECONDS,
+    }
+    offer_data = json.dumps(offer_payload).encode("utf-8")
+
+    for record in driver_records:
+        driver_pk: str = record.get("PK", "")
+        raw_lat = record.get("last_latitude")
+        raw_lon = record.get("last_longitude")
+
+        if raw_lat is None or raw_lon is None:
+            logger.debug(
+                "Skipping driver record with missing coordinates: PK=%s", driver_pk
+            )
+            continue
+
+        try:
+            driver_lat = float(raw_lat)
+            driver_lon = float(raw_lon)
+        except (ValueError, TypeError):
+            logger.warning(
+                "Non-numeric coordinates for driver PK=%s; skipping.", driver_pk
+            )
+            continue
+
+        distance_m = calculate_distance(
+            driver_lat, driver_lon,
+            pickup_lat, pickup_lon,
+        )
+
+        if distance_m > _TRIP_MATCH_RADIUS_M:
+            logger.debug(
+                "Driver PK=%s is %.0f m away — outside matching radius; skipped.",
+                driver_pk,
+                distance_m,
+            )
+            continue
+
+        # Strip the "DRIVER#" namespace prefix to recover the raw driver id.
+        driver_id = driver_pk.removeprefix("DRIVER#")
+        matched_driver_ids.append(driver_id)
+
+        logger.info(
+            "Matched driver %s at %.0f m — dispatching rideOfferAvailable",
+            driver_id,
+            distance_m,
+        )
+
+        driver_offline_or_suspended = False
+        driver_conn_id: str | None = record.get("connection_id")
+        if apigw_client and driver_conn_id:
+            try:
+                apigw_client.post_to_connection(
+                    ConnectionId=driver_conn_id,
+                    Data=offer_data,
+                )
+                logger.info(
+                    "Offer dispatched to connectionId=%s (driverId=%s)",
+                    driver_conn_id,
+                    driver_id,
+                )
+            except botocore.exceptions.ClientError as dispatch_exc:
+                error_code = dispatch_exc.response.get("Error", {}).get("Code", "Unknown")
+                logger.warning(
+                    "Failed to dispatch offer to connectionId=%s [%s]; marking offline/suspended.",
+                    driver_conn_id,
+                    error_code,
+                )
+                driver_offline_or_suspended = True
+        else:
+            logger.debug(
+                "WebSocket dispatch skipped for driverId=%s (no endpoint or connectionId).",
+                driver_id,
+            )
+            driver_offline_or_suspended = True
+
+        if driver_offline_or_suspended:
+            fcm_token = _resolve_driver_fcm_token(table, driver_pk, record)
+            if fcm_token:
+                _send_fcm_push_via_sns(
+                    fcm_token=fcm_token,
+                    trip_id=trip_id,
+                    base_fare=base_fare,
+                )
+
+    logger.info(
+        "Ride-offer dispatch complete: %d driver(s) matched within %.0f m for tripId=%s",
+        len(matched_driver_ids),
+        _TRIP_MATCH_RADIUS_M,
+        trip_id,
+    )
+
+    return matched_driver_ids
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -626,6 +771,178 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     "tripId": trip_id,
                     "driverId": driver_id,
                     "riderId": rider_id,
+                }),
+            }
+
+        elif route_key == "updateFare":
+            # -----------------------------------------------------------------
+            # Rider-initiated fare raise while still searching for a driver.
+            # The new fare must strictly exceed the trip's currently-stored
+            # fare, and the fare is locked (rejected) once a driver has been
+            # selected for the trip.
+            # -----------------------------------------------------------------
+            raw_body = event.get("body")
+            if raw_body:
+                try:
+                    payload = json.loads(raw_body)
+                except (json.JSONDecodeError, TypeError) as exc:
+                    logger.warning(
+                        "Failed to parse JSON body for updateFare route on connectionId=%s: %s",
+                        connection_id,
+                        exc,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Request body must be valid JSON.",
+                        }),
+                    }
+            else:
+                payload = event
+
+            trip_id = payload.get("tripId") or payload.get("trip_id")
+            new_fare = payload.get("new_fare")
+            if new_fare is None:
+                new_fare = payload.get("newFare")
+
+            if not trip_id or not isinstance(trip_id, str):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'tripId'.",
+                    }),
+                }
+            if not isinstance(new_fare, (int, float, Decimal)) or isinstance(new_fare, bool):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "Missing or invalid required field 'new_fare'.",
+                    }),
+                }
+
+            trip_res = table.get_item(Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"})
+            trip_item = trip_res.get("Item")
+            if not trip_item:
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": f"Trip '{trip_id}' does not exist.",
+                    }),
+                }
+
+            # calculated_fare is persisted as a String-typed attribute (see
+            # requestTrip's `str(calculated_fare)` write), so a DynamoDB
+            # ConditionExpression numeric comparison against it cannot be
+            # relied upon (String vs Number is a type mismatch, not a numeric
+            # compare). Do the "is the new fare actually higher" check here in
+            # Python instead, and reserve the ConditionExpression below purely
+            # for the driver-selection race guard.
+            current_fare = Decimal(str(trip_item.get("calculated_fare", "0")))
+            new_fare_decimal = Decimal(str(new_fare))
+
+            if new_fare_decimal <= current_fare:
+                logger.warning(
+                    "updateFare rejected for tripId=%s: new_fare=%s does not exceed current_fare=%s",
+                    trip_id,
+                    new_fare_decimal,
+                    current_fare,
+                )
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": "new fare must exceed the trip's current fare.",
+                    }),
+                }
+
+            try:
+                update_res = table.update_item(
+                    Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"},
+                    UpdateExpression="SET calculated_fare = :f",
+                    ConditionExpression="attribute_not_exists(selected_driver_id)",
+                    ExpressionAttributeValues={":f": str(new_fare_decimal)},
+                    ReturnValues="ALL_NEW",
+                )
+            except botocore.exceptions.ClientError as exc:
+                error_code = exc.response.get("Error", {}).get("Code", "Unknown")
+                if error_code == "ConditionalCheckFailedException":
+                    logger.warning(
+                        "updateFare rejected for tripId=%s: a driver has already been selected",
+                        trip_id,
+                    )
+                    return {
+                        "statusCode": 400,
+                        "body": json.dumps({
+                            "error": "ValidationError",
+                            "detail": "Trip is no longer available for fare changes; a driver has already been selected.",
+                        }),
+                    }
+                raise
+
+            logger.info(
+                "updateFare: tripId=%s fare raised from %s to %s",
+                trip_id, current_fare, new_fare_decimal,
+            )
+
+            updated_item = update_res.get("Attributes") or {}
+            try:
+                updated_pickup_lat = float(updated_item.get("pickup_latitude"))
+                updated_pickup_lon = float(updated_item.get("pickup_longitude"))
+            except (TypeError, ValueError):
+                updated_pickup_lat = None
+                updated_pickup_lon = None
+
+            try:
+                updated_dropoff_lat = float(updated_item.get("destination_latitude"))
+                updated_dropoff_lon = float(updated_item.get("destination_longitude"))
+            except (TypeError, ValueError):
+                updated_dropoff_lat = None
+                updated_dropoff_lon = None
+
+            try:
+                updated_passenger_count = int(updated_item.get("passenger_count") or 1)
+            except (TypeError, ValueError):
+                updated_passenger_count = 1
+
+            updated_rider_id = updated_item.get("rider_id") or None
+
+            if updated_pickup_lat is not None and updated_pickup_lon is not None:
+                apigw_client: Any = None
+                if _APIGW_ENDPOINT:
+                    apigw_client = boto3.client(
+                        "apigatewaymanagementapi",
+                        endpoint_url=_APIGW_ENDPOINT,
+                        region_name=_AWS_REGION,
+                    )
+
+                _dispatch_ride_offer_to_matched_drivers(
+                    table,
+                    apigw_client,
+                    trip_id,
+                    updated_pickup_lat,
+                    updated_pickup_lon,
+                    updated_passenger_count,
+                    new_fare_decimal,
+                    rider_id=updated_rider_id,
+                    dropoff_lat=updated_dropoff_lat,
+                    dropoff_lon=updated_dropoff_lon,
+                )
+            else:
+                logger.warning(
+                    "updateFare: tripId=%s missing pickup coordinates on METADATA; skipping re-dispatch",
+                    trip_id,
+                )
+
+            return {
+                "statusCode": 200,
+                "body": json.dumps({
+                    "status": "FareUpdated",
+                    "tripId": trip_id,
+                    "base_fare": str(new_fare_decimal),
                 }),
             }
 
@@ -1421,6 +1738,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             # ------------------------------------------------------------------
             # Spatial Grid Loop — scan all active TELEMETRY records and isolate
             # drivers within _TRIP_MATCH_RADIUS_M of the rider's pickup point.
+            # (delegated to _dispatch_ride_offer_to_matched_drivers below)
             # ------------------------------------------------------------------
             logger.info(
                 "requestTrip spatial scan: riderId=%s pickup=(%.6f, %.6f)",
@@ -1428,25 +1746,6 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 pickup_lat,
                 pickup_lon,
             )
-
-            scan_response = table.scan(
-                FilterExpression="SK = :sk",
-                ExpressionAttributeValues={":sk": "TELEMETRY"},
-                ConsistentRead=True,
-            )
-            driver_records: list[dict[str, Any]] = scan_response.get("Items", [])
-
-            # Handle DynamoDB pagination for large fleets.
-            while "LastEvaluatedKey" in scan_response:
-                scan_response = table.scan(
-                    FilterExpression="SK = :sk",
-                    ExpressionAttributeValues={":sk": "TELEMETRY"},
-                    ExclusiveStartKey=scan_response["LastEvaluatedKey"],
-                    ConsistentRead=True,
-                )
-                driver_records.extend(scan_response.get("Items", []))
-
-            matched_driver_ids: list[str] = []
 
             # Generate a stable trip identifier for this dispatch cycle.
             trip_id = f"TRP#{uuid.uuid4()}"
@@ -1483,20 +1782,6 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 }
             )
 
-            # Construct the offer payload template (mutated per-driver only for
-            # connection-id routing; the offer content itself is broadcast-identical).
-            offer_payload = {
-                "action": "rideOfferAvailable",
-                "tripId": trip_id,
-                "rider_id": rider_id,
-                "pickup_location": [pickup_lat, pickup_lon],
-                "dropoff_location": [dropoff_lat, dropoff_lon],
-                "passenger_count": passenger_count,
-                "base_fare": str(calculated_fare),
-                "expires_in_seconds": _RIDE_OFFER_TTL_SECONDS,
-            }
-            offer_data = json.dumps(offer_payload).encode("utf-8")
-
             # Initialise the Management API client only when the endpoint is
             # configured (absent in local test contexts).
             apigw_client: Any = None
@@ -1507,85 +1792,18 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     region_name=_AWS_REGION,
                 )
 
-            for record in driver_records:
-                driver_pk: str = record.get("PK", "")
-                raw_lat = record.get("last_latitude")
-                raw_lon = record.get("last_longitude")
-
-                if raw_lat is None or raw_lon is None:
-                    logger.debug(
-                        "Skipping driver record with missing coordinates: PK=%s", driver_pk
-                    )
-                    continue
-
-                try:
-                    driver_lat = float(raw_lat)
-                    driver_lon = float(raw_lon)
-                except (ValueError, TypeError):
-                    logger.warning(
-                        "Non-numeric coordinates for driver PK=%s; skipping.", driver_pk
-                    )
-                    continue
-
-                distance_m = calculate_distance(
-                    driver_lat, driver_lon,
-                    pickup_lat, pickup_lon,
-                )
-
-                if distance_m > _TRIP_MATCH_RADIUS_M:
-                    logger.debug(
-                        "Driver PK=%s is %.0f m away — outside matching radius; skipped.",
-                        driver_pk,
-                        distance_m,
-                    )
-                    continue
-
-                # Strip the "DRIVER#" namespace prefix to recover the raw driver id.
-                driver_id = driver_pk.removeprefix("DRIVER#")
-                matched_driver_ids.append(driver_id)
-
-                logger.info(
-                    "Matched driver %s at %.0f m — dispatching rideOfferAvailable",
-                    driver_id,
-                    distance_m,
-                )
-
-                driver_offline_or_suspended = False
-                driver_conn_id: str | None = record.get("connection_id")
-                if apigw_client and driver_conn_id:
-                    try:
-                        apigw_client.post_to_connection(
-                            ConnectionId=driver_conn_id,
-                            Data=offer_data,
-                        )
-                        logger.info(
-                            "Offer dispatched to connectionId=%s (driverId=%s)",
-                            driver_conn_id,
-                            driver_id,
-                        )
-                    except botocore.exceptions.ClientError as dispatch_exc:
-                        error_code = dispatch_exc.response.get("Error", {}).get("Code", "Unknown")
-                        logger.warning(
-                            "Failed to dispatch offer to connectionId=%s [%s]; marking offline/suspended.",
-                            driver_conn_id,
-                            error_code,
-                        )
-                        driver_offline_or_suspended = True
-                else:
-                    logger.debug(
-                        "WebSocket dispatch skipped for driverId=%s (no endpoint or connectionId).",
-                        driver_id,
-                    )
-                    driver_offline_or_suspended = True
-
-                if driver_offline_or_suspended:
-                    fcm_token = _resolve_driver_fcm_token(table, driver_pk, record)
-                    if fcm_token:
-                        _send_fcm_push_via_sns(
-                            fcm_token=fcm_token,
-                            trip_id=trip_id,
-                            base_fare=calculated_fare,
-                        )
+            matched_driver_ids = _dispatch_ride_offer_to_matched_drivers(
+                table,
+                apigw_client,
+                trip_id,
+                pickup_lat,
+                pickup_lon,
+                passenger_count,
+                calculated_fare,
+                rider_id=rider_id,
+                dropoff_lat=dropoff_lat,
+                dropoff_lon=dropoff_lon,
+            )
 
             logger.info(
                 "requestTrip scan complete: %d driver(s) matched within %.0f m for riderId=%s",

@@ -15,6 +15,8 @@ class DriverBidCard extends StatelessWidget {
     required this.cataSticker,
     required this.fareLabel,
     required this.onAccept,
+    this.etaLabel,
+    this.onDecline,
   });
 
   final String driverId;
@@ -25,6 +27,13 @@ class DriverBidCard extends StatelessWidget {
   final String cataSticker;
   final dynamic fareLabel; // num or String
   final VoidCallback onAccept;
+
+  /// Optional ETA string (e.g. "ETA: 5 min") rendered near the rating row.
+  final String? etaLabel;
+
+  /// When supplied, renders a Decline button beside the Accept button. When
+  /// absent, the Accept button stays full-width exactly as before.
+  final VoidCallback? onDecline;
 
   String get _fareText {
     if (fareLabel is num) {
@@ -118,6 +127,18 @@ class DriverBidCard extends StatelessWidget {
                         ),
                       ],
                     ),
+                    if (etaLabel != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          etaLabel!,
+                          key: const Key('eta_label'),
+                          style: const TextStyle(
+                            color: Color(0xFF808080),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -152,12 +173,54 @@ class DriverBidCard extends StatelessWidget {
           ),
           const Spacer(),
           const SizedBox(height: 14),
-          // ── Accept button with pulse animation ────────────────────
-          _PulseButton(
-            key: const Key('accept_button'),
-            fareText: _fareText,
-            onPressed: onAccept,
-          ),
+          // ── Accept button (+ optional Decline) ─────────────────────
+          if (onDecline != null)
+            SizedBox(
+              // Matches the Accept-only _PulseButton's own fixed height
+              // below, so adding the Decline button never changes the
+              // card's total height/overflow behavior.
+              height: 44,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      key: const Key('decline_button'),
+                      onPressed: onDecline,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Color(0xFF3C3C3C)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: EdgeInsets.zero,
+                      ),
+                      child: const Text(
+                        'Decline',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _PulseButton(
+                      key: const Key('accept_button'),
+                      fareText: _fareText,
+                      onPressed: onAccept,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            _PulseButton(
+              key: const Key('accept_button'),
+              fareText: _fareText,
+              onPressed: onAccept,
+            ),
         ],
       ),
     );

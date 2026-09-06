@@ -1234,6 +1234,218 @@ def test_request_trip_scales_fare_with_passenger_count():
 
 
 # ---------------------------------------------------------------------------
+# Route: updateFare Tests
+# ---------------------------------------------------------------------------
+
+_UPDATE_FARE_EVENT_BASE = {
+    "requestContext": {
+        "routeKey": "updateFare",
+        "connectionId": "conn-rider-update-fare",
+    },
+}
+
+
+@mock_aws
+def test_update_fare_with_higher_fare_succeeds_and_redispatches_offer():
+    """requestTrip -> updateFare with a higher fare must succeed, persist the
+    new calculated_fare on the TRIP METADATA item, and re-dispatch
+    rideOfferAvailable (carrying the new fare) to matched drivers.
+    """
+    table = _create_mock_table()
+
+    env_backup = {"KWELLA_APIGW_ENDPOINT": os.environ.get("KWELLA_APIGW_ENDPOINT")}
+    os.environ["KWELLA_APIGW_ENDPOINT"] = "https://example.execute-api.af-south-1.amazonaws.com/prod"
+
+    try:
+        handler = _reload_bidding_handler()
+
+        # Seed a near driver (with a live connection) so the fare re-dispatch
+        # has a matched, reachable driver to broadcast to.
+        table.put_item(
+            Item={
+                "PK": f"DRIVER#{_DRIVER_NEAR_ID}",
+                "SK": "TELEMETRY",
+                "last_latitude": str(_DRIVER_NEAR_LAT),
+                "last_longitude": str(_DRIVER_NEAR_LON),
+                "connection_id": "conn-driver-fare-update",
+                "updated_at": "2026-06-21T06:00:00Z",
+            }
+        )
+
+        apigw_mock = Mock()
+
+        def client_factory(service_name, region_name=None, endpoint_url=None, **kwargs):
+            if service_name == "apigatewaymanagementapi":
+                return apigw_mock
+            raise RuntimeError(f"Unexpected boto3 client request: {service_name}")
+
+        with patch.object(handler, "boto3") as boto3_mock:
+            boto3_mock.client.side_effect = client_factory
+            boto3_mock.resource = boto3.resource
+
+            request_response = handler.lambda_handler(
+                {**_REQUEST_TRIP_EVENT_BASE, "body": json.dumps(_REQUEST_TRIP_PAYLOAD)},
+                context=None,
+            )
+            assert request_response["statusCode"] == 200
+            request_body = json.loads(request_response["body"])
+            trip_id = request_body["tripId"]
+            original_fare = Decimal(request_body["calculated_fare"])
+            new_fare = original_fare + Decimal("50.00")
+
+            # Only assert on pushes triggered by updateFare below.
+            apigw_mock.reset_mock()
+
+            payload = {
+                "action": "updateFare",
+                "tripId": trip_id,
+                "new_fare": float(new_fare),
+            }
+            response = handler.lambda_handler(
+                {**_UPDATE_FARE_EVENT_BASE, "body": json.dumps(payload)}, context=None
+            )
+
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["status"] == "FareUpdated"
+        assert body["tripId"] == trip_id
+        assert Decimal(body["base_fare"]) == new_fare
+
+        trip_res = table.get_item(Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"})
+        assert Decimal(trip_res["Item"]["calculated_fare"]) == new_fare
+
+        # The matched driver must have been re-dispatched a rideOfferAvailable
+        # push carrying the newly raised fare.
+        assert apigw_mock.post_to_connection.call_count == 1
+        push_call = apigw_mock.post_to_connection.call_args_list[0]
+        assert push_call.kwargs["ConnectionId"] == "conn-driver-fare-update"
+        push = json.loads(push_call.kwargs["Data"])
+        assert push["action"] == "rideOfferAvailable"
+        assert push["tripId"] == trip_id
+        assert Decimal(push["base_fare"]) == new_fare
+    finally:
+        for key, value in env_backup.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+@mock_aws
+def test_update_fare_with_non_higher_fare_returns_400():
+    """Verify updateFare rejects a fare that does not strictly exceed the
+    trip's currently-stored fare, and leaves the stored fare untouched.
+    """
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    request_response = handler.lambda_handler(
+        {**_REQUEST_TRIP_EVENT_BASE, "body": json.dumps(_REQUEST_TRIP_PAYLOAD)},
+        context=None,
+    )
+    assert request_response["statusCode"] == 200
+    request_body = json.loads(request_response["body"])
+    trip_id = request_body["tripId"]
+    current_fare = Decimal(request_body["calculated_fare"])
+
+    payload = {
+        "action": "updateFare",
+        "tripId": trip_id,
+        "new_fare": float(current_fare),  # equal, not higher — must be rejected
+    }
+    response = handler.lambda_handler(
+        {**_UPDATE_FARE_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+
+    trip_res = table.get_item(Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"})
+    assert Decimal(trip_res["Item"]["calculated_fare"]) == current_fare
+
+
+@mock_aws
+def test_update_fare_after_driver_selected_returns_400():
+    """Verify updateFare is rejected once a driver has been selected for the
+    trip (selected_driver_id present) — fare must be locked at that point,
+    even when the proposed new fare is higher than the current one.
+    """
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": "TRIP#trip-fare-locked-1",
+            "SK": "METADATA",
+            "status": "ACCEPTED",
+            "calculated_fare": "150.00",
+            "pickup_latitude": str(_RIDER_PICKUP_LAT),
+            "pickup_longitude": str(_RIDER_PICKUP_LON),
+            "passenger_count": 1,
+            "selected_driver_id": "USR#drv-1",
+        }
+    )
+
+    payload = {
+        "action": "updateFare",
+        "tripId": "trip-fare-locked-1",
+        # Deliberately higher than the current fare so this test isolates
+        # the driver-selection guard rather than the fare-comparison guard.
+        "new_fare": 200.00,
+    }
+    response = handler.lambda_handler(
+        {**_UPDATE_FARE_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "ValidationError"
+
+    trip_res = table.get_item(Key={"PK": "TRIP#trip-fare-locked-1", "SK": "METADATA"})
+    assert trip_res["Item"]["calculated_fare"] == "150.00"
+
+
+@mock_aws
+def test_update_fare_validation_failures():
+    """Verify updateFare validates required inputs and their data types."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    # Case 1: Missing tripId
+    payload = {"action": "updateFare", "new_fare": 150.0}
+    response = handler.lambda_handler(
+        {**_UPDATE_FARE_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+    assert response["statusCode"] == 400
+    assert "tripId" in json.loads(response["body"])["detail"]
+
+    # Case 2: Missing new_fare
+    payload = {"action": "updateFare", "tripId": "trip-x"}
+    response = handler.lambda_handler(
+        {**_UPDATE_FARE_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+    assert response["statusCode"] == 400
+    assert "new_fare" in json.loads(response["body"])["detail"]
+
+    # Case 3: Non-numeric new_fare
+    payload = {"action": "updateFare", "tripId": "trip-x", "new_fare": "expensive"}
+    response = handler.lambda_handler(
+        {**_UPDATE_FARE_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+    assert response["statusCode"] == 400
+    assert "new_fare" in json.loads(response["body"])["detail"]
+
+    # Case 4: Trip does not exist
+    payload = {"action": "updateFare", "tripId": "trip-does-not-exist", "new_fare": 150.0}
+    response = handler.lambda_handler(
+        {**_UPDATE_FARE_EVENT_BASE, "body": json.dumps(payload)}, context=None
+    )
+    assert response["statusCode"] == 400
+    assert "does not exist" in json.loads(response["body"])["detail"]
+
+
+# ---------------------------------------------------------------------------
 # Route: confirmArrival Tests (Phase 15 — Secure Payout Settlement)
 # ---------------------------------------------------------------------------
 

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/rider_trip_state.dart';
+import 'package:kwella_rider/features/booking/presentation/screens/active_search_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/ride_fare_offer_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/widgets/kwella_map_view.dart';
 import 'package:kwella_rider/features/location/services/directions_service.dart';
@@ -198,7 +199,7 @@ void main() {
     });
 
     testWidgets(
-        'tapping Find Drivers requests the trip and returns to the previous screen',
+        'tapping Find Drivers requests the trip and navigates to the active search screen',
         (tester) async {
       await tester.pumpWidget(
         MaterialApp(
@@ -228,11 +229,14 @@ void main() {
 
       await tester.ensureVisible(find.byKey(const Key('find_drivers_button')));
       await tester.tap(find.byKey(const Key('find_drivers_button')));
-      await tester.pumpAndSettle();
+      // Not pumpAndSettle: ActiveSearchScreen's "Finding drivers…" row has
+      // an indeterminate CircularProgressIndicator, which never settles.
+      await tester.pump();
+      await tester.pump();
 
       expect(controller.state.status, equals(RiderTripStatus.searching));
-      expect(find.byKey(const Key('find_drivers_button')), findsNothing);
-      expect(find.text('Open fare offer'), findsOneWidget);
+      expect(find.byType(ActiveSearchScreen), findsOneWidget);
+      expect(find.byKey(const Key('active_search_offer_value')), findsOneWidget);
     });
   });
 }
