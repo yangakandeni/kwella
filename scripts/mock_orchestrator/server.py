@@ -7,7 +7,7 @@ app — rider OR driver — can be manually tested on an Android emulator
 against realistic multi-entity background actors, with no second live app
 instance and no AWS backend required.
 
-Two servers run in this one process:
+Three servers run in this one process:
   - the "app" WebSocket server (default port 8788): the real Flutter app
     connects here exactly as it would to API Gateway. Speaks the same
     action/status JSON contract as the real Lambda (see contract.py).
@@ -15,6 +15,12 @@ Two servers run in this one process:
     (dashboard.html) over plain HTTP at `/`, and a control WebSocket at
     `/control` that the dashboard's JS uses to push commands and receive
     live state + event-log updates.
+  - the "REST" server (default port 8790, see rest_server.py): mocks the
+    rest of the backend the two apps need to run fully standalone — Cognito
+    OTP auth, identity/profile/vehicle/document upload, payment, and a
+    Google Maps-shaped location/routing mock. See rest_contract.py's module
+    docstring for exactly which routes mirror a real contract vs. are
+    invented.
 
 Usage:
   python3 server.py --role rider --scenario scenarios/rider_mode.json
@@ -40,6 +46,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Response
 
 from engine import Engine
+from rest_server import run_rest_server
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("mock_orchestrator")
@@ -243,6 +250,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="0.0.0.0", help="Bind host for both servers.")
     parser.add_argument("--app-port", type=int, default=8788, help="Port the real app's WebSocket connects to.")
     parser.add_argument("--control-port", type=int, default=8789, help="Port for the dashboard HTTP + control WS.")
+    parser.add_argument(
+        "--rest-port", type=int, default=8790, help="Port for the REST mock (auth/identity/payment/maps)."
+    )
     return parser.parse_args()
 
 
@@ -261,6 +271,7 @@ async def main_async() -> None:
     await asyncio.gather(
         run_app_server(engine, args.host, args.app_port),
         run_control_server(engine, args.host, args.control_port),
+        run_rest_server(engine, args.host, args.rest_port),
     )
 
 

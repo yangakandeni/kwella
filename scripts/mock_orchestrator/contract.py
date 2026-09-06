@@ -30,7 +30,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from state import Bid, OrchestratorState, Persona, Trip, TripStatus
+from state import Bid, OrchestratorState, Persona, Receipt, Trip, TripStatus
 
 _TRIP_MATCH_RADIUS_M = 5000.0
 _ARRIVAL_GEOFENCE_RADIUS_M = 50.0
@@ -371,6 +371,18 @@ def confirm_arrival(state: OrchestratorState, payload: dict[str, Any], sender_id
     net_earnings = round(float(final_bid_amount) * _PAYOUT_RATE, 2)
     updated_daily_total = round(state.wallets.get(driver_id, 0.0) + net_earnings, 2)
     state.wallets[driver_id] = updated_daily_total
+
+    # Instant receipt creation post-trip, for the mock payment plane
+    # (`rest_contract.py::get_receipt`) — mirrors the same payout split
+    # already computed above rather than inventing a separate fee rate.
+    state.receipts[trip_id] = Receipt(
+        trip_id=trip_id,
+        rider_id=trip.rider_id,
+        driver_id=driver_id,
+        fare_amount=float(final_bid_amount),
+        platform_fee=round(float(final_bid_amount) - net_earnings, 2),
+        net_driver_earnings=net_earnings,
+    )
 
     persona = state.personas.get(driver_id)
     if persona is not None:

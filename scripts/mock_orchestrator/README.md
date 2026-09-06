@@ -1,15 +1,21 @@
 # Kwella Mock Marketplace Orchestrator
 
-A scriptable mock of the bidding-engine backend (`kwella-backend/src/lambdas/
-bidding_engine/handler.py`) so you can manually test **one** Flutter app —
-rider *or* driver — on an Android emulator against realistic multi-driver /
-multi-rider background actors, without a second live app instance and
-without an AWS backend.
+A scriptable mock of the whole Kwella backend — the bidding-engine
+WebSocket (`kwella-backend/src/lambdas/bidding_engine/handler.py`) **and**
+the REST surface an app needs to run fully standalone (Cognito OTP auth,
+identity/profile/vehicle/documents, payment, and a Google Maps-shaped
+location mock) — so you can manually test **one** Flutter app — rider *or*
+driver — on an Android emulator against realistic multi-driver /
+multi-rider background actors, with no second live app instance and no AWS
+backend at all: no Lambda, no Cognito, no DynamoDB.
 
-It implements the same action/status JSON contract the real API Gateway
-WebSocket route speaks (verified field-for-field against `handler.py` on
-2026-09-06 — see `contract.py`'s module docstring for the one deliberate
-hardening it adds over the real Lambda).
+The WebSocket layer implements the same action/status JSON contract the
+real API Gateway WebSocket route speaks (verified field-for-field against
+`handler.py` on 2026-09-06 — see `contract.py`'s module docstring for the
+one deliberate hardening it adds over the real Lambda). The REST layer is
+documented in `rest_contract.py`'s module docstring — most of it mirrors a
+real, verified contract (Cognito auth, identity service); payment and maps
+are explicitly invented, since no real contract exists yet to mirror.
 
 ## Install
 
@@ -33,9 +39,12 @@ Then:
 - Open **http://localhost:8789** for the dashboard.
 - Point the app under test's WebSocket at **`ws://10.0.2.2:8788`** (the
   Android emulator's alias for your host machine — see wiring below).
+- Point its REST/Cognito calls at **`http://10.0.2.2:8790`** — this
+  happens automatically for `KWELLA_ENV=local` builds, see wiring below.
 
-`--host`, `--app-port` (default 8788), and `--control-port` (default 8789)
-are all overridable; run `python3 server.py --help`.
+`--host`, `--app-port` (default 8788), `--control-port` (default 8789), and
+`--rest-port` (default 8790) are all overridable; run `python3 server.py
+--help`.
 
 ## Wiring each app to the mock
 
@@ -53,14 +62,22 @@ flutter run --dart-define=KWELLA_ENV=local
 ```
 
 This points `KwellaEnvironment.current.webSocketEndpointUrl` at
-`ws://10.0.2.2:8788` (10.0.2.2 is the Android emulator's alias for the host
-machine's `localhost`). On a physical device on the same LAN, override the
-host: `--dart-define=KWELLA_ENV=local --dart-define=KWELLA_MOCK_HOST=<your-lan-ip>`.
-If you changed `--app-port`, also pass `--dart-define=KWELLA_MOCK_PORT=<port>`.
+`ws://10.0.2.2:8788`, and **also** `cognitoEndpoint`/`httpApiEndpoint` at
+`http://10.0.2.2:8790` — the mock's REST server (`rest_server.py`) — since
+both the Cognito auth flow and the identity/payment/maps routes share one
+mock process, differing only by path (10.0.2.2 is the Android emulator's
+alias for the host machine's `localhost`). On a physical device on the
+same LAN, override the host:
+`--dart-define=KWELLA_ENV=local --dart-define=KWELLA_MOCK_HOST=<your-lan-ip>`.
+If you changed `--app-port`/`--rest-port`, also pass
+`--dart-define=KWELLA_MOCK_PORT=<port>` /
+`--dart-define=KWELLA_MOCK_REST_PORT=<port>`.
 
 The rider app still appends `?Authorization=<cognito-token>` to the
 connection URL as usual — the mock server doesn't verify it, it's only
-logged.
+logged. `kwella_rider` itself makes no REST calls to the Kwella backend
+today (only direct-to-Google-Maps calls — see the location/routing section
+below), so only the WebSocket and Cognito auth flow matter for this app.
 
 ### Driver app (`kwella_driver`)
 
@@ -80,6 +97,54 @@ app). **Go online in the driver app before triggering a rider request from
 the dashboard**, or the mock has nowhere to route the offer yet — this
 mirrors a real limitation of the actual backend too (see `handler.py`'s
 `$connect` telemetry pre-seeding).
+
+The driver app's REST calls (profile setup, document upload) go through
+`KwellaEnvironment.current.httpApiEndpoint`/`cognitoEndpoint` — a
+**different** config mechanism than its `.env`-based WebSocket URL — so run
+it the same way as the rider app, `flutter run --dart-define=KWELLA_ENV=local`,
+*in addition to* editing `.env` above, to get both endpoints pointed at the
+mock.
+
+## The REST/backend mock (`rest_server.py`, default port 8790)
+
+Everything below runs in the same process as the WebSocket bidding-engine
+mock, sharing its state — e.g. `GET /payment/balance` reads the same driver
+wallet `confirmArrival` settles into, and completing a trip automatically
+creates a receipt at `GET /payment/receipts/{tripId}`.
+
+- **Auth/OTP** — the real Cognito `CUSTOM_AUTH` phone flow, on a single
+  `POST /` dispatched by the `X-Amz-Target` header (`InitiateAuth`,
+  `SignUp`, `RespondToAuthChallenge`), exactly what `kwella_core`'s
+  `auth_notifier.dart` calls. The OTP code is always the fixed
+  `123456` — logged to the server console on every send, matching
+  `create_auth_challenge/handler.py`'s testing-phase default. Friendly
+  aliases `POST /auth/send-otp` / `POST /auth/verify-otp` wrap the same
+  logic with plain JSON in/out (and auto-provision the phone number) for
+  quick `curl`/dashboard testing without replicating the raw Cognito
+  request shape.
+- **User/profile** — mirrors `identity_service/handler.py` field-for-field:
+  `POST /identity/upsert`, `POST /identity/vehicle`,
+  `POST /identity/documents/presign` (+ `PUT /mock-s3/{key}` as the upload
+  target — flips the document straight to `VERIFIED`, no review step), and
+  `GET /identity/profile` (a `GET /user/profile?userId=` alias is also
+  provided per the more conventional naming, over the same data).
+- **Payment** — **invented**: no card/wallet/payment-intent/receipt gateway
+  exists anywhere in this codebase yet (`payment_method_screen.dart` ships
+  with only "Cash" selectable). `POST /payment/cards`,
+  `GET /payment/cards`, `GET /payment/balance`, `POST /payment/intents`,
+  `POST /payment/intents/{id}/confirm` (pass `{"simulateFailure": true}` to
+  test a declined payment), and `GET /payment/receipts/{tripId}` are a
+  plausible, self-consistent contract for testing a future payment UI —
+  not a mirror of anything real.
+- **Location/routing (optional)** — `GET /maps/directions`,
+  `GET /maps/place/autocomplete`, `GET /maps/place/details` mock **Google's**
+  response shape (not a Kwella-owned contract), since `kwella_rider` calls
+  `maps.googleapis.com` directly today with a hardcoded host
+  (`directions_service.dart`, `places_autocomplete_service.dart`). Wiring
+  the app to use these instead requires changing that hardcoded host to a
+  configurable base URL — an app-side change, out of scope for this server.
+  These endpoints exist for direct testing (`curl`, Postman) in the
+  meantime.
 
 ## The dashboard
 
@@ -169,3 +234,26 @@ licensePlate, rating}` — driver-only fields are ignored for rider personas).
   the real rider app is expected to be the one calling `selectBid` normally
   (by tapping a bid in its own UI); the dashboard button exists mainly as
   the deterministic race-condition injector described above.
+- The location/routing mock (`/maps/*`) can't be exercised by `kwella_rider`
+  as-is — it calls `maps.googleapis.com` with a hardcoded host, so nothing
+  in the app today points at these routes. Useful for direct testing only,
+  until that hardcoded host becomes configurable app-side.
+- The payment mock is entirely invented (see the REST section above) — it
+  has no real endpoint, request/response shape, or client caller to be
+  verified against, unlike every other route in this server.
+
+## Running the tests
+
+```bash
+cd scripts/mock_orchestrator
+source .venv/bin/activate  # after the Install step above
+pip install pytest
+python3 -m pytest tests/
+```
+
+Covers `rest_contract.py`'s pure logic (auth/OTP session lifecycle,
+identity/vehicle/document validation, payment, and the receipt this
+server's `contract.py::confirm_arrival` creates automatically on trip
+completion). There's no equivalent suite for `contract.py`/`engine.py`
+yet — the WS layer's coverage today is the manual dashboard-driven
+scenarios described above.

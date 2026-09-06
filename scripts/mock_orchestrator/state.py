@@ -136,6 +136,132 @@ class NetworkConditions:
         return {"latencyMs": self.latency_ms, "dropRate": self.drop_rate}
 
 
+# ---------------------------------------------------------------------------
+# REST-plane state — auth/OTP, identity/profile, payment, receipts.
+#
+# Mirrors the entities each real backend service would persist (Cognito's
+# user pool, DynamoDB's USR#/VEH# items, a payment gateway's cards/intents)
+# closely enough for `rest_contract.py` to produce wire-compatible responses,
+# without any AWS dependency. Pure in-memory, same "no locking needed since
+# everything runs on one asyncio loop" rule as the rest of this module.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AuthChallenge:
+    """A pending Cognito CUSTOM_AUTH challenge (one per InitiateAuth call)."""
+
+    phone_number: str
+    code: str
+    attempts: int = 0
+
+
+@dataclass
+class UserAccount:
+    """A Cognito-user-pool-equivalent record, keyed by phone number."""
+
+    user_id: str
+    phone_number: str
+    role: str  # "rider" | "driver" — the role under test, per --role
+
+
+@dataclass
+class Vehicle:
+    cata_sticker: str
+    make: str
+    model: str
+    color: str
+    license_plate: str
+    owner_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "cataSticker": self.cata_sticker,
+            "make": self.make,
+            "model": self.model,
+            "color": self.color,
+            "licensePlate": self.license_plate,
+            "ownerId": self.owner_id,
+        }
+
+
+@dataclass
+class DocumentRecord:
+    user_id: str
+    doc_type: str
+    s3_key: str
+    status: str = "PENDING_UPLOAD"  # -> "VERIFIED" once the mock PUT lands
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"userId": self.user_id, "docType": self.doc_type, "s3Key": self.s3_key, "status": self.status}
+
+
+@dataclass
+class PaymentCard:
+    id: str
+    user_id: str
+    brand: str
+    last4: str
+    cardholder_name: str
+    status: str = "ACTIVE"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "cardId": self.id,
+            "userId": self.user_id,
+            "brand": self.brand,
+            "last4": self.last4,
+            "cardholderName": self.cardholder_name,
+            "status": self.status,
+        }
+
+
+@dataclass
+class PaymentIntent:
+    id: str
+    user_id: str
+    trip_id: str | None
+    amount: float
+    currency: str
+    client_secret: str
+    status: str = "REQUIRES_CONFIRMATION"  # -> SUCCEEDED | FAILED
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "intentId": self.id,
+            "userId": self.user_id,
+            "tripId": self.trip_id,
+            "amount": self.amount,
+            "currency": self.currency,
+            "clientSecret": self.client_secret,
+            "status": self.status,
+        }
+
+
+@dataclass
+class Receipt:
+    trip_id: str
+    rider_id: str | None
+    driver_id: str | None
+    fare_amount: float
+    platform_fee: float
+    net_driver_earnings: float
+    currency: str = "ZAR"
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tripId": self.trip_id,
+            "riderId": self.rider_id,
+            "driverId": self.driver_id,
+            "fareAmount": self.fare_amount,
+            "platformFee": self.platform_fee,
+            "netDriverEarnings": self.net_driver_earnings,
+            "currency": self.currency,
+            "createdAt": self.created_at,
+        }
+
+
 class OrchestratorState:
     """Single-process, single-event-loop state — no locking required since
     every mutation happens inside the same asyncio loop."""
@@ -151,6 +277,16 @@ class OrchestratorState:
         self.real_entity_id: str | None = None
         self.network = NetworkConditions()
         self.log: list[dict[str, Any]] = []
+
+        # REST plane — see the dataclasses above.
+        self.auth_challenges: dict[str, AuthChallenge] = {}  # keyed by Cognito "Session" token
+        self.users: dict[str, UserAccount] = {}  # keyed by E.164 phone number
+        self.profiles: dict[str, dict[str, Any]] = {}  # keyed by user_id -> upserted RIDER/DRIVER profile
+        self.vehicles: dict[str, Vehicle] = {}  # keyed by cata_sticker
+        self.documents: dict[str, DocumentRecord] = {}  # keyed by "<user_id>:<doc_type>"
+        self.payment_cards: dict[str, PaymentCard] = {}  # keyed by card id
+        self.payment_intents: dict[str, PaymentIntent] = {}  # keyed by intent id
+        self.receipts: dict[str, Receipt] = {}  # keyed by trip_id
 
     def new_trip_id(self) -> str:
         return f"TRP#{uuid.uuid4()}"
@@ -175,4 +311,12 @@ class OrchestratorState:
             "personas": [p.to_dict() for p in self.personas.values()],
             "trips": [t.to_dict() for t in self.trips.values()],
             "wallets": self.wallets,
+            "users": [
+                {"userId": u.user_id, "phoneNumber": u.phone_number, "role": u.role} for u in self.users.values()
+            ],
+            "vehicles": [v.to_dict() for v in self.vehicles.values()],
+            "documents": [d.to_dict() for d in self.documents.values()],
+            "paymentCards": [c.to_dict() for c in self.payment_cards.values()],
+            "paymentIntents": [i.to_dict() for i in self.payment_intents.values()],
+            "receipts": [r.to_dict() for r in self.receipts.values()],
         }

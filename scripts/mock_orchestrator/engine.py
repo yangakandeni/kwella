@@ -130,6 +130,13 @@ class Engine:
         for send in list(self._dashboard_subscribers):
             asyncio.create_task(self._safe_send(send, {"type": "log", "entry": entry}))
 
+    def log_event(self, kind: str, message: str, **extra: Any) -> None:
+        """Public logging hook for the REST server (`rest_server.py`), which
+        sits outside the WS action dispatch path but still wants its calls
+        visible in the dashboard's live event log."""
+        self._log(kind, message, **extra)
+        self.broadcast_state()
+
     @staticmethod
     async def _safe_send(send: Sender, payload: dict[str, Any]) -> None:
         try:

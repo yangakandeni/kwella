@@ -130,10 +130,19 @@ class KwellaEnvironment {
   /// Points at the local mock orchestration server
   /// (`scripts/mock_orchestrator/server.py`) instead of any real AWS stack —
   /// for manual E2E testing on an Android emulator with no live backend.
-  /// The mock server doesn't verify tokens, so the Cognito/HTTP fields are
-  /// left at their production values; only [webSocketEndpointUrl] matters.
+  ///
+  /// The mock's REST server (`rest_server.py`, default port 8790) serves
+  /// both the Cognito-compatible auth contract at its root path *and* the
+  /// Kwella identity/payment/maps routes under `/identity`, `/payment`,
+  /// `/maps` — so [cognitoEndpoint] and [httpApiEndpoint] both point at the
+  /// same host:port, differing only by path, exactly like the mock's own
+  /// dispatch. The mock doesn't verify token signatures, so
+  /// [cognitoUserPoolId]/[cognitoClientId] are left at their production
+  /// values; they're only echoed back, never checked.
   static const KwellaEnvironment local = KwellaEnvironment(
+    cognitoEndpoint: 'http://$_kMockHost:$_kMockRestPort/',
     webSocketEndpointUrl: 'ws://$_kMockHost:$_kMockPort',
+    httpApiEndpoint: 'http://$_kMockHost:$_kMockRestPort/',
   );
 
   /// Selects [local], [staging], or [production] based on the `KWELLA_ENV`
@@ -158,3 +167,9 @@ const String _kMockHost =
 /// Must match the mock server's `--app-port` (default 8788).
 const int _kMockPort =
     int.fromEnvironment('KWELLA_MOCK_PORT', defaultValue: 8788);
+
+/// Must match the mock server's `--rest-port` (default 8790). Serves both
+/// the Cognito-compatible auth contract and the Kwella identity/payment/maps
+/// routes — see `rest_server.py`.
+const int _kMockRestPort =
+    int.fromEnvironment('KWELLA_MOCK_REST_PORT', defaultValue: 8790);
