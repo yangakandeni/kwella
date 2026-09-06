@@ -104,7 +104,14 @@ class _RideFareOfferScreenState extends ConsumerState<RideFareOfferScreen> {
 
   void _findDrivers(KwellaRiderController controller) {
     controller.requestTrip();
-    Navigator.pop(context); // Return to booking screen (searching state)
+    // The stack here is booking -> payment-method -> fare-offer, so a single
+    // pop would only surface payment-method. Pop it too so the searching
+    // state renders immediately on the booking screen.
+    final navigator = Navigator.of(context);
+    navigator.pop();
+    if (navigator.canPop()) {
+      navigator.pop();
+    }
   }
 
   @override

@@ -46,6 +46,62 @@ Then:
 `--rest-port` (default 8790) are all overridable; run `python3 server.py
 --help`.
 
+## Testing the WebSocket directly (websocat / wscat / Postman)
+
+The app-facing WebSocket server only speaks the `ws://` protocol upgrade — a
+plain HTTP GET/POST (e.g. opening the URL in a browser, or `curl` without
+upgrade headers) gets a `426 Upgrade Required`. As of this server's `426`
+handling fix, that response now comes with an explanatory body and the
+server logs the offending request's headers, so a stray HTTP hit is
+diagnosable instead of a silent bounce. If you see `426`, check that your
+client is using `ws://`, not `http://`, on this port.
+
+Exact URL to connect to:
+- **`ws://localhost:8788`** from your host machine (e.g. `websocat`/`wscat`
+  running locally).
+- **`ws://10.0.2.2:8788`** from inside an Android emulator (its alias for
+  the host machine's `localhost`).
+
+CLI clients:
+
+```bash
+# websocat
+websocat ws://localhost:8788
+
+# wscat (via npx, no install needed)
+npx wscat -c ws://localhost:8788
+```
+
+Once connected, send a JSON action as a single line. Example — subscribe to
+a rider's location updates:
+
+```json
+{
+  "action": "subscribe",
+  "channel": "rider_location",
+  "rider_id": "usr-19c8efc9-3938-4872-a02b-043ccb7749b5"
+}
+```
+
+Example — request a trip (mirrors what the rider app sends; see
+`contract.py` for the full action set):
+
+```json
+{
+  "action": "requestTrip",
+  "riderId": "usr-19c8efc9-3938-4872-a02b-043ccb7749b5",
+  "pickup_latitude": -33.9249,
+  "pickup_longitude": 18.4241,
+  "dropoff_latitude": -33.9321,
+  "dropoff_longitude": 18.4172,
+  "passenger_count": 1
+}
+```
+
+For Postman, use its WebSocket Request type (not a regular HTTP request)
+pointed at the same `ws://localhost:8788` URL, and paste one of the JSON
+bodies above into the message composer before sending.
+
 ## Wiring each app to the mock
 
 The two apps configure their WebSocket endpoint completely differently

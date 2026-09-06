@@ -72,6 +72,43 @@ def _entity_id_from_payload(role: str, payload: dict[str, Any]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _reject_non_websocket_request(connection: ws_server.ServerConnection, request) -> Response | None:
+    """Diagnose and explain a `426 Upgrade Required` instead of the library's silent empty-body default.
+
+    The real cause is always the same: something hit `ws://host:8788` with a plain
+    HTTP request (a browser, curl without `-H "Upgrade: websocket"`, or a client
+    mistakenly using `http://` instead of `ws://`) — the port only ever speaks the
+    WebSocket handshake. Logging the actual headers here turns "426 Upgrade
+    Required" (which gives no clue why) into an actionable message.
+    """
+    path = urllib.parse.urlparse(request.path).path
+    headers = request.headers
+    upgrade = headers.get("Upgrade", "")
+    conn_header = headers.get("Connection", "")
+    if upgrade.lower() == "websocket" and "upgrade" in conn_header.lower():
+        return None  # proceed with the normal WS handshake
+
+    logger.warning(
+        "Rejecting non-WebSocket request on app port: method=%s path=%s Upgrade=%r Connection=%r "
+        "Sec-WebSocket-Version=%r -- this port only accepts ws:// WebSocket connections, not http(s)://.",
+        request.method,
+        path,
+        upgrade or None,
+        conn_header or None,
+        headers.get("Sec-WebSocket-Version"),
+    )
+    body = (
+        b"This is a WebSocket-only endpoint (Kwella mock bidding engine).\n"
+        b"Connect with ws:// (or wss://), not http(s)://, and make sure your client "
+        b"sends the 'Upgrade: websocket' and 'Connection: Upgrade' handshake headers.\n"
+        b"See scripts/mock_orchestrator/README.md for working websocat/wscat examples.\n"
+    )
+    response_headers = Headers()
+    response_headers["Content-Type"] = "text/plain; charset=utf-8"
+    response_headers["Content-Length"] = str(len(body))
+    return Response(426, "Upgrade Required", response_headers, body)
+
+
 async def run_app_server(engine: Engine, host: str, port: int) -> None:
     async def handler(connection: ws_server.ServerConnection) -> None:
         path = connection.request.path if connection.request else "/"
@@ -111,7 +148,7 @@ async def run_app_server(engine: Engine, host: str, port: int) -> None:
             engine.unregister_real_connection()
             logger.info("App connection closed.")
 
-    server = await ws_server.serve(handler, host, port)
+    server = await ws_server.serve(handler, host, port, process_request=_reject_non_websocket_request)
     logger.info("App-facing WebSocket server listening on ws://%s:%s", host, port)
     async with server:
         await asyncio.get_running_loop().create_future()

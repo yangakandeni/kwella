@@ -303,16 +303,14 @@ void main() {
       expect(requestTripFrame['passenger_count'], equals(1));
       expect(controller.state.status, equals(RiderTripStatus.searching));
 
-      // `_findDrivers` only pops one route (back to payment-method, the
-      // screen directly beneath fare-offer on the stack) — tap its back
-      // button to return to the booking screen for the rest of the flow.
-      expect(find.byKey(const Key('payment_continue_button')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('back_button')));
+      // `_findDrivers` pops straight back to the booking screen (popUntil
+      // '/rider/home'), skipping payment-method entirely.
       // Safe to fully settle here (no infinite/repeating animation is on
       // screen yet — DriverBidCard's pulsing accept button doesn't exist
       // until the bid frame below arrives) so the pop transition's overlay
       // doesn't linger and absorb the next tap.
       await tester.pumpAndSettle();
+      expect(find.byKey(const Key('payment_continue_button')), findsNothing);
       expect(find.byKey(const Key('search_bar')), findsNothing);
 
       // ── 5. Bidding: push a driverBidReceived frame ──────────────────────

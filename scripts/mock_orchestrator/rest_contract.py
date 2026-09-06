@@ -148,7 +148,9 @@ def _initiate_auth(state: OrchestratorState, body: dict[str, Any]) -> Response:
 
         session = f"sess_{uuid.uuid4()}"
         state.auth_challenges[session] = AuthChallenge(phone_number=phone, code=_OTP_TEST_CODE)
-        logger.info("OTP for %s: %s (session=%s)", phone, _OTP_TEST_CODE, session)
+        logger.info(
+            "\033[1m[OTP GENERATED] Number: %s -> Code: %s\033[0m (session=%s)", phone, _OTP_TEST_CODE, session
+        )
         return 200, {"ChallengeName": "CUSTOM_CHALLENGE", "Session": session, "ChallengeParameters": {"USERNAME": phone}}
 
     if auth_flow == "REFRESH_TOKEN_AUTH":
