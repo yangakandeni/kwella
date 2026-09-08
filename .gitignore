@@ -91,3 +91,4 @@ runner-*.log
 
 # Other
 *handover*.md
+graphify-out/*
