@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -131,6 +132,9 @@ class KwellaWebSocketGateway {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
 
+    if (kDebugMode) {
+      debugPrint('[KwellaWebSocketGateway] Initiating connection...');
+    }
     await _openConnection(accessToken, overrideEndpointUrl: overrideEndpointUrl);
   }
 
@@ -146,6 +150,10 @@ class KwellaWebSocketGateway {
     final target = overrideEndpointUrl ?? endpointUrl;
     final parsedUri = Uri.parse(target);
 
+    if (kDebugMode) {
+      debugPrint('[KwellaWebSocketGateway] Connecting to: $target');
+    }
+
     // Construct the authenticated WebSocket URI, preserving any query parameters.
     final uri = parsedUri.replace(
       queryParameters: {
@@ -160,7 +168,14 @@ class KwellaWebSocketGateway {
     try {
       // Await the protocol handshake to surface connection errors early.
       await _channel!.ready;
-    } catch (error) {
+      if (kDebugMode) {
+        debugPrint('[KwellaWebSocketGateway] ✓ Connected successfully');
+      }
+    } catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint('[KwellaWebSocketGateway] ✗ Connection failed: $error');
+        debugPrint('Stack trace: $stackTrace');
+      }
       _channel = null;
       _setStatus(WebSocketStatus.disconnected);
       _scheduleReconnect();
@@ -176,17 +191,27 @@ class KwellaWebSocketGateway {
     // Forward incoming frames onto the broadcast controller.
     _channel!.stream.listen(
       (dynamic frame) {
+        if (kDebugMode) {
+          debugPrint('[KwellaWebSocketGateway] ← Received frame: $frame');
+        }
         if (!_controller!.isClosed) {
           _controller!.add(frame.toString());
         }
       },
       onError: (Object error, StackTrace stack) {
+        if (kDebugMode) {
+          debugPrint('[KwellaWebSocketGateway] ✗ Stream error: $error');
+          debugPrint('Stack trace: $stack');
+        }
         if (!_controller!.isClosed) {
           _controller!.addError(error, stack);
         }
         _handleUnexpectedClosure();
       },
       onDone: () {
+        if (kDebugMode) {
+          debugPrint('[KwellaWebSocketGateway] Connection closed by remote peer');
+        }
         // The channel closed remotely — propagate the closure.
         if (!_controller!.isClosed) {
           _controller!.close();
@@ -201,6 +226,9 @@ class KwellaWebSocketGateway {
   void _handleUnexpectedClosure() {
     _channel = null;
     if (_manualDisconnect) return;
+    if (kDebugMode) {
+      debugPrint('[KwellaWebSocketGateway] Unexpected closure detected; scheduling reconnect...');
+    }
     _setStatus(WebSocketStatus.disconnected);
     _scheduleReconnect();
   }
@@ -217,8 +245,15 @@ class KwellaWebSocketGateway {
     );
     _retryCount++;
 
+    if (kDebugMode) {
+      debugPrint('[KwellaWebSocketGateway] Scheduling reconnect attempt #$_retryCount in ${delayMs}ms');
+    }
+
     _reconnectTimer = Timer(Duration(milliseconds: delayMs), () {
       if (_manualDisconnect || _lastAccessToken == null) return;
+      if (kDebugMode) {
+        debugPrint('[KwellaWebSocketGateway] Attempting reconnect...');
+      }
       _openConnection(_lastAccessToken!,
           overrideEndpointUrl: _lastOverrideEndpointUrl);
     });
@@ -231,8 +266,14 @@ class KwellaWebSocketGateway {
   /// order once the connection is re-established.
   void send(String payload) {
     if (_channel == null) {
+      if (kDebugMode) {
+        debugPrint('[KwellaWebSocketGateway] Channel disconnected; journaling message: $payload');
+      }
       _outboundJournal.add(payload);
       return;
+    }
+    if (kDebugMode) {
+      debugPrint('[KwellaWebSocketGateway] → Sending: $payload');
     }
     sentMessages.add(payload);
     _channel!.sink.add(payload);
@@ -263,6 +304,9 @@ class KwellaWebSocketGateway {
   /// This is treated as an intentional disconnect — no automatic reconnect
   /// attempt is scheduled afterwards.
   Future<void> disconnect() async {
+    if (kDebugMode) {
+      debugPrint('[KwellaWebSocketGateway] Disconnecting...');
+    }
     _manualDisconnect = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;

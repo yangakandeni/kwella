@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:kwella_core/kwella_core.dart';
@@ -64,13 +65,18 @@ class KwellaRiderController {
     required String accessToken,
   }) async {
     _riderId = riderId;
+    if (kDebugMode) {
+      debugPrint('[KwellaRiderController] Connecting with riderId=$riderId');
+    }
     await _gateway.connect(accessToken);
     _gatewaySubscription = _gateway.dataStream.listen((raw) {
       try {
         handleIncomingWebSocketEvent(jsonDecode(raw) as Map<String, dynamic>);
-      } catch (_) {
-        // Malformed/unknown frame — ignore, matches existing tolerant
-        // behavior elsewhere in this app.
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('[KwellaRiderController] Failed to parse incoming frame: $e');
+          debugPrint('Raw frame: $raw');
+        }
       }
     });
   }
@@ -161,7 +167,7 @@ class KwellaRiderController {
   }
 
   void requestTrip({bool autoAccept = false}) {
-    _pushWebSocketMessage({
+    final payload = {
       'action': 'requestTrip',
       'riderId': _riderId,
       'pickup_latitude': _state.pickupLat,
@@ -169,7 +175,15 @@ class KwellaRiderController {
       'dropoff_latitude': _state.dropoffLat,
       'dropoff_longitude': _state.dropoffLng,
       'passenger_count': _state.passengerCount,
-    });
+    };
+    if (kDebugMode) {
+      debugPrint('[KwellaRiderController] Requesting trip with payload: ${jsonEncode(payload)}');
+      debugPrint('  - riderId: $_riderId');
+      debugPrint('  - pickup: (${_state.pickupLat}, ${_state.pickupLng})');
+      debugPrint('  - dropoff: (${_state.dropoffLat}, ${_state.dropoffLng})');
+      debugPrint('  - passengers: ${_state.passengerCount}');
+    }
+    _pushWebSocketMessage(payload);
     _emit(
       _state.copyWith(
         status: RiderTripStatus.searching,
@@ -253,6 +267,15 @@ class KwellaRiderController {
           newBidMetrics.addAll(bidMetrics.whereType<Map<String, dynamic>>());
         }
       }
+      if (kDebugMode) {
+        debugPrint('[KwellaRiderController] ✓ Received driver bid offer(s)');
+        debugPrint('  - tripId: $incomingTripId');
+        debugPrint('  - total bids: ${newBidMetrics.length}');
+        for (int i = 0; i < newBidMetrics.length; i++) {
+          final bid = newBidMetrics[i];
+          debugPrint('  - bid[$i]: driver=${bid['driverId']}, fare=${bid['fare'] ?? bid['bidAmount']}');
+        }
+      }
       _emit(
         _state.copyWith(
           status: RiderTripStatus.biddingOpen,
@@ -265,6 +288,9 @@ class KwellaRiderController {
         final String? firstDriverId =
             newBidMetrics.first['driverId'] as String?;
         if (firstDriverId != null) {
+          if (kDebugMode) {
+            debugPrint('[KwellaRiderController] Auto-accepting first bid from $firstDriverId');
+          }
           selectBid(firstDriverId);
         }
       }
@@ -272,22 +298,30 @@ class KwellaRiderController {
     }
 
     if (status == 'TripBroadcast') {
+      final fare = _parseFare(payload['calculated_fare']);
+      if (kDebugMode) {
+        debugPrint('[KwellaRiderController] Trip broadcast: tripId=$incomingTripId, fare=$fare');
+      }
       // `copyWith` already falls back to the current value when a nullable
       // arg is null, so an unparsable fare simply leaves offeredFare as-is.
       _emit(
         _state.copyWith(
           tripId: incomingTripId ?? _state.tripId,
-          offeredFare: _parseFare(payload['calculated_fare']),
+          offeredFare: fare,
         ),
       );
       return;
     }
 
     if (status == 'FareUpdated') {
+      final fare = _parseFare(payload['base_fare']);
+      if (kDebugMode) {
+        debugPrint('[KwellaRiderController] Fare updated: tripId=$incomingTripId, newFare=$fare');
+      }
       _emit(
         _state.copyWith(
           tripId: incomingTripId ?? _state.tripId,
-          offeredFare: _parseFare(payload['base_fare']),
+          offeredFare: fare,
         ),
       );
       return;
@@ -371,10 +405,18 @@ class KwellaRiderController {
     }
 
     if (status == 'WalletSettled') {
+      if (kDebugMode) {
+        debugPrint('[KwellaRiderController] Trip completed: wallet settled');
+      }
       _emit(
         _state.copyWith(status: RiderTripStatus.completed, latestEvent: event),
       );
       return;
+    }
+
+    if (kDebugMode) {
+      debugPrint('[KwellaRiderController] Unhandled WebSocket event: action=$action, status=$status');
+      debugPrint('  - payload: $payload');
     }
   }
 
