@@ -39,10 +39,12 @@ dependencies:
   google_maps_flutter: ^2.17.1
   geolocator: ^14.0.3
   geocoding: ^3.0.0
+  latlong2: ^0.8.1
   http: ^1.6.0
   flutter_dotenv: ^6.0.1
   pinput: ^6.0.2
   flutter_polyline_points: ^3.1.0
+  smooth_sheets: ^1.0.0
 
 # package_info_plus 10.2.1's iOS Package.swift depends on a local
 # "FlutterFramework" SPM package that flutter_tools only generates on

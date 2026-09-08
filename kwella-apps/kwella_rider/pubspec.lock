@@ -424,6 +424,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.1.2"
+  intl:
+    dependency: transitive
+    description:
+      name: intl
+      sha256: "1ca20c894b1717686a2319b8548763d812bc0aabdac580420a44c5178c57a867"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.20.3"
   jni:
     dependency: transitive
     description:
@@ -447,6 +455,14 @@ packages:
       relative: true
     source: path
     version: "1.0.0"
+  latlong2:
+    dependency: "direct main"
+    description:
+      name: latlong2
+      sha256: "08ef7282ba9f76e8495e49e2dc4d653015ac929dce5f92b375a415d30b407ea0"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.8.2"
   leak_tracker:
     dependency: transitive
     description:
@@ -519,6 +535,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.0"
+  navigator_resizable:
+    dependency: transitive
+    description:
+      name: navigator_resizable
+      sha256: "689f591b70218e152c6496b41142d9058e6c9ba5581a4126a7db978a8239d2eb"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.1.0"
   objective_c:
     dependency: transitive
     description:
@@ -676,6 +700,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  smooth_sheets:
+    dependency: "direct main"
+    description:
+      name: smooth_sheets
+      sha256: ce88a0aa9db65c660af051e6f0678ffbf04eacc612acd232b725892a652e1422
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.2.0"
   source_span:
     dependency: transitive
     description:
@@ -829,5 +861,5 @@ packages:
     source: hosted
     version: "3.1.3"
 sdks:
-  dart: ">=3.10.4 <4.0.0"
-  flutter: ">=3.38.4"
+  dart: ">=3.11.0 <4.0.0"
+  flutter: ">=3.41.0"

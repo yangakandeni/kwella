@@ -45,7 +45,7 @@ class PlaceLocation {
 /// Thin wrapper around the Google Places Autocomplete and Place Details
 /// APIs. Mirrors `KwellaLocationService`'s "never throws" contract —
 /// network/parse failures resolve to an empty list / null rather than
-/// propagating.
+/// propagating. Uses latlong2 for distance calculations when origins provided.
 class PlacesAutocompleteService {
   PlacesAutocompleteService({http.Client? httpClient, String? apiKey})
       : _httpClient = httpClient ?? http.Client(),
@@ -109,7 +109,7 @@ class PlacesAutocompleteService {
 
       final List<PlaceSuggestion> results = predictions
           .whereType<Map<String, dynamic>>()
-          .map(_parsePrediction)
+          .map((p) => _parsePrediction(p, originLat, originLng))
           .whereType<PlaceSuggestion>()
           .toList();
 
@@ -173,7 +173,11 @@ class PlacesAutocompleteService {
     }
   }
 
-  PlaceSuggestion? _parsePrediction(Map<String, dynamic> prediction) {
+  PlaceSuggestion? _parsePrediction(
+    Map<String, dynamic> prediction,
+    double? originLat,
+    double? originLng,
+  ) {
     final String? placeId = prediction['place_id'] as String?;
     final String? description = prediction['description'] as String?;
     if (placeId == null || description == null) {
