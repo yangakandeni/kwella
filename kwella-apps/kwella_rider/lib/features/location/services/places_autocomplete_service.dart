@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:kwella_core/kwella_core.dart';
+import 'package:uuid/uuid.dart';
 
 /// A single Google Places Autocomplete prediction.
 class PlaceSuggestion {
@@ -51,16 +52,17 @@ class PlacesAutocompleteService {
     http.Client? httpClient,
     String? apiKey,
     KwellaEnvironment? environment,
+    Uuid? uuid,
   })  : _httpClient = httpClient ?? http.Client(),
         _apiKey = apiKey ??
             const String.fromEnvironment('GOOGLE_MAPS_API_KEY'),
-        _environment = environment ?? KwellaEnvironment.current;
+        _environment = environment ?? KwellaEnvironment.current,
+        _uuid = uuid ?? const Uuid();
 
   static const int _minQueryLength = 3;
   static const String _autocompleteEndpoint =
-      'https://maps.googleapis.com/maps/api/place/autocomplete/json';
-  static const String _detailsEndpoint =
-      'https://maps.googleapis.com/maps/api/place/details/json';
+      'https://places.googleapis.com/v1/places:autocomplete';
+  static const String _detailsEndpoint = 'https://places.googleapis.com/v1/places';
 
   /// Soft location bias radius (metres) applied when an origin is supplied —
   /// wide enough to still surface city-wide matches, per the "Shoprite"
@@ -70,6 +72,14 @@ class PlacesAutocompleteService {
   final http.Client _httpClient;
   final String _apiKey;
   final KwellaEnvironment _environment;
+  final Uuid _uuid;
+
+  /// Places API (New) session token, shared across the autocomplete
+  /// keystrokes and the eventual [getPlaceDetails] call that ends the
+  /// billing session — see the Places API (New) session-token billing
+  /// model. Created lazily on the first [searchPlaces] call of a session
+  /// and cleared once [getPlaceDetails] consumes it.
+  String? _sessionToken;
 
   /// Returns matching place suggestions for [query]. Returns an empty list
   /// (without making a network call) when the query is shorter than three
@@ -93,36 +103,45 @@ class PlacesAutocompleteService {
 
     try {
       final bool hasOrigin = originLat != null && originLng != null;
+      _sessionToken ??= _uuid.v4();
       final Uri uri = _environment.isLocal
           ? Uri.parse(_environment.httpApiEndpoint)
               .resolve('maps/place/autocomplete')
-              .replace(queryParameters: {
-              'input': trimmed,
-              if (hasOrigin) 'location': '$originLat,$originLng',
-            })
-          : Uri.parse(_autocompleteEndpoint).replace(queryParameters: {
-              'input': trimmed,
-              'key': _apiKey,
-              if (hasOrigin) 'location': '$originLat,$originLng',
-              if (hasOrigin) 'radius': '$_biasRadiusMeters',
-              if (hasOrigin) 'origin': '$originLat,$originLng',
-            });
-      final http.Response response = await _httpClient.get(uri);
+          : Uri.parse(_autocompleteEndpoint);
+      final Map<String, String> headers = {
+        'Content-Type': 'application/json',
+        if (!_environment.isLocal) 'X-Goog-Api-Key': _apiKey,
+      };
+      final String requestBody = jsonEncode({
+        'input': trimmed,
+        'sessionToken': _sessionToken,
+        if (hasOrigin)
+          'locationBias': {
+            'circle': {
+              'center': {'latitude': originLat, 'longitude': originLng},
+              'radius': _biasRadiusMeters,
+            },
+          },
+      });
+      final http.Response response =
+          await _httpClient.post(uri, headers: headers, body: requestBody);
       if (response.statusCode != 200) {
         return const [];
       }
 
       final dynamic body = jsonDecode(response.body);
-      if (body is! Map<String, dynamic> || body['status'] != 'OK') {
+      if (body is! Map<String, dynamic>) {
         return const [];
       }
 
-      final dynamic predictions = body['predictions'];
-      if (predictions is! List) {
+      final dynamic suggestions = body['suggestions'];
+      if (suggestions is! List) {
         return const [];
       }
 
-      final List<PlaceSuggestion> results = predictions
+      final List<PlaceSuggestion> results = suggestions
+          .whereType<Map<String, dynamic>>()
+          .map((s) => s['placePrediction'])
           .whereType<Map<String, dynamic>>()
           .map((p) => _parsePrediction(p, originLat, originLng))
           .whereType<PlaceSuggestion>()
@@ -153,38 +172,44 @@ class PlacesAutocompleteService {
       return null;
     }
 
+    final String? sessionToken = _sessionToken;
     try {
       final Uri uri = _environment.isLocal
           ? Uri.parse(_environment.httpApiEndpoint)
               .resolve('maps/place/details')
-              .replace(queryParameters: {'place_id': placeId})
-          : Uri.parse(_detailsEndpoint).replace(queryParameters: {
+              .replace(queryParameters: {
               'place_id': placeId,
-              'fields': 'geometry',
-              'key': _apiKey,
-            });
-      final http.Response response = await _httpClient.get(uri);
+              'sessionToken': ?sessionToken,
+            })
+          : Uri.parse('$_detailsEndpoint/$placeId').replace(
+              queryParameters: {
+                'sessionToken': ?sessionToken,
+              },
+            );
+      final Map<String, String> headers = {
+        if (!_environment.isLocal) ...{
+          'X-Goog-Api-Key': _apiKey,
+          'X-Goog-FieldMask': 'location',
+        },
+      };
+      final http.Response response =
+          await _httpClient.get(uri, headers: headers);
       if (response.statusCode != 200) {
         return null;
       }
 
       final dynamic body = jsonDecode(response.body);
-      if (body is! Map<String, dynamic> || body['status'] != 'OK') {
+      if (body is! Map<String, dynamic>) {
         return null;
       }
 
-      final dynamic result = body['result'];
-      final dynamic geometry = result is Map<String, dynamic>
-          ? result['geometry']
-          : null;
-      final dynamic location =
-          geometry is Map<String, dynamic> ? geometry['location'] : null;
+      final dynamic location = body['location'];
       if (location is! Map<String, dynamic>) {
         return null;
       }
 
-      final dynamic lat = location['lat'];
-      final dynamic lng = location['lng'];
+      final dynamic lat = location['latitude'];
+      final dynamic lng = location['longitude'];
       if (lat is num && lng is num) {
         return PlaceLocation(lat: lat.toDouble(), lng: lng.toDouble());
       }
@@ -192,6 +217,11 @@ class PlacesAutocompleteService {
     } catch (e) {
       debugPrint('[PlacesAutocompleteService] Place details lookup failed: $e');
       return null;
+    } finally {
+      // The Places API (New) session ends once Details is fetched for it.
+      if (sessionToken != null) {
+        _sessionToken = null;
+      }
     }
   }
 
@@ -200,19 +230,25 @@ class PlacesAutocompleteService {
     double? originLat,
     double? originLng,
   ) {
-    final String? placeId = prediction['place_id'] as String?;
-    final String? description = prediction['description'] as String?;
+    final String? placeId = prediction['placeId'] as String?;
+    final dynamic text = prediction['text'];
+    final String? description =
+        text is Map<String, dynamic> ? text['text'] as String? : null;
     if (placeId == null || description == null) {
       return null;
     }
 
-    final Map<String, dynamic>? structuredFormatting =
-        prediction['structured_formatting'] as Map<String, dynamic>?;
-    final String mainText =
-        structuredFormatting?['main_text'] as String? ?? description;
-    final String secondaryText =
-        structuredFormatting?['secondary_text'] as String? ?? '';
-    final dynamic distanceMeters = prediction['distance_meters'];
+    final Map<String, dynamic>? structuredFormat =
+        prediction['structuredFormat'] as Map<String, dynamic>?;
+    final dynamic mainTextField = structuredFormat?['mainText'];
+    final dynamic secondaryTextField = structuredFormat?['secondaryText'];
+    final String mainText = mainTextField is Map<String, dynamic>
+        ? mainTextField['text'] as String? ?? description
+        : description;
+    final String secondaryText = secondaryTextField is Map<String, dynamic>
+        ? secondaryTextField['text'] as String? ?? ''
+        : '';
+    final dynamic distanceMeters = prediction['distanceMeters'];
 
     return PlaceSuggestion(
       placeId: placeId,

@@ -45,6 +45,7 @@ dependencies:
   pinput: ^6.0.2
   flutter_polyline_points: ^3.1.0
   smooth_sheets: ^1.0.0
+  uuid: ^4.5.1
 
 # package_info_plus 10.2.1's iOS Package.swift depends on a local
 # "FlutterFramework" SPM package that flutter_tools only generates on

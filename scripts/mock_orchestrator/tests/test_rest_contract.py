@@ -257,14 +257,30 @@ def test_receipt_is_created_automatically_when_a_trip_completes(state: Orchestra
 def test_directions_returns_ok_with_positive_distance_and_duration() -> None:
     status, body = rc.directions((-33.9249, 18.4241), (-33.9258, 18.4231))
     assert status == 200
-    assert body["status"] == "OK"
-    leg = body["routes"][0]["legs"][0]
-    assert leg["distance"]["value"] > 0
-    assert leg["duration"]["value"] > 0
-    assert body["routes"][0]["overview_polyline"]["points"]
+    route = body["routes"][0]
+    assert route["distanceMeters"] > 0
+    assert route["duration"].endswith("s")
+    assert int(route["duration"][:-1]) > 0
+    assert route["polyline"]["encodedPolyline"]
+
+
+def test_place_autocomplete_returns_suggestions_with_place_predictions() -> None:
+    status, body = rc.place_autocomplete("Shoprite", None)
+    assert status == 200
+    suggestions = body["suggestions"]
+    assert len(suggestions) == 3
+    prediction = suggestions[0]["placePrediction"]
+    assert prediction["placeId"]
+    assert "Shoprite" in prediction["text"]["text"]
+    assert prediction["structuredFormat"]["mainText"]["text"]
+    assert prediction["structuredFormat"]["secondaryText"]["text"]
+    assert prediction["distanceMeters"] >= 0
 
 
 def test_place_details_is_deterministic_for_the_same_place_id() -> None:
     _, first = rc.place_details("mock_place_1")
     _, second = rc.place_details("mock_place_1")
     assert first == second
+    assert first["id"] == "mock_place_1"
+    assert "latitude" in first["location"]
+    assert "longitude" in first["location"]

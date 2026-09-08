@@ -11,6 +11,26 @@ const KwellaEnvironment _localEnv = KwellaEnvironment(
   isLocal: true,
 );
 
+Map<String, dynamic> _suggestion({
+  required String placeId,
+  required String description,
+  String? mainText,
+  String? secondaryText,
+  int? distanceMeters,
+}) {
+  return {
+    'placePrediction': {
+      'placeId': placeId,
+      'text': {'text': description},
+      'structuredFormat': {
+        'mainText': {'text': mainText ?? description},
+        'secondaryText': {'text': secondaryText ?? ''},
+      },
+      'distanceMeters': ?distanceMeters,
+    },
+  };
+}
+
 void main() {
   group('PlacesAutocompleteService', () {
     test('returns predictions parsed from a successful response', () async {
@@ -19,24 +39,19 @@ void main() {
         capturedRequest = request;
         return http.Response(
           jsonEncode({
-            'status': 'OK',
-            'predictions': [
-              {
-                'place_id': 'place-1',
-                'description': 'Shoprite Mandalay, Swartklip Road, Cape Town',
-                'structured_formatting': {
-                  'main_text': 'Shoprite Mandalay',
-                  'secondary_text': 'Swartklip Road, Cape Town',
-                },
-              },
-              {
-                'place_id': 'place-2',
-                'description': 'Shoprite Lentegeur, Melkbos Road, Cape Town',
-                'structured_formatting': {
-                  'main_text': 'Shoprite Lentegeur',
-                  'secondary_text': 'Melkbos Road, Cape Town',
-                },
-              },
+            'suggestions': [
+              _suggestion(
+                placeId: 'place-1',
+                description: 'Shoprite Mandalay, Swartklip Road, Cape Town',
+                mainText: 'Shoprite Mandalay',
+                secondaryText: 'Swartklip Road, Cape Town',
+              ),
+              _suggestion(
+                placeId: 'place-2',
+                description: 'Shoprite Lentegeur, Melkbos Road, Cape Town',
+                mainText: 'Shoprite Lentegeur',
+                secondaryText: 'Melkbos Road, Cape Town',
+              ),
             ],
           }),
           200,
@@ -56,8 +71,17 @@ void main() {
         equals('Shoprite Mandalay, Swartklip Road, Cape Town'),
       );
       expect(capturedRequest, isNotNull);
-      expect(capturedRequest!.url.queryParameters['input'], equals('Shoprite'));
-      expect(capturedRequest!.url.queryParameters['key'], equals('test-key'));
+      expect(capturedRequest!.method, equals('POST'));
+      expect(
+        capturedRequest!.url.toString(),
+        equals('https://places.googleapis.com/v1/places:autocomplete'),
+      );
+      expect(capturedRequest!.headers['X-Goog-Api-Key'], equals('test-key'));
+
+      final Map<String, dynamic> body = jsonDecode(capturedRequest!.body);
+      expect(body['input'], equals('Shoprite'));
+      expect(body['sessionToken'], isA<String>());
+      expect(body['sessionToken'], isNotEmpty);
     });
 
     test('returns no results for queries shorter than 3 characters without '
@@ -90,10 +114,10 @@ void main() {
       expect(callCount, equals(0));
     });
 
-    test('returns no results when the API responds with a non-OK status',
+    test('returns no results when the API responds without suggestions',
         () async {
       final client = MockClient((request) async {
-        return http.Response(jsonEncode({'status': 'ZERO_RESULTS'}), 200);
+        return http.Response(jsonEncode({}), 200);
       });
       final service =
           PlacesAutocompleteService(httpClient: client, apiKey: 'test-key');
@@ -137,18 +161,17 @@ void main() {
         capturedRequest = request;
         return http.Response(
           jsonEncode({
-            'status': 'OK',
-            'predictions': [
-              {
-                'place_id': 'place-far',
-                'description': 'Shoprite Blue Downs',
-                'distance_meters': 7400,
-              },
-              {
-                'place_id': 'place-near',
-                'description': 'Shoprite Mandalay',
-                'distance_meters': 1600,
-              },
+            'suggestions': [
+              _suggestion(
+                placeId: 'place-far',
+                description: 'Shoprite Blue Downs',
+                distanceMeters: 7400,
+              ),
+              _suggestion(
+                placeId: 'place-near',
+                description: 'Shoprite Mandalay',
+                distanceMeters: 1600,
+              ),
             ],
           }),
           200,
@@ -163,46 +186,46 @@ void main() {
         originLng: 18.63,
       );
 
-      expect(capturedRequest!.url.queryParameters['location'],
-          equals('-33.97,18.63'));
-      expect(capturedRequest!.url.queryParameters['origin'],
-          equals('-33.97,18.63'));
-      expect(capturedRequest!.url.queryParameters['radius'], isNotNull);
+      final Map<String, dynamic> body = jsonDecode(capturedRequest!.body);
+      expect(
+        body['locationBias']['circle']['center'],
+        equals({'latitude': -33.97, 'longitude': 18.63}),
+      );
+      expect(body['locationBias']['circle']['radius'], isNotNull);
 
       expect(results.map((r) => r.placeId), equals(['place-near', 'place-far']));
       expect(results.first.distanceMeters, equals(1600));
     });
 
-    test('omits location bias params when no origin is supplied', () async {
+    test('omits locationBias when no origin is supplied', () async {
       http.Request? capturedRequest;
       final client = MockClient((request) async {
         capturedRequest = request;
-        return http.Response(jsonEncode({'status': 'OK', 'predictions': []}), 200);
+        return http.Response(jsonEncode({'suggestions': []}), 200);
       });
       final service =
           PlacesAutocompleteService(httpClient: client, apiKey: 'test-key');
 
       await service.searchPlaces('Shoprite');
 
-      expect(capturedRequest!.url.queryParameters.containsKey('location'), isFalse);
-      expect(capturedRequest!.url.queryParameters.containsKey('origin'), isFalse);
+      final Map<String, dynamic> body = jsonDecode(capturedRequest!.body);
+      expect(body.containsKey('locationBias'), isFalse);
     });
 
     test(
         'in local mode, routes to the mock orchestrator '
-        'maps/place/autocomplete endpoint without a key param, even with '
-        'no API key configured', () async {
+        'maps/place/autocomplete endpoint without an API key header, even '
+        'with no API key configured', () async {
       http.Request? capturedRequest;
       final client = MockClient((request) async {
         capturedRequest = request;
         return http.Response(
           jsonEncode({
-            'status': 'OK',
-            'predictions': [
-              {
-                'place_id': 'place-1',
-                'description': 'Shoprite Mandalay, Swartklip Road, Cape Town',
-              },
+            'suggestions': [
+              _suggestion(
+                placeId: 'place-1',
+                description: 'Shoprite Mandalay, Swartklip Road, Cape Town',
+              ),
             ],
           }),
           200,
@@ -221,14 +244,64 @@ void main() {
 
       expect(results, hasLength(1));
       expect(capturedRequest, isNotNull);
+      expect(capturedRequest!.method, equals('POST'));
       expect(capturedRequest!.url.host, equals('10.0.2.2'));
       expect(capturedRequest!.url.path, equals('/maps/place/autocomplete'));
-      expect(capturedRequest!.url.queryParameters.containsKey('key'), isFalse);
-      expect(capturedRequest!.url.queryParameters['input'], equals('Shoprite'));
+      expect(capturedRequest!.headers.containsKey('X-Goog-Api-Key'), isFalse);
+
+      final Map<String, dynamic> body = jsonDecode(capturedRequest!.body);
+      expect(body['input'], equals('Shoprite'));
       expect(
-        capturedRequest!.url.queryParameters['location'],
-        equals('-33.97,18.63'),
+        body['locationBias']['circle']['center'],
+        equals({'latitude': -33.97, 'longitude': 18.63}),
       );
+    });
+
+    test(
+        'reuses the same session token across searches, then clears it '
+        'once getPlaceDetails consumes it', () async {
+      final List<http.Request> capturedRequests = [];
+      final client = MockClient((request) async {
+        capturedRequests.add(request);
+        if (request.url.path.contains('autocomplete')) {
+          return http.Response(
+            jsonEncode({
+              'suggestions': [
+                _suggestion(placeId: 'place-1', description: 'Shoprite'),
+              ],
+            }),
+            200,
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'id': 'place-1',
+            'location': {'latitude': -33.97, 'longitude': 18.63},
+          }),
+          200,
+        );
+      });
+      final service =
+          PlacesAutocompleteService(httpClient: client, apiKey: 'test-key');
+
+      await service.searchPlaces('Shop');
+      await service.searchPlaces('Shopr');
+      final String firstToken =
+          jsonDecode(capturedRequests[0].body)['sessionToken'] as String;
+      final String secondToken =
+          jsonDecode(capturedRequests[1].body)['sessionToken'] as String;
+      expect(secondToken, equals(firstToken));
+
+      await service.getPlaceDetails('place-1');
+      expect(
+        capturedRequests[2].url.queryParameters['sessionToken'],
+        equals(firstToken),
+      );
+
+      await service.searchPlaces('Newquery');
+      final String thirdToken =
+          jsonDecode(capturedRequests[3].body)['sessionToken'] as String;
+      expect(thirdToken, isNot(equals(firstToken)));
     });
   });
 
@@ -239,12 +312,8 @@ void main() {
         capturedRequest = request;
         return http.Response(
           jsonEncode({
-            'status': 'OK',
-            'result': {
-              'geometry': {
-                'location': {'lat': -33.97, 'lng': 18.63},
-              },
-            },
+            'id': 'place-1',
+            'location': {'latitude': -33.97, 'longitude': 18.63},
           }),
           200,
         );
@@ -257,7 +326,10 @@ void main() {
       expect(location, isNotNull);
       expect(location!.lat, equals(-33.97));
       expect(location.lng, equals(18.63));
-      expect(capturedRequest!.url.queryParameters['place_id'], equals('place-1'));
+      expect(capturedRequest!.url.host, equals('places.googleapis.com'));
+      expect(capturedRequest!.url.path, equals('/v1/places/place-1'));
+      expect(capturedRequest!.headers['X-Goog-Api-Key'], equals('test-key'));
+      expect(capturedRequest!.headers['X-Goog-FieldMask'], equals('location'));
     });
 
     test('returns null and does not throw on failure', () async {
@@ -289,19 +361,15 @@ void main() {
 
     test(
         'in local mode, routes to the mock orchestrator '
-        'maps/place/details endpoint without a key param, even with no '
-        'API key configured', () async {
+        'maps/place/details endpoint without an API key header, even with '
+        'no API key configured', () async {
       http.Request? capturedRequest;
       final client = MockClient((request) async {
         capturedRequest = request;
         return http.Response(
           jsonEncode({
-            'status': 'OK',
-            'result': {
-              'geometry': {
-                'location': {'lat': -33.97, 'lng': 18.63},
-              },
-            },
+            'id': 'place-1',
+            'location': {'latitude': -33.97, 'longitude': 18.63},
           }),
           200,
         );
@@ -318,7 +386,7 @@ void main() {
       expect(capturedRequest, isNotNull);
       expect(capturedRequest!.url.host, equals('10.0.2.2'));
       expect(capturedRequest!.url.path, equals('/maps/place/details'));
-      expect(capturedRequest!.url.queryParameters.containsKey('key'), isFalse);
+      expect(capturedRequest!.headers.containsKey('X-Goog-Api-Key'), isFalse);
       expect(
         capturedRequest!.url.queryParameters['place_id'],
         equals('place-1'),

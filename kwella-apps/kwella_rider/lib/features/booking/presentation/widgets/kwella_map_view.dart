@@ -57,6 +57,11 @@ class KwellaMapView extends StatefulWidget {
 
   static const String stylePath = 'assets/map_styles/dark_map_style.json';
 
+  /// Cloud-based map style ID enabling Advanced Markers, injected via
+  /// `--dart-define=GOOGLE_MAP_ID=<id>`. When unset, [GoogleMap] falls back
+  /// to legacy marker rendering.
+  static const String _mapId = String.fromEnvironment('GOOGLE_MAP_ID');
+
   /// Computes a camera position centered on [points]' bounding box, with a
   /// zoom level that scales down as the box widens — so both ends of a
   /// route stay on-screen regardless of trip length. Pure and synchronous,
@@ -298,6 +303,7 @@ class _KwellaMapViewState extends State<KwellaMapView> {
         GoogleMap(
           key: const Key('kwella_map_view'),
           initialCameraPosition: _initialCamera,
+          mapId: KwellaMapView._mapId.isEmpty ? null : KwellaMapView._mapId,
           style: _mapStyle,
           myLocationEnabled: _myLocationEnabled,
           myLocationButtonEnabled: false,

@@ -31,13 +31,13 @@ The other two are **invented** — no real backend contract exists to mirror:
     codebase yet (`payment_method_screen.dart` ships with only "Cash"
     selectable). This is a plausible, self-consistent invented contract for
     local testing of a future payment UI, not a mirror of anything real.
-  - **Maps** (`directions`/`place_autocomplete`/`place_details`): the real
-    rider app calls Google's Directions/Places APIs directly
-    (`maps.googleapis.com`, hardcoded host) — there is no Kwella-owned REST
-    contract to mirror. These mock Google's *response shape* for local
-    testing, but wiring the app to them requires changing that hardcoded
-    host, which is an app-side change out of scope for this server (see
-    README's "Known constraints").
+  - **Maps** (`directions`/`place_autocomplete`/`place_details`): the rider
+    app calls Google's Routes API (`v2:computeRoutes`) and Places API (New)
+    directly in production, but already routes through
+    `KwellaEnvironment.isLocal` to this server's `/maps/*` endpoints for
+    local testing — there is no Kwella-owned REST contract to mirror, so
+    these mock Google's *response shape* only (POST/JSON body, matching the
+    real APIs' wire format field-for-field).
 """
 
 from __future__ import annotations
@@ -478,16 +478,11 @@ def directions(origin: tuple[float, float], destination: tuple[float, float]) ->
     distance_m = _haversine_m(*origin, *destination) * 1.3  # straight-line -> rough road-distance fudge factor
     duration_s = distance_m / 8.33  # ~30 km/h average urban speed
     body = {
-        "status": "OK",
         "routes": [
             {
-                "overview_polyline": {"points": _encode_polyline([origin, destination])},
-                "legs": [
-                    {
-                        "distance": {"value": int(distance_m), "text": f"{distance_m / 1000:.1f} km"},
-                        "duration": {"value": int(duration_s), "text": f"{max(1, round(duration_s / 60))} mins"},
-                    }
-                ],
+                "distanceMeters": int(distance_m),
+                "duration": f"{int(duration_s)}s",
+                "polyline": {"encodedPolyline": _encode_polyline([origin, destination])},
             }
         ],
     }
@@ -496,24 +491,26 @@ def directions(origin: tuple[float, float], destination: tuple[float, float]) ->
 
 def place_autocomplete(query: str, location: tuple[float, float] | None) -> Response:
     origin = location or _CAPE_TOWN_CBD
-    predictions = []
+    suggestions = []
     for i, suffix in enumerate(("Street", "Avenue", "Road"), start=1):
-        predictions.append(
+        suggestions.append(
             {
-                "place_id": f"mock_place_{abs(hash((query, i))) % 100_000}",
-                "description": f"{query or 'Mock'} {suffix}, Cape Town, South Africa",
-                "structured_formatting": {
-                    "main_text": f"{query or 'Mock'} {suffix}",
-                    "secondary_text": "Cape Town, South Africa",
-                },
-                "distance_meters": int(_haversine_m(*origin, origin[0] + i * 0.003, origin[1] + i * 0.003)),
+                "placePrediction": {
+                    "placeId": f"mock_place_{abs(hash((query, i))) % 100_000}",
+                    "text": {"text": f"{query or 'Mock'} {suffix}, Cape Town, South Africa"},
+                    "structuredFormat": {
+                        "mainText": {"text": f"{query or 'Mock'} {suffix}"},
+                        "secondaryText": {"text": "Cape Town, South Africa"},
+                    },
+                    "distanceMeters": int(_haversine_m(*origin, origin[0] + i * 0.003, origin[1] + i * 0.003)),
+                }
             }
         )
-    return 200, {"status": "OK", "predictions": predictions}
+    return 200, {"suggestions": suggestions}
 
 
 def place_details(place_id: str) -> Response:
     seed = abs(hash(place_id))
     lat = _CAPE_TOWN_CBD[0] + ((seed % 100) - 50) * 0.0005
     lon = _CAPE_TOWN_CBD[1] + ((seed // 100 % 100) - 50) * 0.0005
-    return 200, {"status": "OK", "result": {"geometry": {"location": {"lat": lat, "lng": lon}}}}
+    return 200, {"id": place_id, "location": {"latitude": lat, "longitude": lon}}

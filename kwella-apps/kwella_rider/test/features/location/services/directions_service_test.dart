@@ -25,15 +25,11 @@ void main() {
         capturedRequest = request;
         return http.Response(
           jsonEncode({
-            'status': 'OK',
             'routes': [
               {
-                'overview_polyline': {'points': encodedPolyline},
-                'legs': [
-                  {
-                    'distance': {'value': 5400, 'text': '5.4 km'},
-                  },
-                ],
+                'distanceMeters': 5400,
+                'duration': '540s',
+                'polyline': {'encodedPolyline': encodedPolyline},
               },
             ],
           }),
@@ -54,15 +50,27 @@ void main() {
       expect(result.points.first.longitude, closeTo(-120.2, 0.001));
 
       expect(capturedRequest, isNotNull);
+      expect(capturedRequest!.method, equals('POST'));
+      expect(capturedRequest!.url.toString(),
+          equals('https://routes.googleapis.com/directions/v2:computeRoutes'));
       expect(
-        capturedRequest!.url.queryParameters['origin'],
-        equals('-33.9249,18.4241'),
+        capturedRequest!.headers['X-Goog-FieldMask'],
+        equals(
+          'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline',
+        ),
+      );
+      expect(capturedRequest!.headers['X-Goog-Api-Key'], equals('test-key'));
+
+      final Map<String, dynamic> body = jsonDecode(capturedRequest!.body);
+      expect(
+        body['origin']['location']['latLng'],
+        equals({'latitude': -33.9249, 'longitude': 18.4241}),
       );
       expect(
-        capturedRequest!.url.queryParameters['destination'],
-        equals('-33.9581,18.6961'),
+        body['destination']['location']['latLng'],
+        equals({'latitude': -33.9581, 'longitude': 18.6961}),
       );
-      expect(capturedRequest!.url.queryParameters['key'], equals('test-key'));
+      expect(body['travelMode'], equals('DRIVE'));
     });
 
     test('returns null when no API key is configured', () async {
@@ -94,12 +102,9 @@ void main() {
       expect(result, isNull);
     });
 
-    test('returns null when the API reports a non-OK status', () async {
+    test('returns null when the response has no routes', () async {
       final client = MockClient(
-        (request) async => http.Response(
-          jsonEncode({'status': 'ZERO_RESULTS', 'routes': []}),
-          200,
-        ),
+        (request) async => http.Response(jsonEncode({'routes': []}), 200),
       );
       final service = DirectionsService(httpClient: client, apiKey: 'test-key');
 
@@ -111,13 +116,12 @@ void main() {
       expect(result, isNull);
     });
 
-    test('returns null when the route has no overview polyline', () async {
+    test('returns null when the route has no polyline', () async {
       final client = MockClient(
         (request) async => http.Response(
           jsonEncode({
-            'status': 'OK',
             'routes': [
-              {'legs': []},
+              {'distanceMeters': 100},
             ],
           }),
           200,
@@ -135,22 +139,18 @@ void main() {
 
     test(
         'in local mode, routes to the mock orchestrator maps/directions '
-        'endpoint without a key param, even with no API key configured',
+        'endpoint without an API key header, even with no API key configured',
         () async {
       http.Request? capturedRequest;
       final client = MockClient((request) async {
         capturedRequest = request;
         return http.Response(
           jsonEncode({
-            'status': 'OK',
             'routes': [
               {
-                'overview_polyline': {'points': encodedPolyline},
-                'legs': [
-                  {
-                    'distance': {'value': 5400, 'text': '5.4 km'},
-                  },
-                ],
+                'distanceMeters': 5400,
+                'duration': '540s',
+                'polyline': {'encodedPolyline': encodedPolyline},
               },
             ],
           }),
@@ -171,19 +171,22 @@ void main() {
       expect(result!.distanceMeters, equals(5400));
 
       expect(capturedRequest, isNotNull);
+      expect(capturedRequest!.method, equals('POST'));
       expect(capturedRequest!.url.host, equals('10.0.2.2'));
       expect(capturedRequest!.url.path, equals('/maps/directions'));
       expect(
-        capturedRequest!.url.queryParameters.containsKey('key'),
+        capturedRequest!.headers.containsKey('X-Goog-Api-Key'),
         isFalse,
       );
+
+      final Map<String, dynamic> body = jsonDecode(capturedRequest!.body);
       expect(
-        capturedRequest!.url.queryParameters['origin'],
-        equals('-33.9249,18.4241'),
+        body['origin']['location']['latLng'],
+        equals({'latitude': -33.9249, 'longitude': 18.4241}),
       );
       expect(
-        capturedRequest!.url.queryParameters['destination'],
-        equals('-33.9581,18.6961'),
+        body['destination']['location']['latLng'],
+        equals({'latitude': -33.9581, 'longitude': 18.6961}),
       );
     });
   });

@@ -32,7 +32,14 @@ class DirectionsService {
         _environment = environment ?? KwellaEnvironment.current;
 
   static const String _directionsEndpoint =
-      'https://maps.googleapis.com/maps/api/directions/json';
+      'https://routes.googleapis.com/directions/v2:computeRoutes';
+
+  /// Requests only the fields the app actually parses, per the Routes API's
+  /// mandatory field mask. `routes.duration` is requested per the migration
+  /// spec even though [RouteResult] doesn't surface it — nothing in the app
+  /// consumes an ETA today.
+  static const String _fieldMask =
+      'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline';
 
   final http.Client _httpClient;
   final String _apiKey;
@@ -53,60 +60,50 @@ class DirectionsService {
 
     try {
       final Uri uri = _environment.isLocal
-          ? Uri.parse(_environment.httpApiEndpoint)
-              .resolve('maps/directions')
-              .replace(queryParameters: {
-              'origin': '${origin.latitude},${origin.longitude}',
-              'destination':
-                  '${destination.latitude},${destination.longitude}',
-            })
-          : Uri.parse(_directionsEndpoint).replace(
-              queryParameters: {
-                'origin': '${origin.latitude},${origin.longitude}',
-                'destination':
-                    '${destination.latitude},${destination.longitude}',
-                'key': _apiKey,
-              },
-            );
-      final http.Response response = await _httpClient.get(uri);
+          ? Uri.parse(_environment.httpApiEndpoint).resolve('maps/directions')
+          : Uri.parse(_directionsEndpoint);
+      final Map<String, String> headers = {
+        'Content-Type': 'application/json',
+        'X-Goog-FieldMask': _fieldMask,
+        if (!_environment.isLocal) 'X-Goog-Api-Key': _apiKey,
+      };
+      final String body = jsonEncode({
+        'origin': _locationOf(origin),
+        'destination': _locationOf(destination),
+        'travelMode': 'DRIVE',
+      });
+      final http.Response response =
+          await _httpClient.post(uri, headers: headers, body: body);
       if (response.statusCode != 200) {
         return null;
       }
 
-      final dynamic body = jsonDecode(response.body);
-      if (body is! Map<String, dynamic> || body['status'] != 'OK') {
+      final dynamic decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
         return null;
       }
 
-      final dynamic routes = body['routes'];
+      final dynamic routes = decoded['routes'];
       if (routes is! List || routes.isEmpty) {
         return null;
       }
       final Map<String, dynamic> route = routes.first as Map<String, dynamic>;
 
-      final dynamic overviewPolyline = route['overview_polyline'];
-      final String? encodedPolyline = overviewPolyline is Map<String, dynamic>
-          ? overviewPolyline['points'] as String?
+      final dynamic polyline = route['polyline'];
+      final String? encodedPolyline = polyline is Map<String, dynamic>
+          ? polyline['encodedPolyline'] as String?
           : null;
       if (encodedPolyline == null || encodedPolyline.isEmpty) {
         return null;
       }
 
-      final List<PointLatLng> decoded =
+      final List<PointLatLng> decodedPolyline =
           PolylinePoints.decodePolyline(encodedPolyline);
-      final List<LatLng> points = decoded
+      final List<LatLng> points = decodedPolyline
           .map((PointLatLng p) => LatLng(p.latitude, p.longitude))
           .toList();
 
-      int distanceMeters = 0;
-      final dynamic legs = route['legs'];
-      if (legs is List && legs.isNotEmpty) {
-        final Map<String, dynamic> leg = legs.first as Map<String, dynamic>;
-        final dynamic distance = leg['distance'];
-        if (distance is Map<String, dynamic>) {
-          distanceMeters = (distance['value'] as num?)?.toInt() ?? 0;
-        }
-      }
+      final int distanceMeters = (route['distanceMeters'] as num?)?.toInt() ?? 0;
 
       return RouteResult(points: points, distanceMeters: distanceMeters);
     } catch (e) {
@@ -114,4 +111,13 @@ class DirectionsService {
       return null;
     }
   }
+
+  static Map<String, dynamic> _locationOf(LatLng point) => {
+        'location': {
+          'latLng': {
+            'latitude': point.latitude,
+            'longitude': point.longitude,
+          },
+        },
+      };
 }

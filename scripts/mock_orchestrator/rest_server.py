@@ -34,13 +34,30 @@ async def _read_json(request: web.Request) -> dict[str, Any]:
         return {}
 
 
-def _parse_latlng(raw: str | None) -> tuple[float, float] | None:
-    if not raw:
+def _latlng_from_location(location: Any) -> tuple[float, float] | None:
+    """Reads a Routes API `{"location": {"latLng": {"latitude", "longitude"}}}` node."""
+    if not isinstance(location, dict):
         return None
-    lat_s, _, lon_s = raw.partition(",")
+    lat_lng = location.get("location", {}).get("latLng") if isinstance(location.get("location"), dict) else None
+    if not isinstance(lat_lng, dict):
+        return None
     try:
-        return float(lat_s), float(lon_s)
-    except ValueError:
+        return float(lat_lng["latitude"]), float(lat_lng["longitude"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _latlng_from_circle_bias(location_bias: Any) -> tuple[float, float] | None:
+    """Reads a Places API (New) `{"circle": {"center": {"latitude", "longitude"}}}` node."""
+    if not isinstance(location_bias, dict):
+        return None
+    circle = location_bias.get("circle")
+    center = circle.get("center") if isinstance(circle, dict) else None
+    if not isinstance(center, dict):
+        return None
+    try:
+        return float(center["latitude"]), float(center["longitude"])
+    except (KeyError, TypeError, ValueError):
         return None
 
 
@@ -165,24 +182,29 @@ def build_app(engine: Engine, base_url: str) -> web.Application:
 
     # -- Location/routing (optional) --------------------------------------------
     async def maps_directions(request: web.Request) -> web.Response:
-        origin = _parse_latlng(request.query.get("origin"))
-        destination = _parse_latlng(request.query.get("destination"))
+        body = await _read_json(request)
+        origin = _latlng_from_location(body.get("origin"))
+        destination = _latlng_from_location(body.get("destination"))
         if origin is None or destination is None:
-            return _json_response(400, {"status": "INVALID_REQUEST"})
+            return _json_response(
+                400,
+                {"error": {"code": 400, "message": "Invalid origin/destination.", "status": "INVALID_ARGUMENT"}},
+            )
         status, resp = rc.directions(origin, destination)
         return _json_response(status, resp)
 
     async def maps_autocomplete(request: web.Request) -> web.Response:
-        location = _parse_latlng(request.query.get("location"))
-        status, resp = rc.place_autocomplete(request.query.get("input", ""), location)
+        body = await _read_json(request)
+        location = _latlng_from_circle_bias(body.get("locationBias"))
+        status, resp = rc.place_autocomplete(body.get("input", ""), location)
         return _json_response(status, resp)
 
     async def maps_place_details(request: web.Request) -> web.Response:
         status, resp = rc.place_details(request.query.get("place_id", ""))
         return _json_response(status, resp)
 
-    app.router.add_get("/maps/directions", maps_directions)
-    app.router.add_get("/maps/place/autocomplete", maps_autocomplete)
+    app.router.add_post("/maps/directions", maps_directions)
+    app.router.add_post("/maps/place/autocomplete", maps_autocomplete)
     app.router.add_get("/maps/place/details", maps_place_details)
 
     return app
