@@ -1,8 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
+import 'package:kwella_core/kwella_core.dart';
 
 /// A single Google Places Autocomplete prediction.
 class PlaceSuggestion {
@@ -47,9 +47,14 @@ class PlaceLocation {
 /// network/parse failures resolve to an empty list / null rather than
 /// propagating. Uses latlong2 for distance calculations when origins provided.
 class PlacesAutocompleteService {
-  PlacesAutocompleteService({http.Client? httpClient, String? apiKey})
-      : _httpClient = httpClient ?? http.Client(),
-        _apiKey = apiKey ?? dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
+  PlacesAutocompleteService({
+    http.Client? httpClient,
+    String? apiKey,
+    KwellaEnvironment? environment,
+  })  : _httpClient = httpClient ?? http.Client(),
+        _apiKey = apiKey ??
+            const String.fromEnvironment('GOOGLE_MAPS_API_KEY'),
+        _environment = environment ?? KwellaEnvironment.current;
 
   static const int _minQueryLength = 3;
   static const String _autocompleteEndpoint =
@@ -64,10 +69,11 @@ class PlacesAutocompleteService {
 
   final http.Client _httpClient;
   final String _apiKey;
+  final KwellaEnvironment _environment;
 
   /// Returns matching place suggestions for [query]. Returns an empty list
   /// (without making a network call) when the query is shorter than three
-  /// characters or no API key is configured.
+  /// characters, or (outside local mode) no API key is configured.
   ///
   /// When [originLat]/[originLng] are supplied, results are biased toward
   /// that coordinate and annotated with [PlaceSuggestion.distanceMeters],
@@ -78,20 +84,29 @@ class PlacesAutocompleteService {
     double? originLng,
   }) async {
     final String trimmed = query.trim();
-    if (trimmed.length < _minQueryLength || _apiKey.isEmpty) {
+    if (trimmed.length < _minQueryLength) {
+      return const [];
+    }
+    if (!_environment.isLocal && _apiKey.isEmpty) {
       return const [];
     }
 
     try {
       final bool hasOrigin = originLat != null && originLng != null;
-      final Uri uri =
-          Uri.parse(_autocompleteEndpoint).replace(queryParameters: {
-        'input': trimmed,
-        'key': _apiKey,
-        if (hasOrigin) 'location': '$originLat,$originLng',
-        if (hasOrigin) 'radius': '$_biasRadiusMeters',
-        if (hasOrigin) 'origin': '$originLat,$originLng',
-      });
+      final Uri uri = _environment.isLocal
+          ? Uri.parse(_environment.httpApiEndpoint)
+              .resolve('maps/place/autocomplete')
+              .replace(queryParameters: {
+              'input': trimmed,
+              if (hasOrigin) 'location': '$originLat,$originLng',
+            })
+          : Uri.parse(_autocompleteEndpoint).replace(queryParameters: {
+              'input': trimmed,
+              'key': _apiKey,
+              if (hasOrigin) 'location': '$originLat,$originLng',
+              if (hasOrigin) 'radius': '$_biasRadiusMeters',
+              if (hasOrigin) 'origin': '$originLat,$originLng',
+            });
       final http.Response response = await _httpClient.get(uri);
       if (response.statusCode != 200) {
         return const [];
@@ -131,16 +146,23 @@ class PlacesAutocompleteService {
   /// Resolves the lat/lng of a place picked from [searchPlaces]. Returns null
   /// on any network/parse failure rather than throwing.
   Future<PlaceLocation?> getPlaceDetails(String placeId) async {
-    if (placeId.isEmpty || _apiKey.isEmpty) {
+    if (placeId.isEmpty) {
+      return null;
+    }
+    if (!_environment.isLocal && _apiKey.isEmpty) {
       return null;
     }
 
     try {
-      final Uri uri = Uri.parse(_detailsEndpoint).replace(queryParameters: {
-        'place_id': placeId,
-        'fields': 'geometry',
-        'key': _apiKey,
-      });
+      final Uri uri = _environment.isLocal
+          ? Uri.parse(_environment.httpApiEndpoint)
+              .resolve('maps/place/details')
+              .replace(queryParameters: {'place_id': placeId})
+          : Uri.parse(_detailsEndpoint).replace(queryParameters: {
+              'place_id': placeId,
+              'fields': 'geometry',
+              'key': _apiKey,
+            });
       final http.Response response = await _httpClient.get(uri);
       if (response.statusCode != 200) {
         return null;

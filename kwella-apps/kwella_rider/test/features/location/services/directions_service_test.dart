@@ -4,7 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:kwella_core/kwella_core.dart';
 import 'package:kwella_rider/features/location/services/directions_service.dart';
+
+const KwellaEnvironment _localEnv = KwellaEnvironment(
+  httpApiEndpoint: 'http://10.0.2.2:8790/',
+  isLocal: true,
+);
 
 void main() {
   group('DirectionsService', () {
@@ -125,6 +131,60 @@ void main() {
       );
 
       expect(result, isNull);
+    });
+
+    test(
+        'in local mode, routes to the mock orchestrator maps/directions '
+        'endpoint without a key param, even with no API key configured',
+        () async {
+      http.Request? capturedRequest;
+      final client = MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'status': 'OK',
+            'routes': [
+              {
+                'overview_polyline': {'points': encodedPolyline},
+                'legs': [
+                  {
+                    'distance': {'value': 5400, 'text': '5.4 km'},
+                  },
+                ],
+              },
+            ],
+          }),
+          200,
+        );
+      });
+      final service = DirectionsService(
+        httpClient: client,
+        environment: _localEnv,
+      );
+
+      final RouteResult? result = await service.getRoute(
+        origin: const LatLng(-33.9249, 18.4241),
+        destination: const LatLng(-33.9581, 18.6961),
+      );
+
+      expect(result, isNotNull);
+      expect(result!.distanceMeters, equals(5400));
+
+      expect(capturedRequest, isNotNull);
+      expect(capturedRequest!.url.host, equals('10.0.2.2'));
+      expect(capturedRequest!.url.path, equals('/maps/directions'));
+      expect(
+        capturedRequest!.url.queryParameters.containsKey('key'),
+        isFalse,
+      );
+      expect(
+        capturedRequest!.url.queryParameters['origin'],
+        equals('-33.9249,18.4241'),
+      );
+      expect(
+        capturedRequest!.url.queryParameters['destination'],
+        equals('-33.9581,18.6961'),
+      );
     });
   });
 }

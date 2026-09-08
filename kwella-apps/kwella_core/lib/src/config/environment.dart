@@ -105,12 +105,20 @@ class KwellaEnvironment {
   /// The API Gateway v2 HTTP base URL.
   final String httpApiEndpoint;
 
+  /// Whether this environment instance points at the local mock
+  /// orchestrator (`scripts/mock_orchestrator/`) rather than a real AWS
+  /// stack. Defaults to the compile-time `KWELLA_ENV=local` resolution used
+  /// by [current], but can be overridden per-instance for tests that need a
+  /// "local" [KwellaEnvironment] without relying on a dart-define.
+  final bool isLocal;
+
   const KwellaEnvironment({
     this.cognitoUserPoolId = kCognitoUserPoolId,
     this.cognitoClientId = kCognitoClientId,
     this.cognitoEndpoint = kCognitoEndpoint,
     this.webSocketEndpointUrl = kWebSocketEndpointUrl,
     this.httpApiEndpoint = kHttpApiEndpoint,
+    this.isLocal = _kEnvironmentName == 'local',
   });
 
   /// The default singleton backed by production constants.
@@ -143,6 +151,7 @@ class KwellaEnvironment {
     cognitoEndpoint: 'http://$_kMockHost:$_kMockRestPort/',
     webSocketEndpointUrl: 'ws://$_kMockHost:$_kMockPort',
     httpApiEndpoint: 'http://$_kMockHost:$_kMockRestPort/',
+    isLocal: true,
   );
 
   /// Selects [local], [staging], or [production] based on the `KWELLA_ENV`

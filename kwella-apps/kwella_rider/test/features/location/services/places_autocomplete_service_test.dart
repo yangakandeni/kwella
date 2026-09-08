@@ -3,7 +3,13 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:kwella_core/kwella_core.dart';
 import 'package:kwella_rider/features/location/services/places_autocomplete_service.dart';
+
+const KwellaEnvironment _localEnv = KwellaEnvironment(
+  httpApiEndpoint: 'http://10.0.2.2:8790/',
+  isLocal: true,
+);
 
 void main() {
   group('PlacesAutocompleteService', () {
@@ -181,6 +187,49 @@ void main() {
       expect(capturedRequest!.url.queryParameters.containsKey('location'), isFalse);
       expect(capturedRequest!.url.queryParameters.containsKey('origin'), isFalse);
     });
+
+    test(
+        'in local mode, routes to the mock orchestrator '
+        'maps/place/autocomplete endpoint without a key param, even with '
+        'no API key configured', () async {
+      http.Request? capturedRequest;
+      final client = MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'status': 'OK',
+            'predictions': [
+              {
+                'place_id': 'place-1',
+                'description': 'Shoprite Mandalay, Swartklip Road, Cape Town',
+              },
+            ],
+          }),
+          200,
+        );
+      });
+      final service = PlacesAutocompleteService(
+        httpClient: client,
+        environment: _localEnv,
+      );
+
+      final results = await service.searchPlaces(
+        'Shoprite',
+        originLat: -33.97,
+        originLng: 18.63,
+      );
+
+      expect(results, hasLength(1));
+      expect(capturedRequest, isNotNull);
+      expect(capturedRequest!.url.host, equals('10.0.2.2'));
+      expect(capturedRequest!.url.path, equals('/maps/place/autocomplete'));
+      expect(capturedRequest!.url.queryParameters.containsKey('key'), isFalse);
+      expect(capturedRequest!.url.queryParameters['input'], equals('Shoprite'));
+      expect(
+        capturedRequest!.url.queryParameters['location'],
+        equals('-33.97,18.63'),
+      );
+    });
   });
 
   group('PlacesAutocompleteService.getPlaceDetails', () {
@@ -236,6 +285,44 @@ void main() {
 
       expect(location, isNull);
       expect(callCount, equals(0));
+    });
+
+    test(
+        'in local mode, routes to the mock orchestrator '
+        'maps/place/details endpoint without a key param, even with no '
+        'API key configured', () async {
+      http.Request? capturedRequest;
+      final client = MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'status': 'OK',
+            'result': {
+              'geometry': {
+                'location': {'lat': -33.97, 'lng': 18.63},
+              },
+            },
+          }),
+          200,
+        );
+      });
+      final service = PlacesAutocompleteService(
+        httpClient: client,
+        environment: _localEnv,
+      );
+
+      final location = await service.getPlaceDetails('place-1');
+
+      expect(location, isNotNull);
+      expect(location!.lat, equals(-33.97));
+      expect(capturedRequest, isNotNull);
+      expect(capturedRequest!.url.host, equals('10.0.2.2'));
+      expect(capturedRequest!.url.path, equals('/maps/place/details'));
+      expect(capturedRequest!.url.queryParameters.containsKey('key'), isFalse);
+      expect(
+        capturedRequest!.url.queryParameters['place_id'],
+        equals('place-1'),
+      );
     });
   });
 }

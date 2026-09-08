@@ -1,10 +1,10 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
+import 'package:kwella_core/kwella_core.dart';
 
 /// A driving route between two points, as returned by
 /// [DirectionsService.getRoute].
@@ -22,35 +22,52 @@ class RouteResult {
 /// [PlacesAutocompleteService]'s "never throws" contract — network/parse
 /// failures resolve to `null` rather than propagating.
 class DirectionsService {
-  DirectionsService({http.Client? httpClient, String? apiKey})
-      : _httpClient = httpClient ?? http.Client(),
-        _apiKey = apiKey ?? dotenv.env['GOOGLE_PLACES_API_KEY'] ?? '';
+  DirectionsService({
+    http.Client? httpClient,
+    String? apiKey,
+    KwellaEnvironment? environment,
+  })  : _httpClient = httpClient ?? http.Client(),
+        _apiKey = apiKey ??
+            const String.fromEnvironment('GOOGLE_MAPS_API_KEY'),
+        _environment = environment ?? KwellaEnvironment.current;
 
   static const String _directionsEndpoint =
       'https://maps.googleapis.com/maps/api/directions/json';
 
   final http.Client _httpClient;
   final String _apiKey;
+  final KwellaEnvironment _environment;
 
   /// Fetches the driving route from [origin] to [destination]. Returns
   /// `null` when no API key is configured or the lookup fails for any
-  /// reason.
+  /// reason. When [KwellaEnvironment.isLocal] is true, requests are routed
+  /// to the mock orchestrator's `maps/directions` endpoint instead, and no
+  /// API key is required.
   Future<RouteResult?> getRoute({
     required LatLng origin,
     required LatLng destination,
   }) async {
-    if (_apiKey.isEmpty) {
+    if (!_environment.isLocal && _apiKey.isEmpty) {
       return null;
     }
 
     try {
-      final Uri uri = Uri.parse(_directionsEndpoint).replace(
-        queryParameters: {
-          'origin': '${origin.latitude},${origin.longitude}',
-          'destination': '${destination.latitude},${destination.longitude}',
-          'key': _apiKey,
-        },
-      );
+      final Uri uri = _environment.isLocal
+          ? Uri.parse(_environment.httpApiEndpoint)
+              .resolve('maps/directions')
+              .replace(queryParameters: {
+              'origin': '${origin.latitude},${origin.longitude}',
+              'destination':
+                  '${destination.latitude},${destination.longitude}',
+            })
+          : Uri.parse(_directionsEndpoint).replace(
+              queryParameters: {
+                'origin': '${origin.latitude},${origin.longitude}',
+                'destination':
+                    '${destination.latitude},${destination.longitude}',
+                'key': _apiKey,
+              },
+            );
       final http.Response response = await _httpClient.get(uri);
       if (response.statusCode != 200) {
         return null;
