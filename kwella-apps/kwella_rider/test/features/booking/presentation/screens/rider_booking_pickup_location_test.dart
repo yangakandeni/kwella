@@ -110,4 +110,25 @@ void main() {
       controller.dispose();
     },
   );
+
+  testWidgets(
+    'pickup pill shows a friendly fallback (never raw coordinates) when reverse geocoding fails',
+    (WidgetTester tester) async {
+      final fakeService = _FakeLocationService()
+        ..position = _makePosition(latitude: -33.9249, longitude: 18.4241)
+        ..addressLabel = null;
+      final controller = KwellaRiderController(locationService: fakeService);
+
+      await tester.pumpWidget(
+        MaterialApp(home: RiderBookingScreen(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Selected Location'), findsOneWidget);
+      expect(find.textContaining('-33.9'), findsNothing);
+      expect(find.textContaining('18.4'), findsNothing);
+
+      controller.dispose();
+    },
+  );
 }

@@ -165,9 +165,7 @@ class _RiderBookingScreenState extends ConsumerState<RiderBookingScreen>
             border: Border.all(color: const Color(0xFF2C2C2C)),
           ),
           child: Text(
-            location != null
-                ? 'Tracking driver at ${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}'
-                : _mapStatusLabel(state.status),
+            location != null ? 'Tracking your driver' : _mapStatusLabel(state.status),
             style: const TextStyle(
               color: Color(0xFFA0A0A0),
               fontSize: 12,

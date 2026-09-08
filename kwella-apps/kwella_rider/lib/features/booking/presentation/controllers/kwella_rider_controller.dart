@@ -29,6 +29,11 @@ final availableBidsProvider =
       return controller.availableBidsStream;
     });
 
+/// Shown in place of raw coordinates when reverse geocoding fails after a
+/// device-location lookup — the coordinate itself is still captured in
+/// pickupLat/pickupLng for routing/payload purposes; this is display-only.
+const String _kGeocodeFallbackLabel = 'Selected Location';
+
 class KwellaRiderController {
   KwellaRiderController({
     KwellaLocationService? locationService,
@@ -138,8 +143,7 @@ class KwellaRiderController {
       position.latitude,
       position.longitude,
     );
-    final String label = address ??
-        '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
+    final String label = address ?? _kGeocodeFallbackLabel;
 
     _emit(
       _state.copyWith(

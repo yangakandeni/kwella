@@ -450,7 +450,7 @@ void main() {
       controller.dispose();
     });
 
-    test('falls back to formatted coordinates when reverse geocoding fails',
+    test('falls back to a friendly label when reverse geocoding fails',
         () async {
       final fakeService = _FakeLocationService()
         ..position = _makePosition(latitude: -33.9249, longitude: 18.4241)
@@ -459,9 +459,12 @@ void main() {
 
       await controller.resolvePickupLocation();
 
-      expect(controller.state.pickupLocation, equals('-33.92490, 18.42410'));
+      expect(controller.state.pickupLocation, equals('Selected Location'));
+      expect(controller.state.pickupLocation, isNot(matches(r'-?\d')));
       expect(controller.state.pickupLocationStatus,
           equals(PickupLocationStatus.resolved));
+      expect(controller.state.pickupLat, equals(-33.9249));
+      expect(controller.state.pickupLng, equals(18.4241));
 
       controller.dispose();
     });

@@ -55,10 +55,8 @@ void main() {
         (m) => m.markerId == kDriverMarkerId,
       );
       expect(firstMarker.position, const LatLng(-34.0123, 18.6123));
-      expect(
-        find.textContaining('Tracking driver at -34.0123, 18.6123'),
-        findsOneWidget,
-      );
+      expect(find.text('Tracking your driver'), findsOneWidget);
+      expect(find.textContaining('-34.0123'), findsNothing);
 
       controller.handleIncomingWebSocketEvent({
         'action': 'liveDriverLocation',
@@ -69,10 +67,8 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 650));
 
-      expect(
-        find.textContaining('Tracking driver at -34.0100, 18.6200'),
-        findsOneWidget,
-      );
+      expect(find.text('Tracking your driver'), findsOneWidget);
+      expect(find.textContaining('-34.0100'), findsNothing);
       final Marker secondMarker = _mapMarkers(tester).singleWhere(
         (m) => m.markerId == kDriverMarkerId,
       );
