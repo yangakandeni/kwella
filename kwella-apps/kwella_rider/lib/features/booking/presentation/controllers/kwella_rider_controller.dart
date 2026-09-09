@@ -170,6 +170,29 @@ class KwellaRiderController {
     );
   }
 
+  /// Sets the pickup point from an arbitrary map coordinate — e.g. the
+  /// pickup marker being dragged to a new spot — reverse-geocoding it via
+  /// [KwellaLocationService.resolveAddressLabel] and falling back to
+  /// [_kGeocodeFallbackLabel] on failure. Delegates the actual state update
+  /// to [updatePickupLocation] so anything already reacting to pickup
+  /// lat/lng changes (route/polyline refresh) fires unchanged.
+  Future<void> updatePickupFromMapPin(double lat, double lng) async {
+    final String? address = await _locationService.resolveAddressLabel(
+      lat,
+      lng,
+    );
+    updatePickupLocation(address ?? _kGeocodeFallbackLabel, lat: lat, lng: lng);
+  }
+
+  /// Dropoff counterpart of [updatePickupFromMapPin].
+  Future<void> updateDropoffFromMapPin(double lat, double lng) async {
+    final String? address = await _locationService.resolveAddressLabel(
+      lat,
+      lng,
+    );
+    updateDropoffLocation(address ?? _kGeocodeFallbackLabel, lat: lat, lng: lng);
+  }
+
   void requestTrip({bool autoAccept = false}) {
     final payload = {
       'action': 'requestTrip',

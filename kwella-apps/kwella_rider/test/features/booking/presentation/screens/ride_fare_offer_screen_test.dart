@@ -177,6 +177,30 @@ void main() {
         isNot(equals(KwellaMapView.fallbackCenter)),
       );
     });
+
+    testWidgets(
+        'dragging the pickup pin updates the pin position and reloads the route',
+        (tester) async {
+      await pumpScreen(tester);
+      expect(directionsService.callCount, equals(1));
+
+      GoogleMap map =
+          tester.widget<GoogleMap>(find.byKey(const Key('kwella_map_view')));
+      final Marker pickupMarker =
+          map.markers.singleWhere((m) => m.markerId == kPickupMarkerId);
+      const LatLng dropped = LatLng(-33.93, 18.44);
+      pickupMarker.onDragEnd!(dropped);
+      await tester.pumpAndSettle();
+
+      map = tester.widget<GoogleMap>(find.byKey(const Key('kwella_map_view')));
+      final Marker movedPickupMarker =
+          map.markers.singleWhere((m) => m.markerId == kPickupMarkerId);
+      expect(movedPickupMarker.position, equals(dropped));
+      expect(controller.state.pickupLat, equals(dropped.latitude));
+      expect(controller.state.pickupLng, equals(dropped.longitude));
+      // _loadRoute() re-ran against the new pickup coordinate.
+      expect(directionsService.callCount, equals(2));
+    });
   });
 
   group('Regression', () {

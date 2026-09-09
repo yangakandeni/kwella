@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -16,6 +18,20 @@ const MarkerId kDropoffMarkerId = MarkerId('dropoff');
 
 /// Polyline id used for the pickup-to-dropoff route, shared with tests.
 const PolylineId kRoutePolylineId = PolylineId('route');
+
+/// 64x64 RGBA PNG of a filled circle with a white ring, in CATA Transit
+/// Green (`#1E4620`) — the pickup pin's custom marker icon. Pre-rendered
+/// (not drawn at runtime with `dart:ui`'s `Picture.toImage()`, which hangs
+/// under `flutter test` and risks the same on low-end Android hardware —
+/// see [_KwellaMapViewState._loadMarkerIcons]) so decoding it is pure CPU
+/// work with no GPU rasterizer dependency.
+const String _kPickupPinPngBase64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAuElEQVR42u3agQ2EIBAAQSoxX83335E28G9IUO7gZhML2BWjcrQGAAAwkfOGktLbxjgfpLT8UhHuBI7vp/taMsQT4r0hlpAfEe8JUUY+fYQZ8v8ilJJPFyFCPlUEAYLkf0UodfdTrAIBguXDH4PSATIs/9DHQAABBKgdwGtQAF+CApT/G7QfYEtMALvCsyOkng69MRbbYjw2EmLZSfFoiC3OCZQ9H/BGiLYDZcV7ozQAAAAAAADM4QI0AYdOf64q0gAAAABJRU5ErkJggg==';
+
+/// Dropoff counterpart of [_kPickupPinPngBase64], in Deep Slate / Obsidian
+/// Black (`#111111`).
+const String _kDropoffPinPngBase64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAtElEQVR42u3agQ2FIAwAUVZg/2F1gf8NCUoLfZc4wJ0YldIaAADAQq4HSkofG+N6kdLyW0V4Eui9D19bhnhDfDTEFvIz4iMhysinj7BC/l+EUvLpIkTIp4ogQJD8rwil7n6KVSBAsHz4Y1A6QIblH/oYCCCAALUDeA0K4EtQgPJ/g/YDbIkJYFd4dYTU06EvxmJHjMdmQmw7KZ4NccQ5gbLnA74I0U6grPholAYAAAAAAIA13FPekCJHivRIAAAAAElFTkSuQmCC';
 
 /// The real, dark-styled Google Map shared by the booking, tracking, and
 /// fare offer screens — replaces the old `_MapGridPainter`/
@@ -39,12 +55,21 @@ class KwellaMapView extends StatefulWidget {
     this.dropoffLocation,
     this.routePoints,
     this.nearbyDrivers,
+    this.onPickupDragEnd,
+    this.onDropoffDragEnd,
   });
 
   final DriverLocation? driverLocation;
   final LatLng? pickupLocation;
   final LatLng? dropoffLocation;
   final List<LatLng>? routePoints;
+
+  /// Called with the dropped position when the rider drags the pickup pin
+  /// to a new spot. Null (the default) leaves the pickup marker fixed.
+  final ValueChanged<LatLng>? onPickupDragEnd;
+
+  /// Dropoff counterpart of [onPickupDragEnd].
+  final ValueChanged<LatLng>? onDropoffDragEnd;
 
   /// Idle nearby drivers broadcast by the mock orchestrator's
   /// `nearbyDriverUpdate` frames, keyed by driverId — rendered as their own
@@ -135,6 +160,12 @@ class _KwellaMapViewState extends State<KwellaMapView> {
   GoogleMapController? _controller;
   LatLng? _pendingCameraTarget;
 
+  /// Custom pickup/dropoff pin bitmaps, generated asynchronously in
+  /// [_loadMarkerIcons]. Null until the load finishes (or if it fails),
+  /// in which case [_markers] falls back to [BitmapDescriptor.defaultMarkerWithHue].
+  BitmapDescriptor? _pickupIcon;
+  BitmapDescriptor? _dropoffIcon;
+
   /// True once both a pickup and dropoff point are supplied — the map then
   /// frames the route instead of chasing the device's live location.
   bool get _isRouteMode =>
@@ -144,7 +175,53 @@ class _KwellaMapViewState extends State<KwellaMapView> {
   void initState() {
     super.initState();
     _loadMapStyle();
+    _loadMarkerIcons();
     _requestLocationPermission();
+  }
+
+  /// Loads the pickup/dropoff pin bitmaps (pre-rendered, CATA brand-colored
+  /// PNGs embedded as base64 — see [_kPickupPinPngBase64]/
+  /// [_kDropoffPinPngBase64]) as custom marker icons.
+  ///
+  /// No marker icon image assets exist anywhere in this repo, and drawing
+  /// them at runtime via `dart:ui`'s `Picture.toImage()` (the usual
+  /// alternative to `BitmapDescriptor.fromAssetImage` when no asset file
+  /// exists) turned out to hang indefinitely under `flutter test` — a known
+  /// gap in Skia/Impeller raster support in headless test environments, and
+  /// a real risk on the low-end Android hardware this app targets in the
+  /// field. Decoding a small pre-rendered PNG is pure CPU work with no GPU
+  /// rasterizer dependency, so it's both test-safe and field-safe. Kept
+  /// `async` and swapped in via `setState` (rather than computed
+  /// synchronously in `initState`) to preserve the required load-then-swap
+  /// behavior with a safe default-marker fallback. Never throws: leaves the
+  /// corresponding icon field null (falling back to
+  /// [BitmapDescriptor.defaultMarkerWithHue]) if decoding fails for any
+  /// reason.
+  Future<void> _loadMarkerIcons() async {
+    final BitmapDescriptor? pickup = await _buildPinIcon(
+      _kPickupPinPngBase64,
+    );
+    final BitmapDescriptor? dropoff = await _buildPinIcon(
+      _kDropoffPinPngBase64,
+    );
+    if (mounted) {
+      setState(() {
+        _pickupIcon = pickup;
+        _dropoffIcon = dropoff;
+      });
+    }
+  }
+
+  static Future<BitmapDescriptor?> _buildPinIcon(String pngBase64) async {
+    try {
+      return BitmapDescriptor.bytes(
+        base64Decode(pngBase64),
+        width: 40,
+        height: 40,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -229,8 +306,12 @@ class _KwellaMapViewState extends State<KwellaMapView> {
         Marker(
           markerId: kPickupMarkerId,
           position: pickup,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          icon: _pickupIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
           anchor: const Offset(0.5, 0.5),
+          draggable: true,
+          onDragEnd: (LatLng position) =>
+              widget.onPickupDragEnd?.call(position),
         ),
       );
     }
@@ -241,8 +322,12 @@ class _KwellaMapViewState extends State<KwellaMapView> {
         Marker(
           markerId: kDropoffMarkerId,
           position: dropoff,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          icon: _dropoffIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
           anchor: const Offset(0.5, 0.5),
+          draggable: true,
+          onDragEnd: (LatLng position) =>
+              widget.onDropoffDragEnd?.call(position),
         ),
       );
     }

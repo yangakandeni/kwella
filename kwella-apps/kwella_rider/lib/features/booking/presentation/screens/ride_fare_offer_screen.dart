@@ -96,6 +96,31 @@ class _RideFareOfferScreenState extends ConsumerState<RideFareOfferScreen> {
     return ((raw / _step).round()) * _step;
   }
 
+  /// Handles a rider dragging the pickup/dropoff pin to a new spot: updates
+  /// the controller state (reverse-geocoding the dropped point) then reloads
+  /// the route/fare from the new coordinates — mirroring what [initState]
+  /// does once up front, since [_loadRoute] isn't otherwise re-triggered by
+  /// controller state changes.
+  Future<void> _onPinDragged(
+    KwellaRiderController controller, {
+    required bool isPickup,
+    required LatLng position,
+  }) async {
+    if (isPickup) {
+      await controller.updatePickupFromMapPin(
+        position.latitude,
+        position.longitude,
+      );
+    } else {
+      await controller.updateDropoffFromMapPin(
+        position.latitude,
+        position.longitude,
+      );
+    }
+    if (!mounted) return;
+    await _loadRoute(controller.state);
+  }
+
   void _adjust(double delta) {
     setState(() {
       _offerTouchedByUser = true;
@@ -164,6 +189,16 @@ class _RideFareOfferScreenState extends ConsumerState<RideFareOfferScreen> {
                     pickupLocation: pickup,
                     dropoffLocation: dropoff,
                     routePoints: _routePoints,
+                    onPickupDragEnd: (LatLng position) => _onPinDragged(
+                      controller,
+                      isPickup: true,
+                      position: position,
+                    ),
+                    onDropoffDragEnd: (LatLng position) => _onPinDragged(
+                      controller,
+                      isPickup: false,
+                      position: position,
+                    ),
                   ),
                 ),
                 Positioned(

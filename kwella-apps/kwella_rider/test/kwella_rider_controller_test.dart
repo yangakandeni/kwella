@@ -535,4 +535,65 @@ void main() {
       controller.dispose();
     });
   });
+
+  group('updatePickupFromMapPin / updateDropoffFromMapPin —', () {
+    test('reverse-geocodes a dragged pickup pin into pickupLocation', () async {
+      final fakeService = _FakeLocationService()
+        ..addressLabel = 'Long Street, Cape Town';
+      final controller = KwellaRiderController(locationService: fakeService);
+
+      await controller.updatePickupFromMapPin(-33.9249, 18.4241);
+
+      expect(controller.state.pickupLocation, equals('Long Street, Cape Town'));
+      expect(controller.state.pickupLocationStatus,
+          equals(PickupLocationStatus.resolved));
+      expect(controller.state.pickupLat, equals(-33.9249));
+      expect(controller.state.pickupLng, equals(18.4241));
+
+      controller.dispose();
+    });
+
+    test('falls back to a friendly label when reverse geocoding a dropped pickup pin fails',
+        () async {
+      final fakeService = _FakeLocationService()..addressLabel = null;
+      final controller = KwellaRiderController(locationService: fakeService);
+
+      await controller.updatePickupFromMapPin(-33.9249, 18.4241);
+
+      expect(controller.state.pickupLocation, equals('Selected Location'));
+      expect(controller.state.pickupLat, equals(-33.9249));
+      expect(controller.state.pickupLng, equals(18.4241));
+
+      controller.dispose();
+    });
+
+    test('reverse-geocodes a dragged dropoff pin into dropoffLocation', () async {
+      final fakeService = _FakeLocationService()
+        ..addressLabel = 'V&A Waterfront, Cape Town';
+      final controller = KwellaRiderController(locationService: fakeService);
+
+      await controller.updateDropoffFromMapPin(-33.9036, 18.4216);
+
+      expect(controller.state.dropoffLocation,
+          equals('V&A Waterfront, Cape Town'));
+      expect(controller.state.dropoffLat, equals(-33.9036));
+      expect(controller.state.dropoffLng, equals(18.4216));
+
+      controller.dispose();
+    });
+
+    test('falls back to a friendly label when reverse geocoding a dropped dropoff pin fails',
+        () async {
+      final fakeService = _FakeLocationService()..addressLabel = null;
+      final controller = KwellaRiderController(locationService: fakeService);
+
+      await controller.updateDropoffFromMapPin(-33.9036, 18.4216);
+
+      expect(controller.state.dropoffLocation, equals('Selected Location'));
+      expect(controller.state.dropoffLat, equals(-33.9036));
+      expect(controller.state.dropoffLng, equals(18.4216));
+
+      controller.dispose();
+    });
+  });
 }
