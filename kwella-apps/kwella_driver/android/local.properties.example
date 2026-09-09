@@ -1,0 +1,6 @@
+sdk.dir=/path/to/Android/sdk
+flutter.sdk=/path/to/flutter
+
+# Google Maps Platform API key (Maps SDK for Android enabled).
+# Copy this file to local.properties (git-ignored) and fill in your real key.
+MAPS_API_KEY=

@@ -43,6 +43,11 @@ dependencies:
   geolocator: ^14.0.3
   dio: ^5.4.0
   image_picker: ^1.1.2
+  # Trip navigation map: real GoogleMap + driving route for the driver's
+  # active trip (see trip_navigation_screen.dart).
+  google_maps_flutter: ^2.17.1
+  http: ^1.6.0
+  flutter_polyline_points: ^3.1.0
   kwella_core:
     path: ../kwella_core
 

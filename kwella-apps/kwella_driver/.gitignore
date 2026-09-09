@@ -43,3 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Secrets (Google Maps API keys) — never commit real keys, see the
+# checked-in *.example files for the expected format.
+/android/local.properties
+/ios/Flutter/Secrets.xcconfig

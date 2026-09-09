@@ -45,6 +45,8 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>GMSApiKey</key>
+	<string>$(GOOGLE_MAPS_API_KEY)</string>
 
 	<!-- ===== Phase 12: Location Tracking Usage Descriptions ===== -->
 	<!-- Foreground location rationale – shown when requesting 'When In Use' permission -->
