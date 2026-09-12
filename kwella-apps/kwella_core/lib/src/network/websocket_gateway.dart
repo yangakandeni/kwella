@@ -58,8 +58,12 @@ enum WebSocketStatus {
 class KwellaWebSocketGateway {
   /// The AWS API Gateway v2 WebSocket stage URL that this gateway targets.
   ///
-  /// Defaults to [kWebSocketEndpointUrl] (the production endpoint) when
-  /// constructed without an explicit value.
+  /// Defaults to [KwellaEnvironment.current]'s `webSocketEndpointUrl` when
+  /// constructed without an explicit value — i.e. the stage selected by the
+  /// `KWELLA_ENV` compile-time define (`local` mock orchestrator, `staging`,
+  /// otherwise production). Directly defaulting to [kWebSocketEndpointUrl]
+  /// here would silently send `--dart-define=KWELLA_ENV=local` builds at the
+  /// live production stack.
   final String endpointUrl;
 
   static const Duration _initialBackoff = Duration(seconds: 2);
@@ -86,7 +90,8 @@ class KwellaWebSocketGateway {
 
   KwellaWebSocketGateway({
     String? endpointUrl,
-  }) : endpointUrl = endpointUrl ?? kWebSocketEndpointUrl;
+  }) : endpointUrl =
+            endpointUrl ?? KwellaEnvironment.current.webSocketEndpointUrl;
 
   /// Returns `true` when an active WebSocket connection is open.
   bool get isConnected => _channel != null;

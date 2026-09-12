@@ -436,7 +436,7 @@ class KwellaTelemetryController extends StateNotifier<TelemetryState> {
     }
 
     try {
-      final offer = ActiveRideOffer.fromPushNotification(data);
+      final offer = ActiveRideOffer.fromJson(data);
       _hydrateRideOffer(offer);
     } catch (e) {
       debugPrint(

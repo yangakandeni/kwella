@@ -74,7 +74,6 @@ import 'package:kwella_rider/features/booking/presentation/screens/rate_driver_s
 import 'package:kwella_rider/features/booking/presentation/screens/ride_fare_offer_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/ride_tracking_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/rider_booking_screen.dart';
-import 'package:kwella_rider/features/location/services/directions_service.dart';
 import 'package:kwella_rider/features/location/services/places_autocomplete_service.dart';
 
 import '../features/auth/support/mock_cognito.dart';
@@ -319,13 +318,27 @@ void main() {
       expect(requestTripFrame['dropoff_latitude'], equals(dropoffLat));
       expect(requestTripFrame['dropoff_longitude'], equals(dropoffLng));
       expect(requestTripFrame['passenger_count'], equals(1));
+      // The rider's own offer now travels as `suggested_base_fare`. No route
+      // resolves under `flutter test` (the real DirectionsService's HTTP call
+      // is blocked), so RideFareOfferScreen stays on its R60 fallback
+      // recommendation and offers exactly that.
+      expect(requestTripFrame['suggested_base_fare'], equals(60.0));
       expect(controller.state.status, equals(RiderTripStatus.searching));
+      expect(controller.state.offeredFare, equals(60.0));
 
       // `_findDrivers` now pushes a dedicated ActiveSearchScreen (replacing
       // the old pop-back-to-booking-screen behavior).
       await _pumpPastTransition(tester);
       expect(find.byType(ActiveSearchScreen), findsOneWidget);
       expect(find.byKey(const Key('active_search_offer_value')), findsOneWidget);
+      // Rendered from the rider's own offer, BEFORE the TripBroadcast frame
+      // below — this used to read "R0".
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('active_search_offer_value')))
+            .data,
+        equals('R60'),
+      );
 
       // ── 4b. TripBroadcast sets the real server fare, then raise it ──────
       fakeGateway.simulateIncomingFrame(jsonEncode({

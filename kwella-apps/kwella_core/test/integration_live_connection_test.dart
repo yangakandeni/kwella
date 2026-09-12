@@ -160,6 +160,27 @@ void main() {
           KwellaEnvironment.production.webSocketEndpointUrl);
     });
 
+    test('default constructor tracks KwellaEnvironment.current, not the '
+        'bare production constant', () {
+      // Regression: the constructor used to hardcode `kWebSocketEndpointUrl`,
+      // so `--dart-define=KWELLA_ENV=local` builds (which get their gateway
+      // from `KwellaRiderController`'s `?? KwellaWebSocketGateway()` fallback,
+      // not from the provider) still dialled the live production stack. With
+      // no dart-define in the test harness, `KwellaEnvironment.current` IS
+      // production — hence the second expectation, which keeps this test
+      // honest in either configuration.
+      final gateway = KwellaWebSocketGateway();
+      expect(
+        gateway.endpointUrl,
+        KwellaEnvironment.current.webSocketEndpointUrl,
+      );
+      expect(
+        KwellaEnvironment.current.webSocketEndpointUrl,
+        KwellaEnvironment.production.webSocketEndpointUrl,
+        reason: 'No KWELLA_ENV dart-define is set under `flutter test`.',
+      );
+    });
+
     test('gateway constructed with custom URL preserves the override', () {
       const staging = 'wss://staging.execute-api.af-south-1.amazonaws.com/dev';
       final gateway = KwellaWebSocketGateway(endpointUrl: staging);

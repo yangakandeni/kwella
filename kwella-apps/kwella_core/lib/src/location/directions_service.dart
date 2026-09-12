@@ -4,28 +4,25 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
-import 'package:kwella_core/kwella_core.dart';
+import '../config/environment.dart';
 
 /// A driving route between two points, as returned by
 /// [DirectionsService.getRoute].
-///
-/// Duplicated from `kwella_rider`'s service of the same name rather than
-/// shared via `kwella_core` — no stateful/plugin-backed service has ever
-/// been promoted there (the two apps even run separate WebSocket service
-/// implementations), so this follows existing precedent rather than being
-/// the first cross-app extraction.
 class RouteResult {
   const RouteResult({required this.points, required this.distanceMeters});
 
   /// Decoded path of the route, in drawing order from origin to destination.
   final List<LatLng> points;
 
-  /// Total route distance, used to estimate ETA/remaining distance.
+  /// Total route distance — drives the rider's recommended fare and the
+  /// driver's remaining-distance banner.
   final int distanceMeters;
 }
 
-/// Thin wrapper around the Google Directions (Routes) API. Network/parse
-/// failures resolve to `null` rather than propagating.
+/// Thin wrapper around the Google Directions (Routes) API, shared by
+/// `kwella_rider` (route + fare estimate) and `kwella_driver` (route +
+/// remaining distance). Never throws: network/parse failures resolve to
+/// `null` rather than propagating.
 class DirectionsService {
   DirectionsService({
     http.Client? httpClient,

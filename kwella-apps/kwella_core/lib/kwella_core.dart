@@ -18,6 +18,9 @@ export 'src/network/aws_error_interceptor.dart';
 export 'src/network/bidding_events.dart';
 export 'src/network/event_multiplexer.dart';
 
+// ── Location ──────────────────────────────────────────────────────────────
+export 'src/location/directions_service.dart';
+
 // ── Models ────────────────────────────────────────────────────────────────
 export 'src/models/models_placeholder.dart';
 export 'src/models/driver_bid.dart';

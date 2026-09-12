@@ -1,12 +1,13 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:kwella_core/kwella_core.dart';
 
 import '../../../location/presentation/controllers/kwella_telemetry_controller.dart';
-import '../../../location/services/directions_service.dart';
 import '../../../location/services/kwella_location_service.dart';
 import '../../models/active_ride_offer.dart';
 
@@ -126,24 +127,17 @@ class _TripNavigationScreenState extends ConsumerState<TripNavigationScreen> {
     }
 
     final LatLng dropoffLatLng = LatLng(dropoffLat, dropoffLng);
-    final double minLat = driverLatLng.latitude < dropoffLatLng.latitude
-        ? driverLatLng.latitude
-        : dropoffLatLng.latitude;
-    final double maxLat = driverLatLng.latitude > dropoffLatLng.latitude
-        ? driverLatLng.latitude
-        : dropoffLatLng.latitude;
-    final double minLng = driverLatLng.longitude < dropoffLatLng.longitude
-        ? driverLatLng.longitude
-        : dropoffLatLng.longitude;
-    final double maxLng = driverLatLng.longitude > dropoffLatLng.longitude
-        ? driverLatLng.longitude
-        : dropoffLatLng.longitude;
-
     controller.animateCamera(
       CameraUpdate.newLatLngBounds(
         LatLngBounds(
-          southwest: LatLng(minLat, minLng),
-          northeast: LatLng(maxLat, maxLng),
+          southwest: LatLng(
+            math.min(driverLatLng.latitude, dropoffLatLng.latitude),
+            math.min(driverLatLng.longitude, dropoffLatLng.longitude),
+          ),
+          northeast: LatLng(
+            math.max(driverLatLng.latitude, dropoffLatLng.latitude),
+            math.max(driverLatLng.longitude, dropoffLatLng.longitude),
+          ),
         ),
         48,
       ),
@@ -256,8 +250,8 @@ class _TripNavigationScreenState extends ConsumerState<TripNavigationScreen> {
                               ),
                             ),
                             Text(
-                              '📍 ${offer?.pickupLocation ?? 'Pickup location unavailable'}',
-                              key: const Key('pickup_location_label'),
+                              '📍 ${offer?.dropoffLocation ?? 'Dropoff location unavailable'}',
+                              key: const Key('dropoff_location_label'),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(

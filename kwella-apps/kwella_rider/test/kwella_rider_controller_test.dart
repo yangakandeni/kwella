@@ -126,9 +126,71 @@ void main() {
         'dropoff_longitude': 18.5,
         'passenger_count': 2,
       }));
+      // No rider offer passed => no `suggested_base_fare` key on the wire at
+      // all, leaving the pre-existing payload contract byte-identical.
+      expect(
+        fakeGateway.sentPayloads.single.containsKey('suggested_base_fare'),
+        isFalse,
+      );
+      expect(controller.state.offeredFare, isNull);
       expect(controller.state.status, equals(RiderTripStatus.searching));
 
       controller.dispose();
+    });
+
+    test('requestTrip() sends the rider offer as suggested_base_fare and '
+        'seeds state.offeredFare', () {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      controller.updatePickupLocation('Pickup', lat: -34.0103967, lng: 18.6156183);
+      controller.updateDropoffLocation('Dropoff', lat: -33.9930, lng: 18.5920);
+      controller.setPassengerCount(1);
+      controller.requestTrip(offeredFare: 60.0, autoAccept: true);
+
+      expect(fakeGateway.sentPayloads, hasLength(1));
+      expect(fakeGateway.sentPayloads.single, equals({
+        'action': 'requestTrip',
+        'riderId': null,
+        'pickup_latitude': -34.0103967,
+        'pickup_longitude': 18.6156183,
+        'dropoff_latitude': -33.9930,
+        'dropoff_longitude': 18.5920,
+        'passenger_count': 1,
+        'suggested_base_fare': 60.0,
+      }));
+      // Optimistic local seed so the active-search sheet can render the
+      // rider's own number instead of R0 — see the TripBroadcast test below
+      // for the server-authoritative reconciliation that overrides it.
+      expect(controller.state.offeredFare, equals(60.0));
+      expect(controller.state.status, equals(RiderTripStatus.searching));
+      expect(controller.state.autoAcceptEnabled, isTrue);
+
+      controller.dispose();
+    });
+
+    test('TripBroadcast still overrides the optimistic rider offer with the '
+        'server-calculated fare', () async {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+      await controller.connect(riderId: 'rider-7', accessToken: 'token');
+
+      controller.requestTrip(offeredFare: 60.0);
+      expect(controller.state.offeredFare, equals(60.0));
+
+      // The backend must never trust the client's `suggested_base_fare`
+      // (server-side fare floor: total fare >= flat_rate x 6), so its value
+      // wins once it lands.
+      controller.handleIncomingWebSocketEvent(const {
+        'status': 'TripBroadcast',
+        'tripId': 'TRP#server-1',
+        'calculated_fare': '150',
+      });
+
+      expect(controller.state.offeredFare, equals(150.0));
+
+      controller.dispose();
+      await fakeGateway.disconnect();
     });
 
     test('requestTrip() includes the riderId set via connect()', () async {

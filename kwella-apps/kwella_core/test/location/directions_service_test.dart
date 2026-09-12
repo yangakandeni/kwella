@@ -5,7 +5,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:kwella_core/kwella_core.dart';
-import 'package:kwella_rider/features/location/services/directions_service.dart';
 
 const KwellaEnvironment _localEnv = KwellaEnvironment(
   httpApiEndpoint: 'http://10.0.2.2:8790/',

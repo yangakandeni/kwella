@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:kwella_core/kwella_core.dart';
 
-import '../../../location/services/directions_service.dart';
 import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
 import '../widgets/driver_bid_card.dart';

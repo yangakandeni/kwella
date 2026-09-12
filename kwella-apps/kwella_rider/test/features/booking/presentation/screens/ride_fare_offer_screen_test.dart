@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:kwella_core/kwella_core.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/kwella_rider_controller.dart';
 import 'package:kwella_rider/features/booking/presentation/controllers/rider_trip_state.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/active_search_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/screens/ride_fare_offer_screen.dart';
 import 'package:kwella_rider/features/booking/presentation/widgets/kwella_map_view.dart';
-import 'package:kwella_rider/features/location/services/directions_service.dart';
 
 const LatLng _pickup = LatLng(-33.9249, 18.4241);
 const LatLng _dropoff = LatLng(-33.9581, 18.6961);
@@ -261,6 +261,67 @@ void main() {
       expect(controller.state.status, equals(RiderTripStatus.searching));
       expect(find.byType(ActiveSearchScreen), findsOneWidget);
       expect(find.byKey(const Key('active_search_offer_value')), findsOneWidget);
+    });
+
+    testWidgets(
+        'Find Drivers carries the rider offer into the active search sheet '
+        'before any server frame arrives',
+        (tester) async {
+      // Regression: `_findDrivers` used to drop `_offeredFare` on the floor,
+      // so ActiveSearchScreen rendered `state.offeredFare ?? 0` => "R0"
+      // until (or unless) a TripBroadcast frame turned up.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: Center(
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => RideFareOfferScreen(
+                        controller: controller,
+                        directionsService: directionsService,
+                      ),
+                    ),
+                  ),
+                  child: const Text('Open fare offer'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Open fare offer'));
+      await tester.pumpAndSettle();
+
+      // The 4 km fake route puts the rider's offer at R50; bump it twice so
+      // the asserted value can only have come from this screen's own state.
+      await tester.ensureVisible(find.byKey(const Key('increase_fare_button')));
+      await tester.tap(find.byKey(const Key('increase_fare_button')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('increase_fare_button')));
+      await tester.pump();
+      expect(
+        tester.widget<Text>(find.byKey(const Key('your_offer_value'))).data,
+        equals('R60'),
+      );
+
+      await tester.ensureVisible(find.byKey(const Key('find_drivers_button')));
+      await tester.tap(find.byKey(const Key('find_drivers_button')));
+      await tester.pump();
+      await tester.pump();
+
+      // Seeded optimistically by requestTrip(offeredFare: ...) — no
+      // TripBroadcast has been simulated at this point.
+      expect(controller.state.offeredFare, equals(60.0));
+      expect(find.byType(ActiveSearchScreen), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('active_search_offer_value')))
+            .data,
+        equals('R60'),
+      );
     });
   });
 }

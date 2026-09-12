@@ -212,9 +212,8 @@ void main() {
     });
 
     testWidgets(
-        'pickup/dropoff markers start on the default hue icon and swap to the '
-        'custom brand-colored bitmap once it finishes loading asynchronously',
-        (WidgetTester tester) async {
+        'pickup/dropoff markers carry the custom brand-colored bitmap on the '
+        'very first frame', (WidgetTester tester) async {
       await tester.pumpWidget(
         const MaterialApp(
           home: Scaffold(
@@ -223,31 +222,25 @@ void main() {
         ),
       );
 
-      // Before the async icon-drawing future resolves, the widget must
-      // still render a usable (default) icon — never blank, never a crash.
       // `BitmapDescriptor` has no `==` override, so compare via `toJson()`
-      // (its wire representation) rather than object identity.
+      // (its wire representation) rather than object identity. Decoding the
+      // pre-rendered PNG is synchronous, so no pump is needed first — the
+      // markers are never rendered with a stand-in icon.
       final Object defaultGreenJson =
           BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen)
               .toJson();
       final Object defaultRedJson =
           BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed)
               .toJson();
-      final Marker initialPickupMarker = _mapWidget(tester)
+      final Marker pickupMarker = _mapWidget(tester)
           .markers
           .singleWhere((m) => m.markerId == kPickupMarkerId);
-      expect(initialPickupMarker.icon.toJson(), equals(defaultGreenJson));
-
-      await tester.pumpAndSettle();
-
-      final Marker loadedPickupMarker = _mapWidget(tester)
-          .markers
-          .singleWhere((m) => m.markerId == kPickupMarkerId);
-      final Marker loadedDropoffMarker = _mapWidget(tester)
+      final Marker dropoffMarker = _mapWidget(tester)
           .markers
           .singleWhere((m) => m.markerId == kDropoffMarkerId);
-      expect(loadedPickupMarker.icon.toJson(), isNot(equals(defaultGreenJson)));
-      expect(loadedDropoffMarker.icon.toJson(), isNot(equals(defaultRedJson)));
+
+      expect(pickupMarker.icon.toJson(), isNot(equals(defaultGreenJson)));
+      expect(dropoffMarker.icon.toJson(), isNot(equals(defaultRedJson)));
     });
   });
 

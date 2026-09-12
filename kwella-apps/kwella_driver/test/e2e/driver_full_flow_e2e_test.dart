@@ -119,12 +119,11 @@ Widget _buildDriverApp({
   );
 }
 
-/// A well-formed `rideOfferAvailable` payload matching what
-/// `ActiveRideOffer.fromJson` actually parses (verified against the current
-/// implementation, not the field names as commonly written in prose): camelCase
-/// `pickupLocation`/`dropoffLocation`/`baseFare`/`expiresAt`, with the rider id
-/// arriving as snake_case `rider_id` — exactly the shape already exercised by
-/// `test/features/location/presentation/controllers/kwella_telemetry_controller_test.dart`.
+/// The `rideOfferAvailable` frame as `kwella-backend/src/lambdas/
+/// bidding_engine/handler.py` emits it — coordinate pairs, a string
+/// `base_fare`, a relative `expires_in_seconds`, and no address strings
+/// anywhere. Copied from the producing handler so this e2e exercises the
+/// real contract rather than whatever the parser tolerates.
 Map<String, dynamic> _rideOfferPayload({
   required String tripId,
   required String riderId,
@@ -133,12 +132,12 @@ Map<String, dynamic> _rideOfferPayload({
   return {
     'action': 'rideOfferAvailable',
     'tripId': tripId,
-    'pickupLocation': 'Cape Town CBD',
-    'dropoffLocation': 'V&A Waterfront',
-    'baseFare': baseFare,
-    'expiresAt':
-        DateTime.now().toUtc().add(const Duration(seconds: 15)).toIso8601String(),
     'rider_id': riderId,
+    'pickup_location': const [-33.9249, 18.4241],
+    'dropoff_location': const [-33.9581, 18.6961],
+    'passenger_count': 3,
+    'base_fare': baseFare.toString(),
+    'expires_in_seconds': 15,
   };
 }
 

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:kwella_core/kwella_core.dart';
 
-import '../../../location/services/directions_service.dart';
 import '../../../location/utils/location_display_formatter.dart';
 import '../controllers/kwella_rider_controller.dart';
 import '../controllers/rider_trip_state.dart';
@@ -129,7 +129,10 @@ class _RideFareOfferScreenState extends ConsumerState<RideFareOfferScreen> {
   }
 
   void _findDrivers(KwellaRiderController controller) {
-    controller.requestTrip(autoAccept: _autoAccept);
+    controller.requestTrip(
+      offeredFare: _offeredFare,
+      autoAccept: _autoAccept,
+    );
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => ActiveSearchScreen(

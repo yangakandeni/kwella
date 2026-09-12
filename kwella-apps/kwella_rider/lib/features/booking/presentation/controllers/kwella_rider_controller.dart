@@ -193,8 +193,23 @@ class KwellaRiderController {
     updateDropoffLocation(address ?? _kGeocodeFallbackLabel, lat: lat, lng: lng);
   }
 
-  void requestTrip({bool autoAccept = false}) {
-    final payload = {
+  /// Sends the `requestTrip` frame and flips local state to searching.
+  ///
+  /// [offeredFare] is the rider's own fare offer, as set on the fare-offer
+  /// screen. When non-null it travels on the wire as `suggested_base_fare`
+  /// (the established contract field — see
+  /// `scripts/simulate_marketplace_trip.py`) and is optimistically seeded
+  /// into `state.offeredFare` so the active-search sheet renders the
+  /// rider's own number straight away instead of R0. It is reconciled for
+  /// real once the server's `TripBroadcast` frame lands with its
+  /// `calculated_fare`: the backend never trusts the client's suggestion,
+  /// because the server-side fare floor (`flat_rate x 6 seats`) is
+  /// authoritative.
+  ///
+  /// When [offeredFare] is null the payload carries no `suggested_base_fare`
+  /// key at all, leaving the wire contract exactly as it was.
+  void requestTrip({double? offeredFare, bool autoAccept = false}) {
+    final payload = <String, dynamic>{
       'action': 'requestTrip',
       'riderId': _riderId,
       'pickup_latitude': _state.pickupLat,
@@ -202,6 +217,9 @@ class KwellaRiderController {
       'dropoff_latitude': _state.dropoffLat,
       'dropoff_longitude': _state.dropoffLng,
       'passenger_count': _state.passengerCount,
+      // Null-aware element: the key is omitted entirely when the rider
+      // passed no offer, keeping the original payload contract intact.
+      'suggested_base_fare': ?offeredFare,
     };
     if (kDebugMode) {
       debugPrint('[KwellaRiderController] Requesting trip with payload: ${jsonEncode(payload)}');
@@ -209,12 +227,14 @@ class KwellaRiderController {
       debugPrint('  - pickup: (${_state.pickupLat}, ${_state.pickupLng})');
       debugPrint('  - dropoff: (${_state.dropoffLat}, ${_state.dropoffLng})');
       debugPrint('  - passengers: ${_state.passengerCount}');
+      debugPrint('  - offered fare: $offeredFare');
     }
     _pushWebSocketMessage(payload);
     _emit(
       _state.copyWith(
         status: RiderTripStatus.searching,
         autoAcceptEnabled: autoAccept,
+        offeredFare: offeredFare,
       ),
     );
   }

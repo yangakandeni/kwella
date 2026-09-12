@@ -133,26 +133,27 @@ Position _makePosition({
 }
 
 // ---------------------------------------------------------------------------
-// Helper: build a well-formed rideOfferAvailable payload map.
+// Helper: the rideOfferAvailable frame as handler.py's
+// _dispatch_ride_offer_to_matched_drivers actually builds it — coordinate
+// pairs, a string base_fare, and a relative expiry. Copied from the
+// producing handler, not from what the parser happens to accept.
 // ---------------------------------------------------------------------------
 Map<String, dynamic> _makeRideOfferPayload({
   String tripId = 'TRIP#test-001',
-  String pickupLocation = 'Cape Town CBD',
-  String dropoffLocation = 'V&A Waterfront',
+  List<double> pickup = const [-33.9249, 18.4241],
+  List<double> dropoff = const [-33.9581, 18.6961],
   double baseFare = 45.50,
-  DateTime? expiresAt,
   String? riderId = 'USR#rider-001',
 }) {
-  final expiry =
-      expiresAt ?? DateTime.now().toUtc().add(const Duration(seconds: 15));
   return {
     'action': 'rideOfferAvailable',
     'tripId': tripId,
-    'pickupLocation': pickupLocation,
-    'dropoffLocation': dropoffLocation,
-    'baseFare': baseFare,
-    'expiresAt': expiry.toIso8601String(),
     'rider_id': riderId,
+    'pickup_location': pickup,
+    'dropoff_location': dropoff,
+    'passenger_count': 3,
+    'base_fare': baseFare.toString(),
+    'expires_in_seconds': 15,
   };
 }
 
@@ -466,8 +467,6 @@ void main() {
       // Feed the marketplace event.
       final payload = _makeRideOfferPayload(
         tripId: 'TRIP#hydrate-001',
-        pickupLocation: 'Cape Town CBD',
-        dropoffLocation: 'V&A Waterfront',
         baseFare: 55.00,
       );
       wsService.feedMessage(payload);
@@ -478,8 +477,8 @@ void main() {
       final offer = controller.state.activeOffer;
       expect(offer, isNotNull);
       expect(offer!.tripId, equals('TRIP#hydrate-001'));
-      expect(offer.pickupLocation, equals('Cape Town CBD'));
-      expect(offer.dropoffLocation, equals('V&A Waterfront'));
+      expect(offer.pickupLocation, equals('Pickup @ -33.92490, 18.42410'));
+      expect(offer.dropoffLocation, equals('Dropoff @ -33.95810, 18.69610'));
       expect(offer.baseFare, closeTo(55.00, 0.001));
       expect(controller.state.offerSecondsRemaining, equals(15));
     });
@@ -489,32 +488,25 @@ void main() {
       locationService.fakeStream = const Stream<Position>.empty();
       await controller.startDriverTracking(driverId: 'USR#drv-12345');
 
-      final expiresAt = DateTime.utc(
-        2024,
-        6,
-        21,
-        8,
-        0,
-        15,
-      ); // fixed for assertion
-
       wsService.feedMessage({
         'action': 'rideOfferAvailable',
         'tripId': 'TRIP#field-check',
-        'pickupLocation': 'Sandton City',
-        'dropoffLocation': 'OR Tambo International',
-        'baseFare': 320.75,
-        'expiresAt': expiresAt.toIso8601String(),
+        'rider_id': 'USR#rider-77',
+        'pickup_location': const [-26.1076, 28.0567],
+        'dropoff_location': const [-26.1367, 28.2411],
+        'passenger_count': 2,
+        'base_fare': '320.75',
+        'expires_in_seconds': 15,
       });
 
       await Future<void>.delayed(Duration.zero);
 
       final offer = controller.state.activeOffer!;
       expect(offer.tripId, equals('TRIP#field-check'));
-      expect(offer.pickupLocation, equals('Sandton City'));
-      expect(offer.dropoffLocation, equals('OR Tambo International'));
+      expect(offer.riderId, equals('USR#rider-77'));
+      expect(offer.pickupLat, equals(-26.1076));
+      expect(offer.dropoffLng, equals(28.2411));
       expect(offer.baseFare, closeTo(320.75, 0.001));
-      expect(offer.expiresAt, equals(expiresAt));
     });
 
     test('a second rideOfferAvailable event replaces the previous offer and '
@@ -552,8 +544,8 @@ void main() {
       // Feed a malformed offer (missing required fields).
       wsService.feedMessage({
         'action': 'rideOfferAvailable',
-        // Missing tripId, pickupLocation, etc.
-        'baseFare': 'not-a-number',
+        // Missing tripId, coordinates, etc.
+        'base_fare': 'not-a-number',
       });
       await Future<void>.delayed(Duration.zero);
 
@@ -567,16 +559,13 @@ void main() {
         locationService.fakeStream = const Stream<Position>.empty();
         wsService._connected = false;
 
+        // The FCM fallback data map (_send_fcm_push_via_sns) — only
+        // action/tripId/base_fare/click_action ever reach the app here.
         final payload = {
           'action': 'rideOfferAvailable',
           'tripId': 'TRIP#push-001',
-          'pickupLocation': 'Woodstock',
-          'dropoffLocation': 'Sea Point',
-          'base_fare': 128.50,
-          'expiresAt': DateTime.now()
-              .toUtc()
-              .add(const Duration(seconds: 15))
-              .toIso8601String(),
+          'base_fare': '128.50',
+          'click_action': 'FLUTTER_NOTIFICATION_CLICK',
         };
 
         controller.handlePushNotificationClick(payload);
