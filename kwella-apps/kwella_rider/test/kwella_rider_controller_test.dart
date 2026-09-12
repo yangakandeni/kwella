@@ -125,6 +125,7 @@ void main() {
         'dropoff_latitude': -34.0,
         'dropoff_longitude': 18.5,
         'passenger_count': 2,
+        'payment_method': 'CASH',
       }));
       // No rider offer passed => no `suggested_base_fare` key on the wire at
       // all, leaving the pre-existing payload contract byte-identical.
@@ -157,6 +158,7 @@ void main() {
         'dropoff_latitude': -33.9930,
         'dropoff_longitude': 18.5920,
         'passenger_count': 1,
+        'payment_method': 'CASH',
         'suggested_base_fare': 60.0,
       }));
       // Optimistic local seed so the active-search sheet can render the
@@ -191,6 +193,25 @@ void main() {
 
       controller.dispose();
       await fakeGateway.disconnect();
+    });
+
+    test('requestTrip() carries the rider\'s selected payment_method', () {
+      final fakeGateway = FakeWebSocketGateway();
+      final controller = KwellaRiderController(gateway: fakeGateway);
+
+      // Default is CASH, but the rider's explicit choice on
+      // PaymentMethodScreen must be the value that travels on the wire —
+      // the driver needs to know before bidding whether they are taking a
+      // cash fare (cancellation-debt exposure) or a card one.
+      controller.setPaymentMethod('CARD');
+      controller.requestTrip();
+
+      expect(
+        fakeGateway.sentPayloads.single['payment_method'],
+        equals('CARD'),
+      );
+
+      controller.dispose();
     });
 
     test('requestTrip() includes the riderId set via connect()', () async {

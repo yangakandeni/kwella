@@ -244,9 +244,11 @@ def test_receipt_is_created_automatically_when_a_trip_completes(state: Orchestra
 
     status, body = rc.get_receipt(driver_state, trip_id)
     assert status == 200
+    # The product's worked example: the pair agree on R100, kwella takes its
+    # 10% out of the driver's side, the driver banks R90.
     assert body["fareAmount"] == 100.0
-    assert body["netDriverEarnings"] == 85.0
-    assert body["platformFee"] == 15.0
+    assert body["netDriverEarnings"] == 90.0
+    assert body["platformFee"] == 10.0
 
 
 # ---------------------------------------------------------------------------

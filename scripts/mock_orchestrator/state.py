@@ -104,6 +104,7 @@ class Trip:
     dropoff: tuple[float, float]
     passenger_count: int
     base_fare: float
+    payment_method: str = "CASH"
     status: TripStatus = TripStatus.BROADCASTING
     selected_driver_id: str | None = None
     bids: dict[str, Bid] = field(default_factory=dict)
@@ -119,6 +120,7 @@ class Trip:
             "dropoff": list(self.dropoff),
             "passengerCount": self.passenger_count,
             "baseFare": self.base_fare,
+            "paymentMethod": self.payment_method,
             "status": self.status.value,
             "selectedDriverId": self.selected_driver_id,
             "bids": [b.to_dict() for b in self.bids.values()],

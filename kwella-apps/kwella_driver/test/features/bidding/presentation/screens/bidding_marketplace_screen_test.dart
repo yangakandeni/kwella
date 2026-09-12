@@ -84,11 +84,11 @@ void main() {
     // Verify widgets
     expect(find.byType(CircularProgressIndicator), findsNothing);
     expect(find.text('drv_test_1'), findsOneWidget);
-    expect(find.text('\$150.00'), findsOneWidget);
+    expect(find.text('R150.00'), findsOneWidget);
     expect(find.text('5 mins'), findsOneWidget);
 
     expect(find.text('drv_test_2'), findsOneWidget);
-    expect(find.text('\$120.50'), findsOneWidget);
+    expect(find.text('R120.50'), findsOneWidget);
     expect(find.text('12 mins'), findsOneWidget);
 
     expect(find.text('Accept Bid'), findsNWidgets(2));
@@ -100,7 +100,7 @@ void main() {
     // Verify SnackBar message appears
     expect(find.byType(SnackBar), findsOneWidget);
     expect(
-      find.text('Accepted bid from drv_test_1 for \$150.00'),
+      find.text('Accepted bid from drv_test_1 for R150.00'),
       findsOneWidget,
     );
   });

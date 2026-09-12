@@ -39,13 +39,18 @@ import logging
 import os
 import uuid
 from datetime import datetime, UTC
-from typing import Any
+from typing import Any, Final
 
 import boto3
 import botocore.exceptions
 from decimal import Decimal
 
-from fare_calculator import calculate_trip_fare
+from fare_calculator import (
+    DRIVER_PAYOUT_RATE,
+    FARE_QUANTUM_ZAR,
+    calculate_trip_fare,
+    is_quantized_fare,
+)
 from geofence_utils import calculate_distance, is_inside_geofence
 
 # Initialize Logger
@@ -197,6 +202,29 @@ def _extract_auth_params(event: dict[str, Any]) -> str | None:
     return None
 
 
+#: Payment methods kwella can actually settle. Card is accepted on the wire
+#: (the rider app ships it as a "coming soon" option) but anything outside
+#: this set degrades to CASH rather than being rejected: an unrecognised
+#: value must never become a trip nobody can collect payment on.
+_SUPPORTED_PAYMENT_METHODS: Final[frozenset[str]] = frozenset({"CASH", "CARD"})
+_DEFAULT_PAYMENT_METHOD: Final[str] = "CASH"
+
+
+def _normalise_payment_method(raw: Any) -> str:
+    """Coerce a client-supplied `payment_method` into a supported method.
+
+    Case-insensitive, whitespace-tolerant, and falls back to
+    ``_DEFAULT_PAYMENT_METHOD`` for absent, empty, non-string or unknown
+    values so the trip always carries a settleable method.
+    """
+    if not isinstance(raw, str):
+        return _DEFAULT_PAYMENT_METHOD
+    candidate = raw.strip().upper()
+    if candidate not in _SUPPORTED_PAYMENT_METHODS:
+        return _DEFAULT_PAYMENT_METHOD
+    return candidate
+
+
 def _dispatch_ride_offer_to_matched_drivers(
     table: Any,
     apigw_client: Any,
@@ -208,6 +236,7 @@ def _dispatch_ride_offer_to_matched_drivers(
     rider_id: str | None = None,
     dropoff_lat: float | None = None,
     dropoff_lon: float | None = None,
+    payment_method: str = _DEFAULT_PAYMENT_METHOD,
 ) -> list[str]:
     """Scan active driver TELEMETRY records, filter to those within
     _TRIP_MATCH_RADIUS_M metres of the pickup point, and dispatch a
@@ -245,6 +274,10 @@ def _dispatch_ride_offer_to_matched_drivers(
         "dropoff_location": [dropoff_lat, dropoff_lon],
         "passenger_count": passenger_count,
         "base_fare": str(base_fare),
+        # Drivers bid differently on cash: a late cash cancellation is what
+        # puts a rider on Debt Status, so the method has to be visible on the
+        # offer rather than discovered at pickup.
+        "payment_method": payment_method,
         "expires_in_seconds": _RIDE_OFFER_TTL_SECONDS,
     }
     offer_data = json.dumps(offer_payload).encode("utf-8")
@@ -453,6 +486,20 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             rider_id: str | None = body.get("rider_id") or body.get("riderId")
             trip_id: str | None = body.get("tripId") or body.get("trip_id")
             bid_amount = body.get("amount") or body.get("counter_fare") or body.get("baseline_fare")
+            # A counter-offer is what the rider ends up handing over in cash
+            # if they accept it, so it is gated on the same R0.50 quantum as
+            # the engine's own quote. Absent amounts still pass through: the
+            # route also serves plain "accept the broadcast fare" bids.
+            if bid_amount is not None and not is_quantized_fare(bid_amount):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": (
+                            f"Bid amount must be a multiple of R{FARE_QUANTUM_ZAR}."
+                        ),
+                    }),
+                }
             estimated_pickup = body.get("estimated_pickup") or body.get("estimatedPickup")
             broadcast_pk = body.get("broadcast_pk") or body.get("broadcastPk")
 
@@ -822,6 +869,19 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         "detail": "Missing or invalid required field 'new_fare'.",
                     }),
                 }
+            # A sweetened offer goes straight back out to the driver pool as
+            # the fare a driver can accept, so it is held to the same cash
+            # quantum the engine quotes on — nobody can pay R150.37 in coins.
+            if not is_quantized_fare(new_fare):
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({
+                        "error": "ValidationError",
+                        "detail": (
+                            f"Field 'new_fare' must be a multiple of R{FARE_QUANTUM_ZAR}."
+                        ),
+                    }),
+                }
 
             trip_res = table.get_item(Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"})
             trip_item = trip_res.get("Item")
@@ -909,6 +969,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 updated_passenger_count = 1
 
             updated_rider_id = updated_item.get("rider_id") or None
+            updated_payment_method = _normalise_payment_method(
+                updated_item.get("payment_method")
+            )
 
             if updated_pickup_lat is not None and updated_pickup_lon is not None:
                 apigw_client: Any = None
@@ -930,6 +993,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     rider_id=updated_rider_id,
                     dropoff_lat=updated_dropoff_lat,
                     dropoff_lon=updated_dropoff_lon,
+                    payment_method=updated_payment_method,
                 )
             else:
                 logger.warning(
@@ -1410,9 +1474,15 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     }),
                 }
 
-            # Safely convert to Decimal for accurate math
+            # Safely convert to Decimal for accurate math.
+            #
+            # kwella's commission comes out of the driver's side of the agreed
+            # fare and nowhere else — the rider pays exactly what they and the
+            # driver settled on. The rate lives in the shared fare engine so
+            # this handler, the ledger service and the mock orchestrator can
+            # never drift to three different cuts.
             amount_decimal = Decimal(str(final_bid_amount))
-            net_earnings = (amount_decimal * Decimal("0.85")).quantize(Decimal("0.01"))
+            net_earnings = (amount_decimal * DRIVER_PAYOUT_RATE).quantize(Decimal("0.01"))
 
             try:
                 logger.info(
@@ -1696,6 +1766,13 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             except (TypeError, ValueError):
                 passenger_count = 1
 
+            # How the rider intends to pay (PaymentMethodScreen). Persisted on
+            # the trip so settlement and the cancellation-debt rules have an
+            # authoritative record, and pushed to drivers on the offer.
+            payment_method = _normalise_payment_method(
+                payload.get("payment_method") or payload.get("paymentMethod")
+            )
+
             # Validate required fields.
             required_fields = {
                 "riderId": rider_id,
@@ -1775,6 +1852,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     "destination_longitude": str(dropoff_lon),
                     "passenger_count": passenger_count,
                     "calculated_fare": str(calculated_fare),
+                    "payment_method": payment_method,
                     "status": "ACCEPTED",
                     "rider_id": rider_id or "",
                     "rider_connection_id": connection_id,
@@ -1803,6 +1881,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 rider_id=rider_id,
                 dropoff_lat=dropoff_lat,
                 dropoff_lon=dropoff_lon,
+                payment_method=payment_method,
             )
 
             logger.info(
@@ -1820,6 +1899,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     "matched_drivers": matched_driver_ids,
                     "passenger_count": passenger_count,
                     "calculated_fare": str(calculated_fare),
+                    "payment_method": payment_method,
                 }),
             }
 

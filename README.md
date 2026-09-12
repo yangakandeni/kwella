@@ -24,6 +24,75 @@ The platform architecture enforces a strict decoupling between the client presen
 *   Riders select a passenger count from **1 to 6**[cite: 1, 2].
 *   The backend calculates a baseline recommended fare that scales dynamically by passenger count before broadcasting the request to the live WebSocket pool[cite: 1, 2].
 *   The calculated rate can never be lower than the flat rate charged for a single passenger, multiplied by the number of empty seats that the vehicle will have because it is transporting a single passenger.. for example, if the current flat rate is R10 the calculated total fee cannot be less than R10 x 6 seats! This aligns with the current setup where if a passenger is at the mall (for example) and they request a "special trip" from iphela (singular of "amaphela"), if the passenger wants the driver to drop them directly at home, without picking up any other passengers on the way, the trip costs the "flat rate x number of passenger seats". So in theory, the every trip calculation by kwella should be ("flat rate x 6 seats + (calculated fare according to factors such as destination distance, current fuel price, number of passengers (more passenger, more strain on vehicle), time of day [day time? => peak or off-peak traffic, night time? => driver is taking risks etc])) Just a note on the flat rate, this will need to be set on the config level because it often increases based on fuel price hikes.
+*   **The fare formula (as implemented, 2026-09 revision).** The description above stated the model in prose; the engine in `kwella-backend/src/layers/kwella_shared/python/fare_calculator.py` implements it as:
+
+    ```
+    subtotal   = base_fare
+               + (cost_per_minute x duration_minutes)
+               + (cost_per_km     x distance_km)
+               + passenger_surcharge
+               + night_risk_premium
+
+    total_fare = max(quantize_to_50c(subtotal), flat_rate x 6 seats)
+    ```
+
+    with every rate expressed as a factor of the config-level `flat_rate`
+    (`KWELLA_FLAT_RATE_ZAR`, default R10) so a fuel-price hike moves one knob:
+
+    | Term | Factor | At `flat_rate` = R10 |
+    | --- | --- | --- |
+    | `base_fare` | `(flat_rate / 2) x 6 seats` | R30.00 per trip |
+    | `cost_per_km` | `0.75 x flat_rate` | R7.50 / km |
+    | `cost_per_minute` | `0.08 x flat_rate` | R0.80 / min |
+    | `passenger_surcharge` | `0.25 x flat_rate` per extra passenger | R2.50 each |
+    | `night_risk_premium` | `0.50 x flat_rate` (22:00–05:00 SAST) | R5.00 |
+    | peak multiplier | `1.15` on the distance **and** time terms | 06:00–09:00, 16:00–19:00 SAST |
+    | floor | `flat_rate x 6 seats` | R60.00 |
+    | cash quantum | `total_fare` lifted to the next `R0.50` | R77.10 → R77.50 |
+
+    Three points where the implementation is deliberately narrower than the
+    prose above:
+
+    *   **`base_fare` is charged once per trip, not per passenger.** The
+        `x 6 seats` term already prices the whole vehicle, so multiplying it
+        by passenger count would charge for the same seats twice. Passenger
+        scaling lives in `passenger_surcharge` instead.
+    *   **`flat_rate x 6 seats` is a floor on the final total**, not an
+        additive base term. It preserves the "special trip" rule — a lone
+        passenger paying for all 6 seats — but only binds on very short hops
+        (past roughly 1.5 km the formula clears it unaided).
+    *   **Every rider-facing amount lands on a R0.50 quantum**, lifted up
+        (never down), because kwella trips settle in cash and 1c/2c/5c coins
+        are effectively out of circulation: R95.21 is a fare nobody at the
+        kerb can hand over. The same gate applies to amounts the apps name —
+        a rider's sweetened offer via `updateFare` and a driver's
+        counter-offer via `sendBid` are both rejected off-quantum.
+
+    **Nothing is added to the rider's side of the fare.** kwella's 10% is a
+    driver-side commission, deducted from the fare the two parties agree on:
+    a rider who offers R80 against a driver's R100 counter-offer pays R100,
+    of which kwella takes R10 and the driver banks R90. It is the same rate
+    the cancellation-debt "platform fee holiday" (§3B) waives, and it lives in
+    one place — `PLATFORM_COMMISSION_RATE` in the shared fare engine, which
+    the bidding engine, the ledger service and the mock orchestrator all
+    import rather than restate.
+
+    A useful consequence of the 50c quantum: 10% of any multiple of 50c is a
+    whole number of cents, so the commission split is exact and needs no rule
+    about who absorbs a half-cent.
+
+    An earlier revision also added 10% to the rider's quote as a `booking_fee`
+    on top of the subtotal, which charged the same commission twice — once to
+    the rider up front, once to the driver on settlement.
+
+*   **Duration is derived server-side** as `distance_km / 25 km/h`, never taken
+    from the client — the engine refuses to trust a client-supplied
+    `suggested_base_fare` for the same reason, and a client-supplied duration
+    would reopen that hole. `KwellaFareEstimator` in `kwella_core` mirrors the
+    Python engine term for term (including its straight-line distance measure)
+    so the fare quoted in the rider app is the fare the server broadcasts.
+    Their two test suites assert the same worked examples; if the engines drift
+    apart, one of them goes red.
 *   Drivers can instantly accept the base bid or return incremental counter-offer chips (+R5, +R10, +R15)[cite: 2].
 
 ### B. The Self-Balancing Cancellation & Ledger Engine

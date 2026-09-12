@@ -11,8 +11,29 @@ import 'package:kwella_rider/features/booking/presentation/widgets/kwella_map_vi
 const LatLng _pickup = LatLng(-33.9249, 18.4241);
 const LatLng _dropoff = LatLng(-33.9581, 18.6961);
 
-/// Returns a 4 km route — chosen so the recommended-fare formula
-/// (R25 base + R6.50/km, rounded to the nearest R5) lands on a clean R50.
+/// 12:00 SAST — off peak, daytime. Pinned because the recommended fare now
+/// carries peak-hour and night-risk surcharges.
+final DateTime _offPeakDaytime = DateTime.utc(2026, 6, 21, 10);
+
+/// The recommended fare these tests assert against.
+///
+/// Priced off the *haversine* distance between [_pickup] and [_dropoff]
+/// (~25.36 km), not the route's `distanceMeters`: the backend only ever sees
+/// the four coordinates and prices the straight line between them, so the
+/// screen must quote the same measure or the rider is shown a fare the
+/// server will refuse to honour. Mirrors
+/// `test_fare_calculator.py` with 3 passengers at 12:00 SAST:
+///
+///   base 30.00 + time 48.70 + distance 190.21 + pax 5.00 = 273.91
+///   lifted to the next payable 50c                       = 274.00
+///   rounded to the nearest R5 for the +/- controls       = R275
+///
+/// Nothing is added on top of the subtotal: kwella's 10% is taken from the
+/// driver's side of the agreed fare, not added to the rider's quote.
+const String _expectedRecommendedFare = 'R275';
+
+/// The fake route's geometry is still used to draw the polyline; its
+/// `distanceMeters` is deliberately NOT what the fare is computed from.
 class _FakeDirectionsService extends DirectionsService {
   _FakeDirectionsService() : super(apiKey: 'test-key');
 
@@ -66,6 +87,7 @@ void main() {
         home: RideFareOfferScreen(
           controller: controller,
           directionsService: directionsService,
+          clock: () => _offPeakDaytime,
         ),
       ),
     );
@@ -107,7 +129,7 @@ void main() {
 
       final Text recommended =
           tester.widget<Text>(find.byKey(const Key('recommended_fare_value')));
-      expect(recommended.data, equals('R50'));
+      expect(recommended.data, equals(_expectedRecommendedFare));
       expect(directionsService.callCount, equals(1));
     });
 
@@ -118,7 +140,7 @@ void main() {
 
       final Text offer =
           tester.widget<Text>(find.byKey(const Key('your_offer_value')));
-      expect(offer.data, equals('R50'));
+      expect(offer.data, equals(_expectedRecommendedFare));
     });
 
     testWidgets('lets the rider adjust their offer independently of the recommendation',
@@ -132,8 +154,9 @@ void main() {
           tester.widget<Text>(find.byKey(const Key('your_offer_value')));
       final Text recommended =
           tester.widget<Text>(find.byKey(const Key('recommended_fare_value')));
-      expect(offer.data, equals('R55'));
-      expect(recommended.data, equals('R50'));
+      // One +R5 tap above the recommendation.
+      expect(offer.data, equals('R280'));
+      expect(recommended.data, equals(_expectedRecommendedFare));
     });
   });
 
@@ -236,6 +259,7 @@ void main() {
                       builder: (_) => RideFareOfferScreen(
                         controller: controller,
                         directionsService: directionsService,
+                        clock: () => _offPeakDaytime,
                       ),
                     ),
                   ),
@@ -281,6 +305,7 @@ void main() {
                       builder: (_) => RideFareOfferScreen(
                         controller: controller,
                         directionsService: directionsService,
+                        clock: () => _offPeakDaytime,
                       ),
                     ),
                   ),
@@ -295,7 +320,7 @@ void main() {
       await tester.tap(find.text('Open fare offer'));
       await tester.pumpAndSettle();
 
-      // The 4 km fake route puts the rider's offer at R50; bump it twice so
+      // The fake route puts the rider's offer at R300; bump it twice so
       // the asserted value can only have come from this screen's own state.
       await tester.ensureVisible(find.byKey(const Key('increase_fare_button')));
       await tester.tap(find.byKey(const Key('increase_fare_button')));
@@ -304,7 +329,7 @@ void main() {
       await tester.pump();
       expect(
         tester.widget<Text>(find.byKey(const Key('your_offer_value'))).data,
-        equals('R60'),
+        equals('R285'),
       );
 
       await tester.ensureVisible(find.byKey(const Key('find_drivers_button')));
@@ -314,13 +339,13 @@ void main() {
 
       // Seeded optimistically by requestTrip(offeredFare: ...) — no
       // TripBroadcast has been simulated at this point.
-      expect(controller.state.offeredFare, equals(60.0));
+      expect(controller.state.offeredFare, equals(285.0));
       expect(find.byType(ActiveSearchScreen), findsOneWidget);
       expect(
         tester
             .widget<Text>(find.byKey(const Key('active_search_offer_value')))
             .data,
-        equals('R60'),
+        equals('R285'),
       );
     });
   });

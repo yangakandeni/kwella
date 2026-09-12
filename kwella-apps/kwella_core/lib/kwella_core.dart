@@ -18,6 +18,9 @@ export 'src/network/aws_error_interceptor.dart';
 export 'src/network/bidding_events.dart';
 export 'src/network/event_multiplexer.dart';
 
+// ── Fare ──────────────────────────────────────────────────────────────────
+export 'src/fare/kwella_fare_estimator.dart';
+
 // ── Location ──────────────────────────────────────────────────────────────
 export 'src/location/directions_service.dart';
 

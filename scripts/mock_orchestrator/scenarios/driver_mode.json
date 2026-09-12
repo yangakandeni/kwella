@@ -1,5 +1,6 @@
 {
   "_comment": "Use with: python3 server.py --role driver --scenario scenarios/driver_mode.json. Personas here are RIDERS. Trigger a request for one from the dashboard's 'Trigger a rider request' form. Fire two in quick succession against the same real driver app to test concurrent-offer handling.",
+  "_geography": "Mirror image of rider_mode.json: these are rider PICKUP points, and they sit in kwella's real operating geography (Philippi / Nyanga / Gugulethu) rather than the Cape Town CBD. _match_and_push_offer only pushes an offer to a driver within _TRIP_MATCH_RADIUS_M (5000 m) of the pickup, so a real driver app running in the operating geography — reference position, the Philippi anchor (-34.0103967, 18.6156183) that rider_mode.json uses — matches all three: nomsa ~1148 m, jason ~2912 m, priya ~3681 m. The old CBD coordinates sat ~20 km out, so a driver testing in Philippi never received an offer at all.",
   "offerTimeoutSeconds": 15,
   "resurfaceDelaySeconds": 20,
   "riderAutoSelectWindowSeconds": 4,
@@ -7,22 +8,25 @@
     {
       "id": "rider-nomsa",
       "name": "Nomsa",
-      "latitude": -33.9249,
-      "longitude": 18.4241,
+      "_area": "Philippi",
+      "latitude": -34.005,
+      "longitude": 18.605,
       "behavior": "auto"
     },
     {
       "id": "rider-jason",
       "name": "Jason",
-      "latitude": -33.9201,
-      "longitude": 18.4267,
+      "_area": "Nyanga",
+      "latitude": -33.993,
+      "longitude": 18.592,
       "behavior": "auto"
     },
     {
       "id": "rider-priya",
       "name": "Priya (manual selection)",
-      "latitude": -33.9273,
-      "longitude": 18.4198,
+      "_area": "Gugulethu",
+      "latitude": -33.985,
+      "longitude": 18.59,
       "behavior": "manual"
     }
   ]

@@ -19,6 +19,7 @@ import asyncio
 import random
 from typing import TYPE_CHECKING, Any
 
+from contract import quantize_fare_zar
 from state import Persona
 
 if TYPE_CHECKING:
@@ -64,7 +65,10 @@ async def _on_driver_offer(engine: "Engine", persona: Persona, payload: dict[str
     if trip is None or trip.status.value != "BROADCASTING":
         return
 
-    amount = round(base_fare + persona.bid_offset, 2)
+    # Lifted onto the cash quantum the contract now enforces, so a persona
+    # configured with a fractional bid offset still produces a bid the
+    # contract will accept rather than one it silently rejects.
+    amount = float(quantize_fare_zar(base_fare + persona.bid_offset))
     await engine.handle_action(
         "sendBid",
         {

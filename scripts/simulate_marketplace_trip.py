@@ -664,12 +664,14 @@ def assert_clearing_flow_contract(wallet_payload: dict[str, object], bid_amount:
         f"Clearing contract: expected currency='ZAR', got '{currency}'",
     )
 
-    # Verify net_earnings = bid_amount * 0.85 (85% payout rail, within R0.10 float tolerance)
-    expected_net = round(bid_amount * 0.85, 2)
+    # Verify net_earnings = bid_amount less kwella's 10% commission. The
+    # commission is the platform's only cut of the trip: the rider pays the
+    # agreed bid and nothing on top of it.
+    expected_net = round(bid_amount * 0.90, 2)
     actual_net = round(float(net_earnings), 2)
     assert_state(
         abs(actual_net - expected_net) <= 0.10,
-        f"Clearing contract: net_earnings={actual_net} does not match expected 85% payout of {expected_net}",
+        f"Clearing contract: net_earnings={actual_net} does not match expected 90% payout of {expected_net}",
     )
 
     log_success(

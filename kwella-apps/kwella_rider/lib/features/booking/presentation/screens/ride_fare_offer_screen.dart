@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -22,10 +24,16 @@ class RideFareOfferScreen extends ConsumerStatefulWidget {
     super.key,
     this.controller,
     this.directionsService,
+    this.clock,
   });
 
   final KwellaRiderController? controller;
   final DirectionsService? directionsService;
+
+  /// Supplies "now" for the fare estimate's peak/night surcharge windows.
+  /// Injectable so widget tests can pin a time — the recommended fare is
+  /// genuinely time-of-day dependent, so a real clock would make them flaky.
+  final DateTime Function()? clock;
 
   @override
   ConsumerState<RideFareOfferScreen> createState() =>
@@ -34,15 +42,22 @@ class RideFareOfferScreen extends ConsumerStatefulWidget {
 
 class _RideFareOfferScreenState extends ConsumerState<RideFareOfferScreen> {
   static const double _step = 5.0;
-  static const double _minFare = 30.0;
   static const double _maxFare = 500.0;
 
-  // Simple distance-based estimate — kept in sync with the fare the app
-  // sends as `suggested_base_fare` on requestTrip so the rider isn't shown
-  // one number and asked to bid against another.
-  static const double _baseFare = 25.0;
-  static const double _perKmRate = 6.5;
-  static const double _fallbackRecommendedFare = 60.0;
+  /// The rider may never offer below the server's fare floor
+  /// (`flat_rate x 6 seats`), since the backend would simply raise it back.
+  static const double _minFare = KwellaFareEstimator.defaultFlatRateZar *
+      KwellaFareEstimator.seatsPerVehicle;
+
+  /// Shown before the route resolves; equals the floor, the lowest fare the
+  /// server can ever broadcast.
+  static const double _fallbackRecommendedFare = _minFare;
+
+  /// The recommended fare comes from [KwellaFareEstimator], which mirrors
+  /// `fare_calculator.py` term for term. Previously this screen used its own
+  /// `25 + 6.50/km` estimate, which disagreed with the server's formula — so
+  /// a rider was quoted a number the backend then refused to honour.
+  static const KwellaFareEstimator _fareEstimator = KwellaFareEstimator();
 
   late final DirectionsService _directionsService;
 
@@ -50,7 +65,7 @@ class _RideFareOfferScreenState extends ConsumerState<RideFareOfferScreen> {
   bool _offerTouchedByUser = false;
   bool _autoAccept = false;
   List<LatLng>? _routePoints;
-  int? _routeDistanceMeters;
+  KwellaFareBreakdown? _fareBreakdown;
 
   @override
   void initState() {
@@ -80,20 +95,34 @@ class _RideFareOfferScreenState extends ConsumerState<RideFareOfferScreen> {
     if (!mounted || route == null) return;
 
     setState(() {
+      // The route is drawn from Google's road geometry, but the fare is not
+      // priced off `route.distanceMeters`: the backend prices the
+      // straight-line distance between the four coordinates it receives on
+      // requestTrip, so the quote has to use the same measure or it cannot
+      // be honoured.
       _routePoints = route.points;
-      _routeDistanceMeters = route.distanceMeters;
+      _fareBreakdown = _fareEstimator.estimateFromCoordinates(
+        pickupLat: pickupLat,
+        pickupLng: pickupLng,
+        dropoffLat: dropoffLat,
+        dropoffLng: dropoffLng,
+        passengerCount: state.passengerCount,
+        requestTime: (widget.clock ?? DateTime.now)(),
+      );
       if (!_offerTouchedByUser) {
         _offeredFare = _recommendedFare;
       }
     });
   }
 
+  /// The server-parity fare, rounded to the nearest [_step] so the rider's
+  /// +/- controls land on clean numbers. Never below the floor.
   double get _recommendedFare {
-    final int? distanceMeters = _routeDistanceMeters;
-    if (distanceMeters == null) return _fallbackRecommendedFare;
-    final double km = distanceMeters / 1000;
-    final double raw = _baseFare + km * _perKmRate;
-    return ((raw / _step).round()) * _step;
+    final KwellaFareBreakdown? breakdown = _fareBreakdown;
+    if (breakdown == null) return _fallbackRecommendedFare;
+    final double rounded =
+        ((breakdown.totalFare / _step).round()) * _step;
+    return math.max(rounded, _minFare);
   }
 
   /// Handles a rider dragging the pickup/dropoff pin to a new spot: updates

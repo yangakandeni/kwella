@@ -36,6 +36,7 @@ from typing import Any
 
 import boto3
 import botocore.exceptions
+from fare_calculator import PLATFORM_COMMISSION_RATE
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 # Shared-layer imports
@@ -209,7 +210,10 @@ def _apply_trip_fee(payload: ApplyTripFeePayload) -> dict[str, Any]:
     pk = f"USR#{payload.driver_id}"
     sk = "PROFILE"
 
-    platform_fee = payload.fare_amount * Decimal("0.10")
+    # Rate sourced from the shared fare engine rather than repeated here:
+    # it is the same 10% the bidding engine withholds on settlement, and the
+    # same one this function's holiday branch waives.
+    platform_fee = payload.fare_amount * PLATFORM_COMMISSION_RATE
 
     max_retries = 3
     for attempt in range(max_retries):

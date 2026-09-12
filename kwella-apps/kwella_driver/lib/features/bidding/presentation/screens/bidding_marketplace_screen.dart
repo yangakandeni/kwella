@@ -276,12 +276,12 @@ class _BiddingMarketplaceScreenState
         final amountValue = bid['amount'];
         String amountText;
         if (amountValue is num) {
-          amountText = '\$${amountValue.toStringAsFixed(2)}';
+          amountText = 'R${amountValue.toStringAsFixed(2)}';
         } else if (amountValue is String &&
             double.tryParse(amountValue) != null) {
-          amountText = '\$${double.parse(amountValue).toStringAsFixed(2)}';
+          amountText = 'R${double.parse(amountValue).toStringAsFixed(2)}';
         } else {
-          amountText = '\$$amountValue';
+          amountText = 'R$amountValue';
         }
 
         return Container(

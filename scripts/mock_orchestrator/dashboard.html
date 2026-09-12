@@ -89,10 +89,14 @@
     <div class="card">
       <form class="inline" id="requestTripForm">
         <select name="personaId" id="riderPersonaSelect"></select>
-        <input name="pickupLat" placeholder="pickup lat" value="-33.9249" />
-        <input name="pickupLon" placeholder="pickup lon" value="18.4241" />
-        <input name="dropoffLat" placeholder="dropoff lat" value="-33.9258" />
-        <input name="dropoffLon" placeholder="dropoff lon" value="18.4231" />
+        <input name="pickupLat" id="pickupLat" placeholder="pickup lat" value="-34.0103967" />
+        <input name="pickupLon" id="pickupLon" placeholder="pickup lon" value="18.6156183" />
+        <input name="dropoffLat" placeholder="dropoff lat" value="-33.9930" />
+        <input name="dropoffLon" placeholder="dropoff lon" value="18.5920" />
+        <select name="paymentMethod">
+          <option value="CASH">Cash</option>
+          <option value="CARD">Card</option>
+        </select>
         <button class="primary" type="submit">Request Trip</button>
       </form>
     </div>
@@ -119,6 +123,17 @@ function send(cmd, params = {}) {
 
 function statusClass(s) { return 'status-' + (s || 'idle'); }
 
+let pickupEditedByOperator = false;
+
+function syncPickupToSelectedRider() {
+  if (pickupEditedByOperator) return;
+  const riderSelect = document.getElementById('riderPersonaSelect');
+  const rider = (latestState.personas || []).find(p => p.id === riderSelect.value);
+  if (!rider) return;
+  document.getElementById('pickupLat').value = rider.latitude.toFixed(7);
+  document.getElementById('pickupLon').value = rider.longitude.toFixed(7);
+}
+
 function render() {
   if (!latestState) return;
   document.getElementById('rolePill').textContent = `role under test: ${latestState.role}`;
@@ -137,6 +152,7 @@ function render() {
   const list = document.getElementById('personaList');
   list.innerHTML = '';
   const riderSelect = document.getElementById('riderPersonaSelect');
+  const previouslySelectedRider = riderSelect.value;
   riderSelect.innerHTML = '';
 
   for (const p of latestState.personas) {
@@ -168,6 +184,15 @@ function render() {
     `;
     list.appendChild(card);
   }
+
+  // Restore the operator's rider choice across re-renders, then keep the
+  // pickup fields pinned to that rider's actual position unless the operator
+  // has typed their own coordinates. Previously the form's pickup default was
+  // hardcoded to the Cape Town CBD while personas lived elsewhere, so a real
+  // driver app in the operating geography was ~20 km outside the 5 km match
+  // radius and never received an offer.
+  if (previouslySelectedRider) riderSelect.value = previouslySelectedRider;
+  syncPickupToSelectedRider();
 
   document.querySelectorAll('.behaviorSelect').forEach(el => {
     el.onchange = () => send('setPersonaBehavior', { personaId: el.dataset.persona, behavior: el.value });
@@ -212,6 +237,11 @@ function driverButtons(p, trip) {
 
 function riderButtons(p, trip) {
   return '';
+}
+
+document.getElementById('riderPersonaSelect').addEventListener('change', syncPickupToSelectedRider);
+for (const id of ['pickupLat', 'pickupLon']) {
+  document.getElementById(id).addEventListener('input', () => { pickupEditedByOperator = true; });
 }
 
 document.getElementById('personaList').addEventListener('click', (evt) => {
@@ -263,6 +293,7 @@ document.getElementById('requestTripForm').addEventListener('submit', (evt) => {
     personaId: f.get('personaId'),
     pickupLat: parseFloat(f.get('pickupLat')), pickupLon: parseFloat(f.get('pickupLon')),
     dropoffLat: parseFloat(f.get('dropoffLat')), dropoffLon: parseFloat(f.get('dropoffLon')),
+    paymentMethod: f.get('paymentMethod') || 'CASH',
   });
 });
 

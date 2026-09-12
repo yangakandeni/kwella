@@ -65,7 +65,7 @@ The following core modules are fully implemented, thoroughly tested (144+ automa
 ### C. Financial Payout & Wallet Ledger (Phase 15)
 - **Backend:** Tapping arrival triggers a `"confirmArrival"` action. The backend executes an atomic DynamoDB `TransactWriteItems` operation:
   - Verifies the Trip status is `'ACCEPTED'` or `'ARRIVED'`, then sets it to `'COMPLETED'`.
-  - Increments the Driver's Wallet balance and `daily_total` record (`SK = "WALLET"`) by exactly 85% of the final agreed bid using strict Python `Decimal` precision currency calculations.
+  - Increments the Driver's Wallet balance and `daily_total` record (`SK = "WALLET"`) by exactly 90% of the final agreed bid (the agreed bid less kwella's 10% commission, which is the platform's only cut — nothing is added to the rider's side) using strict Python `Decimal` precision currency calculations.
 - **Mobile Client:** Intercepts `"status": "WalletSettled"`, updates the top-header permanent shift earnings tally container, and renders a micro-animated floating success `EarningsToast` notification overlay built on Flutter's overlay framework with an elastic animation curve (`Curves.easeOutBack`).
 
 ### D. Asynchronous Push Notification Fallback Infrastructure (Phase 16)

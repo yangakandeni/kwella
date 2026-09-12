@@ -228,6 +228,32 @@ def test_send_bid_parses_and_returns_placeholder_success():
 
 
 @mock_aws
+def test_send_bid_rejects_counter_offers_off_the_cash_quantum():
+    """A driver's counter-offer becomes the fare the rider hands over in cash,
+    so it is held to the same R0.50 quantum as the engine's own quote."""
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    for off_quantum in ("55.37", 55.01, 55.99):
+        event = {
+            "requestContext": {
+                "routeKey": "sendBid",
+                "connectionId": "conn-driver-1",
+            },
+            "body": json.dumps({
+                "driver_id": "USR#drv-1",
+                "rider_id": "USR#rider-1",
+                "tripId": "trip-1",
+                "counter_fare": off_quantum,
+            }),
+        }
+        response = handler.lambda_handler(event, context=None)
+        assert response["statusCode"] == 400, off_quantum
+        detail = json.loads(response["body"])["detail"]
+        assert "0.50" in detail, detail
+
+
+@mock_aws
 def test_send_bid_with_malformed_json_returns_400():
     """Verify sendBid route fails gracefully on invalid JSON body."""
     _create_mock_table()
@@ -1233,6 +1259,108 @@ def test_request_trip_scales_fare_with_passenger_count():
     assert fare_for_six > fare_for_one
 
 
+@mock_aws
+def test_request_trip_persists_rider_payment_method():
+    """The rider's payment choice must survive the wire: persisted on TRIP
+    METADATA and echoed on the TripBroadcast so the rider app can confirm
+    the server agreed with what it sent.
+    """
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    payload = {**_REQUEST_TRIP_PAYLOAD, "payment_method": "CASH"}
+    event = {**_REQUEST_TRIP_EVENT_BASE, "body": json.dumps(payload)}
+
+    response = handler.lambda_handler(event, context=None)
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["payment_method"] == "CASH"
+
+    trip_id = body["tripId"]
+    item = table.get_item(Key={"PK": f"TRIP#{trip_id}", "SK": "METADATA"})["Item"]
+    assert item["payment_method"] == "CASH"
+
+
+@mock_aws
+def test_request_trip_defaults_payment_method_to_cash():
+    """An absent or unrecognised `payment_method` must fall back to CASH —
+    cash is the only method kwella actually settles today, so an unknown
+    value must never silently become a card trip nobody can collect on.
+    """
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    for supplied, expected in (
+        (None, "CASH"),
+        ("EFT", "CASH"),
+        ("", "CASH"),
+        ("card", "CARD"),  # normalised, not rejected
+    ):
+        payload = {**_REQUEST_TRIP_PAYLOAD}
+        if supplied is not None:
+            payload["payment_method"] = supplied
+        event = {**_REQUEST_TRIP_EVENT_BASE, "body": json.dumps(payload)}
+
+        response = handler.lambda_handler(event, context=None)
+        assert response["statusCode"] == 200
+        body = json.loads(response["body"])
+        assert body["payment_method"] == expected, f"supplied={supplied!r}"
+
+        item = table.get_item(
+            Key={"PK": f"TRIP#{body['tripId']}", "SK": "METADATA"}
+        )["Item"]
+        assert item["payment_method"] == expected, f"supplied={supplied!r}"
+
+
+@mock_aws
+def test_request_trip_ride_offer_tells_driver_the_payment_method():
+    """Drivers must see whether an offer is a cash fare before they bid —
+    cash carries the cancellation-debt exposure a card trip does not.
+    """
+    table = _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    table.put_item(
+        Item={
+            "PK": f"DRIVER#{_DRIVER_NEAR_ID}",
+            "SK": "TELEMETRY",
+            "last_latitude": str(_DRIVER_NEAR_LAT),
+            "last_longitude": str(_DRIVER_NEAR_LON),
+            # Required for the WebSocket dispatch path (otherwise the handler
+            # falls back to FCM and never calls post_to_connection).
+            "connection_id": "conn-driver-near",
+            "updated_at": "2026-06-21T06:00:00Z",
+        }
+    )
+
+    sent_payloads: list[dict[str, Any]] = []
+
+    class _CapturingApiGwClient:
+        def post_to_connection(self, **kwargs):
+            sent_payloads.append(json.loads(kwargs["Data"].decode("utf-8")))
+
+    handler._APIGW_ENDPOINT = "https://example.execute-api.local"
+    original_boto_client = handler.boto3.client
+
+    def _fake_client(service_name, *args, **kwargs):
+        if service_name == "apigatewaymanagementapi":
+            return _CapturingApiGwClient()
+        return original_boto_client(service_name, *args, **kwargs)
+
+    handler.boto3.client = _fake_client
+    try:
+        payload = {**_REQUEST_TRIP_PAYLOAD, "payment_method": "CASH"}
+        event = {**_REQUEST_TRIP_EVENT_BASE, "body": json.dumps(payload)}
+        response = handler.lambda_handler(event, context=None)
+    finally:
+        handler.boto3.client = original_boto_client
+
+    assert response["statusCode"] == 200
+    offers = [p for p in sent_payloads if p.get("action") == "rideOfferAvailable"]
+    assert offers, f"no rideOfferAvailable push captured: {sent_payloads}"
+    assert offers[0]["payment_method"] == "CASH"
+
+
 # ---------------------------------------------------------------------------
 # Route: updateFare Tests
 # ---------------------------------------------------------------------------
@@ -1445,6 +1573,31 @@ def test_update_fare_validation_failures():
     assert "does not exist" in json.loads(response["body"])["detail"]
 
 
+@mock_aws
+def test_update_fare_rejects_amounts_the_rider_cannot_pay_in_cash():
+    """A sweetened offer must land on the R0.50 cash quantum.
+
+    Rejected before the trip record is touched, and before the offer goes
+    back out to the driver pool — a driver who accepts R150.37 has no way to
+    take R150.37 in cash at the kerb.
+    """
+    _create_mock_table()
+    handler = _reload_bidding_handler()
+
+    for off_quantum in (150.37, 150.01, 150.99):
+        payload = {
+            "action": "updateFare",
+            "tripId": "trip-x",
+            "new_fare": off_quantum,
+        }
+        response = handler.lambda_handler(
+            {**_UPDATE_FARE_EVENT_BASE, "body": json.dumps(payload)}, context=None
+        )
+        assert response["statusCode"] == 400, off_quantum
+        detail = json.loads(response["body"])["detail"]
+        assert "0.50" in detail, detail
+
+
 # ---------------------------------------------------------------------------
 # Route: confirmArrival Tests (Phase 15 — Secure Payout Settlement)
 # ---------------------------------------------------------------------------
@@ -1491,9 +1644,11 @@ def test_confirm_arrival_settles_in_progress_trip_successfully():
     body = json.loads(response["body"])
     assert body["status"] == "WalletSettled"
     assert body["tripId"] == "trip-accepted-123"
-    assert body["net_earnings"] == pytest.approx(127.50)
+    # kwella takes its 10% commission out of the driver's side of the agreed
+    # fare: R150 agreed => R15 to kwella, R135 to the driver.
+    assert body["net_earnings"] == pytest.approx(135.00)
     assert body["currency"] == "ZAR"
-    assert body["updated_daily_total"] == pytest.approx(127.50)
+    assert body["updated_daily_total"] == pytest.approx(135.00)
 
     # Verify database updates
     trip_res = table.get_item(Key={"PK": "TRIP#trip-accepted-123", "SK": "METADATA"})
@@ -1501,8 +1656,8 @@ def test_confirm_arrival_settles_in_progress_trip_successfully():
 
     wallet_res = table.get_item(Key={"PK": "DRIVER#USR#drv-12345", "SK": "WALLET"})
     wallet_item = wallet_res["Item"]
-    assert wallet_item["balance"] == Decimal("127.50")
-    assert wallet_item["daily_total"] == Decimal("127.50")
+    assert wallet_item["balance"] == Decimal("135.00")
+    assert wallet_item["daily_total"] == Decimal("135.00")
 
 
 @mock_aws
@@ -1535,7 +1690,7 @@ def test_confirm_arrival_increments_existing_wallet_balance():
         "action": "confirmArrival",
         "driverId": "USR#drv-12345",
         "tripId": "trip-arrived-456",
-        "final_bid_amount": 200.0,  # 85% of 200 is 170
+        "final_bid_amount": 200.0,  # less kwella's 10% => R180 to the driver
     }
 
     event = {
@@ -1549,8 +1704,8 @@ def test_confirm_arrival_increments_existing_wallet_balance():
     body = json.loads(response["body"])
     assert body["status"] == "WalletSettled"
     assert body["tripId"] == "trip-arrived-456"
-    assert body["net_earnings"] == pytest.approx(170.00)
-    assert body["updated_daily_total"] == pytest.approx(1170.00)
+    assert body["net_earnings"] == pytest.approx(180.00)
+    assert body["updated_daily_total"] == pytest.approx(1180.00)
 
     # Verify database updates
     trip_res = table.get_item(Key={"PK": "TRIP#trip-arrived-456", "SK": "METADATA"})
@@ -1558,8 +1713,8 @@ def test_confirm_arrival_increments_existing_wallet_balance():
 
     wallet_res = table.get_item(Key={"PK": "DRIVER#USR#drv-12345", "SK": "WALLET"})
     wallet_item = wallet_res["Item"]
-    assert wallet_item["balance"] == Decimal("1170.00")
-    assert wallet_item["daily_total"] == Decimal("1170.00")
+    assert wallet_item["balance"] == Decimal("1180.00")
+    assert wallet_item["daily_total"] == Decimal("1180.00")
 
 
 @mock_aws

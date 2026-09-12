@@ -217,6 +217,10 @@ class KwellaRiderController {
       'dropoff_latitude': _state.dropoffLat,
       'dropoff_longitude': _state.dropoffLng,
       'passenger_count': _state.passengerCount,
+      // The rider's choice from PaymentMethodScreen. Always sent (it always
+      // has a value — 'CASH' by default) so the backend can persist it on
+      // the trip and tell bidding drivers whether this is a cash fare.
+      'payment_method': _state.paymentMethod,
       // Null-aware element: the key is omitted entirely when the rider
       // passed no offer, keeping the original payload contract intact.
       'suggested_base_fare': ?offeredFare,
@@ -228,6 +232,7 @@ class KwellaRiderController {
       debugPrint('  - dropoff: (${_state.dropoffLat}, ${_state.dropoffLng})');
       debugPrint('  - passengers: ${_state.passengerCount}');
       debugPrint('  - offered fare: $offeredFare');
+      debugPrint('  - payment method: ${_state.paymentMethod}');
     }
     _pushWebSocketMessage(payload);
     _emit(

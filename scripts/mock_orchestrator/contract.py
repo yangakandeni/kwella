@@ -28,14 +28,46 @@ Each handler returns `(response_body, pushes)`:
 from __future__ import annotations
 
 import math
+import sys
+from pathlib import Path
 from typing import Any
 
 from state import Bid, OrchestratorState, Persona, Receipt, Trip, TripStatus
 
+# Import the REAL fare engine rather than re-implementing it.
+#
+# This module used to carry its own `calculate_trip_fare` with its own
+# hardcoded `flat_rate = 25.0`, which produced a floor of R150 where the real
+# backend's floor was R60 — so the mock quoted a fare the deployed engine
+# would never produce, and local testing actively misled. `fare_calculator`
+# depends only on the standard library (os/datetime/decimal), so importing it
+# here is safe and makes drift between the two impossible by construction.
+_FARE_LAYER = (
+    Path(__file__).resolve().parents[2]
+    / "kwella-backend"
+    / "src"
+    / "layers"
+    / "kwella_shared"
+    / "python"
+)
+if str(_FARE_LAYER) not in sys.path:
+    sys.path.insert(0, str(_FARE_LAYER))
+
+from fare_calculator import (  # noqa: E402
+    DRIVER_PAYOUT_RATE as _DRIVER_PAYOUT_RATE,
+    FARE_QUANTUM_ZAR as _FARE_QUANTUM_ZAR,
+    calculate_trip_fare as _calculate_trip_fare_zar,
+    is_quantized_fare as _is_quantized_fare,
+    quantize_fare_zar,
+)
+
 _TRIP_MATCH_RADIUS_M = 5000.0
 _ARRIVAL_GEOFENCE_RADIUS_M = 50.0
 RIDE_OFFER_TTL_SECONDS = 15
-_PAYOUT_RATE = 0.85
+#: Imported rather than restated: the mock must settle a trip for exactly
+#: what the real bidding engine would, or a driver testing against it sees a
+#: payout that won't match production.
+_PAYOUT_RATE = float(_DRIVER_PAYOUT_RATE)
 
 
 class ContractError(Exception):
@@ -55,11 +87,34 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def calculate_trip_fare(distance_km: float, passenger_count: int) -> float:
-    passenger_count = max(1, min(6, passenger_count))
-    flat_rate = 25.0
-    floor = flat_rate * 6
-    variable = distance_km * 8.5 * (1 + 0.1 * (passenger_count - 1))
-    return round(max(floor, variable + flat_rate * passenger_count), 2)
+    """Delegate to the real server-side engine, returning a plain float.
+
+    Kept as a thin wrapper (rather than calling `fare_calculator` directly at
+    the call site) so this module's public surface still mirrors the shape the
+    rest of the mock expects, and so the Decimal -> float conversion for JSON
+    happens in exactly one place.
+    """
+    return float(
+        _calculate_trip_fare_zar(
+            distance_km=distance_km,
+            passenger_count=passenger_count,
+        )
+    )
+
+
+#: Mirrors the real handler's `_SUPPORTED_PAYMENT_METHODS` — anything else
+#: degrades to CASH rather than being rejected.
+_SUPPORTED_PAYMENT_METHODS = frozenset({"CASH", "CARD"})
+_DEFAULT_PAYMENT_METHOD = "CASH"
+
+
+def _normalise_payment_method(raw: Any) -> str:
+    if not isinstance(raw, str):
+        return _DEFAULT_PAYMENT_METHOD
+    candidate = raw.strip().upper()
+    if candidate not in _SUPPORTED_PAYMENT_METHODS:
+        return _DEFAULT_PAYMENT_METHOD
+    return candidate
 
 
 def _persona_public_fields(persona: Persona | None) -> dict[str, Any]:
@@ -144,6 +199,9 @@ def request_trip(state: OrchestratorState, payload: dict[str, Any], sender_id: s
         raise ContractError(f"Missing required fields: {missing}")
 
     passenger_count = int(payload.get("passenger_count") or payload.get("passengerCount") or 1)
+    payment_method = _normalise_payment_method(
+        payload.get("payment_method") or payload.get("paymentMethod")
+    )
     distance_km = _haversine_m(pickup_lat, pickup_lon, dropoff_lat, dropoff_lon) / 1000.0
     calculated_fare = calculate_trip_fare(distance_km, passenger_count)
 
@@ -155,6 +213,7 @@ def request_trip(state: OrchestratorState, payload: dict[str, Any], sender_id: s
         dropoff=(dropoff_lat, dropoff_lon),
         passenger_count=passenger_count,
         base_fare=calculated_fare,
+        payment_method=payment_method,
     )
     state.trips[trip_id] = trip
 
@@ -166,6 +225,7 @@ def request_trip(state: OrchestratorState, payload: dict[str, Any], sender_id: s
         "dropoff_location": [dropoff_lat, dropoff_lon],
         "passenger_count": passenger_count,
         "base_fare": str(calculated_fare),
+        "payment_method": payment_method,
         "expires_in_seconds": RIDE_OFFER_TTL_SECONDS,
     }
     matched_driver_ids, pushes = _match_and_push_offer(state, trip.pickup, offer_payload)
@@ -176,6 +236,7 @@ def request_trip(state: OrchestratorState, payload: dict[str, Any], sender_id: s
         "matched_drivers": matched_driver_ids,
         "passenger_count": passenger_count,
         "calculated_fare": str(calculated_fare),
+        "payment_method": payment_method,
     }
     return response, pushes
 
@@ -195,6 +256,13 @@ def send_bid(state: OrchestratorState, payload: dict[str, Any], sender_id: str |
         amount_f = float(amount)
     except (TypeError, ValueError):
         raise ContractError("Field 'amount' must be numeric.") from None
+
+    # Mirrors the real handler's gate: a counter-offer is what the rider hands
+    # over in cash if they accept it, so it has to land on the R0.50 quantum.
+    if not _is_quantized_fare(amount_f):
+        raise ContractError(
+            f"Bid amount must be a multiple of R{_FARE_QUANTUM_ZAR}."
+        )
 
     try:
         eta_i = int(eta_minutes)
@@ -300,6 +368,11 @@ def update_fare(state: OrchestratorState, payload: dict[str, Any], sender_id: st
         new_fare_f = float(new_fare)
     except (TypeError, ValueError):
         raise ContractError("Field 'new_fare' must be numeric.") from None
+
+    if not _is_quantized_fare(new_fare_f):
+        raise ContractError(
+            f"Field 'new_fare' must be a multiple of R{_FARE_QUANTUM_ZAR}."
+        )
 
     if new_fare_f <= trip.base_fare:
         raise ContractError("New fare must exceed the current base fare.")
